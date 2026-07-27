@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.REORDER_TASKS" />
+    <uses-permission android:name="android.permission.ACTIVITY_EMBEDDING" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.MANAGE_ACTIVITY_TASKS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.MANAGE_ACTIVITY_STACKS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.INTERNAL_SYSTEM_WINDOW" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.REAL_GET_TASKS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.START_ACTIVITIES_FROM_BACKGROUND" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.CAPTURE_VIDEO_OUTPUT" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.CAPTURE_SECURE_VIDEO_OUTPUT" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.ADD_TRUSTED_DISPLAY" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.STATUS_BAR" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <uses-permission android:name="com.autonavi.minimap.permission.NAVIGATION_SERVICE" />
+
+    <queries>
+        <package android:name="com.autonavi.minimap" />
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:hardwareAccelerated="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.OneStep40">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:clearTaskOnLaunch="true"
+            android:stateNotNeeded="true"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:resizeableActivity="true"
+            android:screenOrientation="nosensor"
+            android:configChanges="density|fontScale|keyboard|keyboardHidden|layoutDirection|locale|mcc|mnc|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".HomeRedirectActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".MediaNotificationListenerService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+    </application>
+
+</manifest>

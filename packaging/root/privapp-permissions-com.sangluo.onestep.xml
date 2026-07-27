@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<permissions>
+    <privapp-permissions package="com.sangluo.onestep">
+        <permission name="android.permission.ACTIVITY_EMBEDDING" />
+        <permission name="android.permission.MANAGE_ACTIVITY_TASKS" />
+        <permission name="android.permission.MANAGE_ACTIVITY_STACKS" />
+        <permission name="android.permission.INTERNAL_SYSTEM_WINDOW" />
+        <permission name="android.permission.REAL_GET_TASKS" />
+        <permission name="android.permission.START_ACTIVITIES_FROM_BACKGROUND" />
+        <permission name="android.permission.CAPTURE_VIDEO_OUTPUT" />
+        <permission name="android.permission.CAPTURE_SECURE_VIDEO_OUTPUT" />
+        <permission name="android.permission.ADD_TRUSTED_DISPLAY" />
+        <permission name="android.permission.MEDIA_CONTENT_CONTROL" />
+        <permission name="android.permission.STATUS_BAR" />
+    </privapp-permissions>
+</permissions>

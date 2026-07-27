@@ -1,0 +1,9 @@
+本应用当前界面原型使用了锤子科技官方公开的 One Step 资源作为还原参考。
+
+来源仓库：
+https://github.com/SmartisanTech/packages_apps_OneStep
+
+原始项目许可证：
+Apache License 2.0
+
+本文件仅记录资源来源，后续若发布应用，应在开源许可页中保留完整许可证文本和必要声明。

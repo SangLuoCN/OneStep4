@@ -1,0 +1,19 @@
+OneStep4.0
+Copyright 2026 SangLuo
+
+This product includes software and resources derived from the Smartisan
+Open Source Project's One Step application:
+
+    Copyright 2016 The Smartisan Open Source Project
+    https://github.com/SmartisanTech/packages_apps_OneStep
+
+The original work is licensed under the Apache License, Version 2.0.
+OneStep4.0 contains modifications and additional work, including adaptation
+for current Android versions, a fixed multi-window interface, privileged and
+root deployment paths, virtual-display hosting, input forwarding, media and
+navigation integration, settings, and related user-interface changes.
+
+OneStep4.0 is an independent project. References to Smartisan, One Step, and
+other third-party names are for attribution and identification only and do
+not imply endorsement. The Apache License, Version 2.0 does not grant rights
+to use third-party trademarks, service marks, product names, or logos.

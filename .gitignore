@@ -1,0 +1,66 @@
+# Gradle / Android build output
+.gradle/
+.kotlin/
+/build/
+/app/build/
+/.externalNativeBuild/
+/.cxx/
+/captures/
+
+# Packaged artifacts
+/dist/
+/references/
+*.apk
+*.ap_
+*.aab
+*.aar
+*.zip
+*.dex
+*.class
+*.idsig
+
+# Local machine / IDE state
+.idea/
+.vscode/
+.fleet/
+*.iml
+.DS_Store
+._*
+Thumbs.db
+*.swp
+*.swo
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*~
+
+# Local configuration and secrets
+/local.properties
+local.properties
+.env
+.env.*
+!.env.example
+.envrc
+secrets.properties
+keystore.properties
+google-services.json
+*.jks
+*.keystore
+*.pem
+*.key
+*.p12
+*.pfx
+*.hprof
+
+# Logs and crash dumps
+*.log
+*.pid
+hs_err_pid*
+replay_pid*
+
+# Local scratch files
+/easy-draw-10744-1-transparent.png
+/SangLuoCN
+/SangLuoCN.pub

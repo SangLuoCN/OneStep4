@@ -1,0 +1,32 @@
+<resources>
+    <style name="Theme.OneStep40.Base" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Primary brand color. -->
+        <item name="colorPrimary">@color/black</item>
+        <item name="colorPrimaryVariant">@color/black</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <!-- Secondary brand color. -->
+        <item name="colorSecondary">@color/white</item>
+        <item name="colorSecondaryVariant">@color/white</item>
+        <item name="colorOnSecondary">@color/black</item>
+        <!-- Status bar color. -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+        <item name="android:windowBackground">@color/black</item>
+        <item name="android:colorBackground">@color/black</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowShowWallpaper">false</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowActionBar">false</item>
+        <item name="windowActionBar">false</item>
+    </style>
+
+    <style name="Theme.OneStep40" parent="Theme.OneStep40.Base" />
+
+    <style name="Theme.OneStep40.TransparentNavigation" parent="Theme.OneStep40">
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

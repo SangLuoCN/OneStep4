@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="sidebar_width">48dp</dimen>
+    <dimen name="onestep_top_height">85dp</dimen>
+    <dimen name="onestep_bottom_tools_height">89dp</dimen>
+    <dimen name="top_view_space_left">3dp</dimen>
+    <dimen name="top_view_space_right">3dp</dimen>
+    <dimen name="sidebar_list_item_padding_top">3dp</dimen>
+    <dimen name="contact_avatar_size">32dp</dimen>
+    <dimen name="content_title_height">40dp</dimen>
+    <dimen name="content_title_text_size">13.5dp</dimen>
+    <dimen name="content_row_height">51dp</dimen>
+    <dimen name="content_date_height">24dp</dimen>
+    <dimen name="content_row_text_size">13.5dp</dimen>
+    <dimen name="empty_icon_size">102dp</dimen>
+</resources>

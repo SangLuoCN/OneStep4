@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.OneStep40" parent="Theme.OneStep40.Base">
+        <item name="android:statusBarColor">?attr/colorPrimaryVariant</item>
+    </style>
+</resources>

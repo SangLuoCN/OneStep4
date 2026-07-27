@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">One Step</string>
+    <string name="topbar_photo">Images</string>
+    <string name="topbar_file">Files</string>
+    <string name="topbar_clipboard">Clipboard</string>
+    <string name="title_photo">Recent Images</string>
+    <string name="title_file">Recent Files</string>
+    <string name="title_clipboard">Recent Clipboard Text</string>
+    <string name="photo_empty_text">Image History Is Empty</string>
+    <string name="photo_empty_hint">Recent images will appear here</string>
+    <string name="file_empty_text">File History Is Empty</string>
+    <string name="file_empty_hint">Recent files will appear here</string>
+    <string name="clipboard_empty_text">Clipboard Is Empty</string>
+    <string name="clipboard_empty_hint">Recently cut and copied text will appear here</string>
+    <string name="clear">Clear</string>
+    <string name="date_label_today">Today</string>
+    <string name="switch_previous_app">Switch to Last App</string>
+</resources>
