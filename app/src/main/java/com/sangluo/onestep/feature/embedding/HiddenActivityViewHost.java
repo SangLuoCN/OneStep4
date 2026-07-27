@@ -11,6 +11,7 @@ import android.util.AttributeSet;
 import android.view.KeyEvent;
 import android.view.View;
 
+import com.sangluo.onestep.SecondaryHomeActivity;
 import com.sangluo.onestep.model.LauncherApp;
 
 import java.lang.reflect.Constructor;
@@ -26,6 +27,7 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
     }
 
     private final PackageManager packageManager;
+    private final Context context;
     private final BooleanSupplier startAllowed;
     private final AppCloser appCloser;
     private Object activityView;
@@ -36,6 +38,7 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
 
     public HiddenActivityViewHost(Context context, BooleanSupplier startAllowed,
                                   AppCloser appCloser) {
+        this.context = context;
         packageManager = context.getPackageManager();
         this.startAllowed = startAllowed;
         this.appCloser = appCloser;
@@ -104,7 +107,23 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
 
     @Override
     public void sendHome() {
-        sendKey(KeyEvent.KEYCODE_HOME);
+        if (!isAvailable()) {
+            return;
+        }
+        Intent intent = new Intent(context, SecondaryHomeActivity.class)
+                .setAction(Intent.ACTION_MAIN)
+                .putExtra(SecondaryHomeActivity.EXTRA_BACKGROUND_ONLY, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        Object[] args = makeStartArguments(startActivityMethod.getParameterTypes(), intent);
+        if (args == null) {
+            sendKey(KeyEvent.KEYCODE_HOME);
+            return;
+        }
+        try {
+            startActivityMethod.invoke(activityView, args);
+        } catch (IllegalAccessException | InvocationTargetException | RuntimeException e) {
+            sendKey(KeyEvent.KEYCODE_HOME);
+        }
     }
 
     @Override

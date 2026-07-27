@@ -449,7 +449,7 @@ public final class RootInputBridge {
             failure = describeThrowable(e);
         }
         int priority = success ? Log.INFO : Log.WARN;
-        Log.println(priority, TAG, "Focused promoted display=" + displayId
+        Log.println(priority, TAG, "Focused display=" + displayId
                 + " success=" + success
                 + (failure.isEmpty() ? "" : " failure=" + failure));
         return "focusDisplay " + displayId + " " + success;

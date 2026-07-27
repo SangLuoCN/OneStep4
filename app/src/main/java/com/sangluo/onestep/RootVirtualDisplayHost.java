@@ -304,6 +304,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private long lastMotionUnavailableLogUptime;
     private String sensorServiceIdlePackage = "";
     private boolean sensorServiceUidOverrideConfirmed;
+    private boolean retainSensorPolicyOnRelease;
     private int requestedSensorLandscapeRotation = -1;
     private boolean sensorLandscapeRotationApplied;
     private String unavailableReason = "";
@@ -889,7 +890,29 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         pendingApp = null;
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
-        injectKeyDirectAsync(KeyEvent.KEYCODE_HOME, "home display " + displayId);
+        if (!startSecondaryHomeForBackground()) {
+            injectKeyDirectAsync(KeyEvent.KEYCODE_HOME, "home display " + displayId);
+        }
+    }
+
+    private boolean startSecondaryHomeForBackground() {
+        int targetDisplayId = displayId;
+        Intent intent = new Intent(owner, SecondaryHomeActivity.class)
+                .setAction(Intent.ACTION_MAIN)
+                .putExtra(SecondaryHomeActivity.EXTRA_BACKGROUND_ONLY, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        try {
+            ActivityOptions options = ActivityOptions.makeBasic();
+            options.setLaunchDisplayId(targetDisplayId);
+            owner.startActivity(intent, options.toBundle());
+            Log.i(TAG, "Moved hosted app behind secondary HOME: slot=" + slot
+                    + ", display=" + targetDisplayId);
+            return true;
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Log.w(TAG, "Start secondary HOME failed for slot " + slot + ", display="
+                    + targetDisplayId + ": " + e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     @Override
@@ -946,13 +969,17 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     public void release() {
         shutdownInputDispatch();
         invalidatePendingImePolicyLaunch();
-        // HOME is handled asynchronously and can target a display after it is released.
-        // Package replacement can kill this process as soon as onDestroy returns. Releasing
-        // through queued work left the corresponding SurfaceFlinger output behind.
+        // The owning activity defers this call during HOME-driven instance replacement so the
+        // framework cannot dispatch a pending HOME request to an already removed display.
         releaseVirtualDisplayWithRetry("host release", null);
         releaseStaleWindowAnimationLeash();
         rootInputBridgeClient.close();
         rootExecutor.shutdownNow();
+    }
+
+    void releaseForActivityReplacement() {
+        retainSensorPolicyOnRelease = true;
+        release();
     }
 
     @Override
@@ -1047,6 +1074,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 touchSequenceSuppressed = false;
                 activeTouchTraceId = touchStartedOnMain ? ++touchTraceSequence : 0L;
                 if (touchStartedOnMain) {
+                    focusHostedDisplayAsync(null);
                     touchTargetDisplayId = displayId;
                     touchTargetDisplayWidth = displayWidth;
                     touchTargetDisplayHeight = displayHeight;
@@ -1099,6 +1127,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 if (touchStartedOnMain && !touchSequenceSuppressed) {
                     injectMotionDirect(event);
                 }
+                focusDefaultDisplayForSystemNavigation("host touch cancelled");
                 clearTouchState();
                 return true;
             default:
@@ -1343,6 +1372,18 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 mainHandler.post(onFinished);
             }
         }
+    }
+
+    boolean focusDefaultDisplayForSystemNavigation(String reason) {
+        focusRequestGeneration++;
+        if (!rootAvailable) {
+            return false;
+        }
+        boolean focused = rootInputBridgeClient.focusDisplay(
+                getRootInputBridgeToken(), DEFAULT_DISPLAY_ID);
+        Log.println(focused ? Log.INFO : Log.WARN, TAG,
+                "Restore default display focus for " + reason + ": success=" + focused);
+        return focused;
     }
 
     private void logMotionUnavailable(int targetDisplayId) {
@@ -2271,7 +2312,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         sensorLandscapeRotationGeneration++;
         requestedSensorLandscapeRotation = -1;
         sensorLandscapeRotationApplied = false;
-        resetSensorServiceUidOverrideAsync();
+        if (retainSensorPolicyOnRelease) {
+            sensorPolicyGeneration++;
+            sensorServiceIdlePackage = "";
+            sensorServiceUidOverrideConfirmed = false;
+        } else {
+            resetSensorServiceUidOverrideAsync();
+        }
         focusRequestGeneration++;
         destroyHostedInputFocusGuard();
         pendingApp = null;
@@ -2781,6 +2828,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     int getDisplayId() {
         return displayId;
+    }
+
+    int getSlot() {
+        return slot;
     }
 
     boolean hasRootAccess() {

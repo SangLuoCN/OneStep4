@@ -40,8 +40,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:clearTaskOnLaunch="true"
-            android:stateNotNeeded="true"
+            android:alwaysRetainTaskState="true"
+            android:canDisplayOnRemoteDevices="false"
             android:taskAffinity=""
             android:excludeFromRecents="true"
             android:resizeableActivity="true"
@@ -63,6 +63,23 @@
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".SecondaryHomeActivity"
+            android:canDisplayOnRemoteDevices="true"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:screenOrientation="nosensor"
+            android:taskAffinity="com.sangluo.onestep.secondaryhome"
+            android:theme="@style/Theme.OneStep40">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.SECONDARY_HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 

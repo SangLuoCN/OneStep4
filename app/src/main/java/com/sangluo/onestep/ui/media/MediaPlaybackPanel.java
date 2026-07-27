@@ -656,8 +656,9 @@ public final class MediaPlaybackPanel implements AutoCloseable {
         if (mediaSourcePopup != null) {
             mediaSourcePopup.dismiss();
         }
-        if (mediaSessionCoordinator != null) {
-            mediaSessionCoordinator.selectSource(packageName);
+        if (mediaSessionCoordinator != null
+                && mediaSessionCoordinator.selectSource(packageName)) {
+            callbacks.openComponentApp(packageName);
         }
     }
 

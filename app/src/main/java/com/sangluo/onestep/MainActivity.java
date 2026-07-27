@@ -2,6 +2,7 @@ package com.sangluo.onestep;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.app.WallpaperManager;
 import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
@@ -71,6 +72,7 @@ import com.sangluo.onestep.ui.window.WindowLayoutCalculator;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -105,12 +107,19 @@ import static com.sangluo.onestep.data.settings.OneStepSettings.sanitizeTopNavVe
 
 public class MainActivity extends Activity {
     private static final String TAG = "OneStep40";
+    static final String EXTRA_SHOW_DESKTOP_HOME =
+            "com.sangluo.onestep.extra.SHOW_DESKTOP_HOME";
+    static final String EXTRA_DEFAULT_DISPLAY_RELAY_ATTEMPTED =
+            "com.sangluo.onestep.extra.DEFAULT_DISPLAY_RELAY_ATTEMPTED";
+    private static WeakReference<MainActivity> defaultDisplayInstance =
+            new WeakReference<>(null);
     private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 1;
     private static final int REQUEST_PICK_BACKGROUND = 42;
     private static final int TOP_MEDIA_AREA_MIN_HEIGHT_DP = 116;
     private static final int TOP_MEDIA_PLAYER_HEIGHT_DP = 76;
     private static final long PIP_MONITOR_INTERVAL_MS = 450L;
     private static final long PIP_MONITOR_RETRY_INTERVAL_MS = 1200L;
+    private static final long SUPERSEDED_DISPLAY_RELEASE_GRACE_MS = 5000L;
     private static final int TOP_BAR_HEIGHT_DEFAULT_DP = 74;
     private static final int MEDIA_ROOT_COMMAND_TIMEOUT_SECONDS = 8;
     private static final int EMBEDDED_START_RETRY_MS = 16;
@@ -361,6 +370,8 @@ public class MainActivity extends Activity {
     private boolean exitOneStepPending;
     private boolean activityDestroyed;
     private boolean activityResumed;
+    private boolean nonDefaultDisplayHomeRelay;
+    private boolean embeddedResourcesReleased;
     private WindowAnimationController windowAnimationController;
     private boolean windowSwitchAnimationCritical;
     private int deferredWindowSwitchUiWork;
@@ -415,6 +426,15 @@ public class MainActivity extends Activity {
             setTheme(R.style.Theme_OneStep40_TransparentNavigation);
         }
         super.onCreate(savedInstanceState);
+        int activityDisplayId = getActivityDisplayId();
+        if (activityDisplayId != Display.DEFAULT_DISPLAY) {
+            nonDefaultDisplayHomeRelay = true;
+            Log.w(TAG, "Redirect HOME activity from virtual display " + activityDisplayId
+                    + " to default display");
+            redirectHomeToDefaultDisplay();
+            return;
+        }
+        defaultDisplayInstance = new WeakReference<>(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         Window hostWindow = getWindow();
         hostWindow.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
@@ -453,11 +473,17 @@ public class MainActivity extends Activity {
         renderWindows();
         initMediaMonitoring();
         initAmapNavigationMonitoring();
+        if (isDesktopHomeRequestIntent(getIntent())) {
+            mainHandler.post(this::requestDesktopHomeInMain);
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        if (nonDefaultDisplayHomeRelay) {
+            return;
+        }
         boolean returningToForeground = !activityResumed;
         activityResumed = true;
         suppressEmbeddedStarts = false;
@@ -474,13 +500,17 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        boolean systemHomeIntent = isSystemHomeIntent(intent);
-        if (systemHomeIntent && activityResumed) {
+        if (nonDefaultDisplayHomeRelay) {
+            redirectHomeToDefaultDisplay();
+            return;
+        }
+        boolean desktopHomeRequest = isDesktopHomeRequestIntent(intent);
+        if (desktopHomeRequest && activityResumed) {
             suppressEmbeddedStarts = false;
             requestDesktopHomeInMain();
             return;
         }
-        if (systemHomeIntent) {
+        if (desktopHomeRequest) {
             overridePendingTransition(0, 0);
         }
         suppressEmbeddedStarts = false;
@@ -488,9 +518,14 @@ public class MainActivity extends Activity {
         hostedDisplayRotationController.enable();
         resumeMediaMonitoring();
         startPipMonitoring();
-        if (systemHomeIntent) {
+        if (desktopHomeRequest) {
             mainHandler.post(this::requestDesktopHomeInMain);
         }
+    }
+
+    private boolean isDesktopHomeRequestIntent(Intent intent) {
+        return isSystemHomeIntent(intent)
+                || (intent != null && intent.getBooleanExtra(EXTRA_SHOW_DESKTOP_HOME, false));
     }
 
     private boolean isSystemHomeIntent(Intent intent) {
@@ -500,6 +535,11 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        if (nonDefaultDisplayHomeRelay) {
+            super.onPause();
+            return;
+        }
+        restoreDefaultDisplayFocus("OneStep paused");
         activityResumed = false;
         pauseMediaMonitoring();
         super.onPause();
@@ -507,6 +547,10 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onStop() {
+        if (nonDefaultDisplayHomeRelay) {
+            super.onStop();
+            return;
+        }
         hostedDisplayRotationController.disable();
         stopAllHostedSensorLandscapeRotations("OneStep stopped");
         hostedDisplayRotationController.clearLatestRotation();
@@ -605,6 +649,96 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void restoreDefaultDisplayFocus(String reason) {
+        RootVirtualDisplayHost activeHost = activeMainSlot >= 0
+                && activeMainSlot < embeddedHosts.length
+                && embeddedHosts[activeMainSlot] instanceof RootVirtualDisplayHost
+                ? (RootVirtualDisplayHost) embeddedHosts[activeMainSlot] : null;
+        if (activeHost != null && activeHost.focusDefaultDisplayForSystemNavigation(reason)) {
+            return;
+        }
+        for (EmbeddedAppHost host : embeddedHosts) {
+            if (host instanceof RootVirtualDisplayHost && host != activeHost
+                    && ((RootVirtualDisplayHost) host)
+                    .focusDefaultDisplayForSystemNavigation(reason)) {
+                return;
+            }
+        }
+    }
+
+    private int getActivityDisplayId() {
+        Display display = getWindowManager().getDefaultDisplay();
+        return display == null ? Display.DEFAULT_DISPLAY : display.getDisplayId();
+    }
+
+    private void redirectHomeToDefaultDisplay() {
+        MainActivity defaultActivity = defaultDisplayInstance.get();
+        if (defaultActivity != null && !defaultActivity.activityDestroyed
+                && defaultActivity != this) {
+            defaultActivity.restoreDefaultDisplayFocus("virtual HOME redirected");
+            defaultActivity.suppressEmbeddedStarts = false;
+            defaultActivity.requestDesktopHomeInMain();
+            finish();
+            overridePendingTransition(0, 0);
+            return;
+        }
+        if (getIntent().getBooleanExtra(EXTRA_DEFAULT_DISPLAY_RELAY_ATTEMPTED, false)) {
+            Log.e(TAG, "Stop repeated HOME redirect because no default-display instance exists");
+            finish();
+            overridePendingTransition(0, 0);
+            return;
+        }
+        Intent redirectIntent = new Intent(this, HomeRedirectActivity.class)
+                .putExtra(EXTRA_SHOW_DESKTOP_HOME, true)
+                .putExtra(EXTRA_DEFAULT_DISPLAY_RELAY_ATTEMPTED, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ActivityOptions options = ActivityOptions.makeBasic();
+                options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
+                startActivity(redirectIntent, options.toBundle());
+            } else {
+                startActivity(redirectIntent);
+            }
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Log.e(TAG, "Unable to redirect HOME to default display", e);
+        } finally {
+            finish();
+            overridePendingTransition(0, 0);
+        }
+    }
+
+    static boolean dispatchSecondaryHome(int displayId) {
+        MainActivity activity = defaultDisplayInstance.get();
+        if (displayId <= Display.DEFAULT_DISPLAY || activity == null
+                || activity.activityDestroyed || activity.nonDefaultDisplayHomeRelay) {
+            return false;
+        }
+        activity.mainHandler.post(() -> activity.handleSecondaryHome(displayId));
+        return true;
+    }
+
+    private void handleSecondaryHome(int displayId) {
+        if (activityDestroyed) {
+            return;
+        }
+        RootVirtualDisplayHost sourceHost = findRootVirtualDisplayHost(displayId);
+        if (sourceHost == null) {
+            Log.w(TAG, "Ignore secondary HOME from unknown display " + displayId);
+            return;
+        }
+        int sourceSlot = sourceHost.getSlot();
+        if (sourceSlot != activeMainSlot) {
+            Log.w(TAG, "Ignore secondary HOME from non-main slot: display=" + displayId
+                    + ", slot=" + sourceSlot + ", mainSlot=" + activeMainSlot);
+            return;
+        }
+        Log.i(TAG, "Show built-in app list for secondary HOME: display=" + displayId
+                + ", slot=" + sourceSlot);
+        suppressEmbeddedStarts = false;
+        requestDesktopHomeInMain();
+    }
+
     private boolean shouldHideStatusBarForOneStep() {
         return multiWindowMode && !exitOneStepPending;
     }
@@ -624,6 +758,23 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
+        MainActivity replacementActivity = defaultDisplayInstance.get();
+        boolean supersededOnDefaultDisplay = replacementActivity != null
+                && replacementActivity != this
+                && !replacementActivity.activityDestroyed;
+        if (replacementActivity == this) {
+            defaultDisplayInstance.clear();
+        }
+        if (nonDefaultDisplayHomeRelay) {
+            mediaRootExecutor.shutdownNow();
+            visualEffectExecutor.shutdownNow();
+            wallpaperExecutor.shutdownNow();
+            pipDockExecutor.shutdownNow();
+            releaseEmbeddedResources();
+            super.onDestroy();
+            return;
+        }
+        restoreDefaultDisplayFocus("OneStep destroyed");
         cancelWindowSurfaceAnimation();
         if (hostedDisplayRotationController != null) {
             hostedDisplayRotationController.close();
@@ -640,23 +791,49 @@ public class MainActivity extends Activity {
         windowSwitchAnimationCritical = false;
         deferredWindowSwitchUiWork = 0;
         pauseMediaMonitoring();
-        if (isFinishing() || exitOneStepPending) {
+        if (!supersededOnDefaultDisplay && (isFinishing() || exitOneStepPending)) {
             backgroundOpenedApps();
-        }
-        for (EmbeddedAppHost host : embeddedHosts) {
-            if (host != null) {
-                host.release();
-            }
         }
         if (topPanelController != null) {
             topPanelController.close();
             topPanelController = null;
         }
         mediaRootExecutor.shutdownNow();
-        displayImePolicyExecutor.shutdownNow();
         visualEffectExecutor.shutdownNow();
         wallpaperExecutor.shutdownNow();
         pipDockExecutor.shutdown();
+        if (supersededOnDefaultDisplay) {
+            Log.w(TAG, "Keep superseded virtual displays for "
+                    + SUPERSEDED_DISPLAY_RELEASE_GRACE_MS
+                    + "ms while Android completes the pending HOME dispatch");
+            mainHandler.postDelayed(() -> releaseEmbeddedResources(true),
+                    SUPERSEDED_DISPLAY_RELEASE_GRACE_MS);
+        } else {
+            releaseEmbeddedResources();
+        }
+        unregisterSystemBackCallback();
+        super.onDestroy();
+    }
+
+    private void releaseEmbeddedResources() {
+        releaseEmbeddedResources(false);
+    }
+
+    private void releaseEmbeddedResources(boolean supersededByReplacement) {
+        if (embeddedResourcesReleased) {
+            return;
+        }
+        embeddedResourcesReleased = true;
+        for (EmbeddedAppHost host : embeddedHosts) {
+            if (host != null) {
+                if (supersededByReplacement && host instanceof RootVirtualDisplayHost) {
+                    ((RootVirtualDisplayHost) host).releaseForActivityReplacement();
+                } else {
+                    host.release();
+                }
+            }
+        }
+        displayImePolicyExecutor.shutdownNow();
         try {
             sensorPolicyExecutor.execute(persistentRootShell::close);
             sensorPolicyExecutor.shutdown();
@@ -664,8 +841,6 @@ public class MainActivity extends Activity {
             sensorPolicyExecutor.shutdownNow();
             persistentRootShell.close();
         }
-        unregisterSystemBackCallback();
-        super.onDestroy();
     }
 
     @Override

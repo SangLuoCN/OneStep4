@@ -7,7 +7,6 @@ import android.media.session.MediaSession;
 import android.media.session.MediaSessionManager;
 import android.media.session.PlaybackState;
 import android.os.Handler;
-import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -71,20 +70,25 @@ public final class MediaSessionCoordinator implements AutoCloseable {
     private MediaNotificationListenerService.MediaNotificationSnapshot activeNotification;
     private List<String> availableSourcePackages = Collections.emptyList();
     private String selectedSourcePackage;
-    private long selectedSourceChangedAtElapsedRealtime;
     private boolean permissionDenied;
     private boolean closed;
 
     private final class ObservedController {
         final MediaController controller;
         final MediaController.Callback callback;
+        private boolean wasPlaying;
 
         ObservedController(MediaController controller) {
             this.controller = controller;
+            wasPlaying = isPlaying(controller);
             callback = new MediaController.Callback() {
                 @Override
                 public void onPlaybackStateChanged(PlaybackState state) {
-                    if (state != null && state.getState() == PlaybackState.STATE_PLAYING) {
+                    boolean playing = state != null
+                            && state.getState() == PlaybackState.STATE_PLAYING;
+                    boolean startedPlaying = playing && !wasPlaying;
+                    wasPlaying = playing;
+                    if (startedPlaying) {
                         focusSourceFromPlayback(ObservedController.this.controller.getPackageName());
                     }
                     refresh();
@@ -92,9 +96,6 @@ public final class MediaSessionCoordinator implements AutoCloseable {
 
                 @Override
                 public void onMetadataChanged(MediaMetadata metadata) {
-                    if (isPlaying(ObservedController.this.controller)) {
-                        focusSourceFromPlayback(ObservedController.this.controller.getPackageName());
-                    }
                     refresh();
                 }
 
@@ -135,7 +136,7 @@ public final class MediaSessionCoordinator implements AutoCloseable {
             List<MediaController> controllers = loadActiveControllers();
             availableSourcePackages = collectSourcePackages(controllers, notifications);
             syncObservedControllers(controllers);
-            focusMostRecentPlaybackIfNewer(controllers);
+            focusMostRecentPlaybackWhenUnselected(controllers);
             clearMissingSourceSelection();
             MediaNotificationListenerService.MediaNotificationSnapshot preferredNotification =
                     findBestNotification(notifications, selectedSourcePackage);
@@ -195,7 +196,6 @@ public final class MediaSessionCoordinator implements AutoCloseable {
         activeNotification = null;
         availableSourcePackages = Collections.emptyList();
         selectedSourcePackage = null;
-        selectedSourceChangedAtElapsedRealtime = 0L;
         notifyStateChanged(previous != null);
     }
 
@@ -208,7 +208,6 @@ public final class MediaSessionCoordinator implements AutoCloseable {
             return false;
         }
         selectedSourcePackage = packageName;
-        selectedSourceChangedAtElapsedRealtime = SystemClock.elapsedRealtime();
         refresh();
         return true;
     }
@@ -218,29 +217,23 @@ public final class MediaSessionCoordinator implements AutoCloseable {
             return;
         }
         selectedSourcePackage = packageName;
-        selectedSourceChangedAtElapsedRealtime = SystemClock.elapsedRealtime();
     }
 
-    private void focusMostRecentPlaybackIfNewer(List<MediaController> controllers) {
+    private void focusMostRecentPlaybackWhenUnselected(List<MediaController> controllers) {
+        if (!TextUtils.isEmpty(selectedSourcePackage)) {
+            return;
+        }
         MediaController latestPlaying = findMostRecentlyUpdatedPlayingController(controllers);
         if (latestPlaying == null) {
             return;
         }
-        PlaybackState state = latestPlaying.getPlaybackState();
-        long updateTime = state == null ? 0L : state.getLastPositionUpdateTime();
-        if (!TextUtils.isEmpty(selectedSourcePackage)
-                && updateTime <= selectedSourceChangedAtElapsedRealtime) {
-            return;
-        }
         selectedSourcePackage = latestPlaying.getPackageName();
-        selectedSourceChangedAtElapsedRealtime = Math.max(1L, updateTime);
     }
 
     private void clearMissingSourceSelection() {
         if (!TextUtils.isEmpty(selectedSourcePackage)
                 && !availableSourcePackages.contains(selectedSourcePackage)) {
             selectedSourcePackage = null;
-            selectedSourceChangedAtElapsedRealtime = 0L;
         }
     }
 

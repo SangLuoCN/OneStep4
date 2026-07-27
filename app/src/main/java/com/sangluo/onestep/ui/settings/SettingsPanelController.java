@@ -11,6 +11,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
+import android.os.SystemClock;
 import android.text.method.LinkMovementMethod;
 import android.text.TextUtils;
 import android.text.util.Linkify;
@@ -56,6 +57,8 @@ import static com.sangluo.onestep.data.settings.OneStepSettings.clamp;
 import static com.sangluo.onestep.data.settings.OneStepSettings.sanitizeSideWindowCount;
 
 public final class SettingsPanelController {
+    private static final long SLIDER_LIVE_UPDATE_INTERVAL_MS = 100L;
+
     public interface Callbacks {
         OneStepWindowView activeMainWindowView();
         GradientDrawable panelBackground(int fillColor, int strokeColor, float radius);
@@ -709,16 +712,15 @@ public final class SettingsPanelController {
         seekBar.setProgress(clamp(current, min, max) - min);
         seekBar.setPadding(dp(10), 0, dp(10), 0);
         applyBlueSeekBarTint(seekBar);
+        SliderUpdateThrottler updateThrottler = new SliderUpdateThrottler(listener,
+                interactionListener);
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 int valueDp = min + progress;
                 value.setText(formatter.format(valueDp));
                 if (fromUser) {
-                    listener.onChanged(valueDp);
-                    if (interactionListener != null) {
-                        interactionListener.run();
-                    }
+                    updateThrottler.schedule(seekBar, valueDp);
                 }
             }
 
@@ -731,10 +733,7 @@ public final class SettingsPanelController {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                listener.onChanged(min + seekBar.getProgress());
-                if (interactionListener != null) {
-                    interactionListener.run();
-                }
+                updateThrottler.flush(seekBar, min + seekBar.getProgress());
             }
         });
         item.addView(seekBar, new LinearLayout.LayoutParams(
@@ -831,6 +830,56 @@ public final class SettingsPanelController {
 
     private interface SliderSettingValueFormatter {
         String format(int value);
+    }
+
+    /** Coalesces costly setting updates while keeping slider changes visible during a drag. */
+    private static final class SliderUpdateThrottler {
+        private final SliderSettingChangeListener listener;
+        private final Runnable interactionListener;
+        private final Runnable dispatchRunnable = this::dispatchPendingValue;
+        private int pendingValue;
+        private int lastDispatchedValue = Integer.MIN_VALUE;
+        private long lastDispatchUptimeMillis;
+        private boolean dispatchScheduled;
+
+        SliderUpdateThrottler(SliderSettingChangeListener listener,
+                              Runnable interactionListener) {
+            this.listener = listener;
+            this.interactionListener = interactionListener;
+        }
+
+        void schedule(SeekBar seekBar, int value) {
+            pendingValue = value;
+            if (dispatchScheduled) {
+                return;
+            }
+            long elapsed = SystemClock.uptimeMillis() - lastDispatchUptimeMillis;
+            long delay = Math.max(0L, SLIDER_LIVE_UPDATE_INTERVAL_MS - elapsed);
+            dispatchScheduled = true;
+            seekBar.postDelayed(dispatchRunnable, delay);
+        }
+
+        void flush(SeekBar seekBar, int value) {
+            pendingValue = value;
+            if (dispatchScheduled) {
+                seekBar.removeCallbacks(dispatchRunnable);
+                dispatchScheduled = false;
+            }
+            dispatchPendingValue();
+        }
+
+        private void dispatchPendingValue() {
+            dispatchScheduled = false;
+            if (pendingValue == lastDispatchedValue) {
+                return;
+            }
+            lastDispatchedValue = pendingValue;
+            lastDispatchUptimeMillis = SystemClock.uptimeMillis();
+            listener.onChanged(pendingValue);
+            if (interactionListener != null) {
+                interactionListener.run();
+            }
+        }
     }
 
     private interface SwitchSettingChangeListener {

@@ -52,7 +52,7 @@ public final class RootInputBridgeClient implements AutoCloseable {
                 String.format(Locale.US, "key %d %d", displayId, keyCode));
     }
 
-    public boolean focusDisplay(String bridgeToken, int displayId) {
+    public synchronized boolean focusDisplay(String bridgeToken, int displayId) {
         String response = sendRequestOnDedicatedConnection(
                 bridgeToken, "focusDisplay " + displayId);
         if (TextUtils.isEmpty(response)) {
