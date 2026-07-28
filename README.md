@@ -19,6 +19,16 @@
   <img src="assets/readme/recorder.png" width="23%" alt="录音组件与多窗口演示">
 </p>
 
+<p align="center">
+  <a href="https://www.bilibili.com/video/BV17b3Y6QE4D"><strong>观看 Bilibili 演示视频</strong></a>
+  ·
+  <a href="https://github.com/SangLuoCN/OneStep4"><strong>GitHub 项目：SangLuoCN/OneStep4</strong></a>
+</p>
+
+<p align="center">
+  如果 OneStep4.0 对你有帮助，欢迎为演示视频一键三连，也欢迎为 GitHub 项目点一个 Star！
+</p>
+
 ## 项目简介
 
 OneStep4.0 是面向 Android Root 与系统特权环境的多应用桌面容器，旨在延续 One Step 的多窗口交互方式。应用自身作为系统 Home 运行，在同一工作区中提供一个主窗口、多个侧边小窗口、顶部应用栏、媒体与导航组件，并允许用户在这些容器之间快速打开和切换真实应用。
@@ -37,3 +47,13 @@ OneStep4.0 是面向 Android Root 与系统特权环境的多应用桌面容器�
 - **一步设置**：设置页可像普通应用一样在主屏和侧屏之间切换，并保持页面状态。
 - **自定义布局**：可调整桌面图标排列、侧屏数量、顶部栏尺寸与间距、角落触发区域和灵敏度。
 - **工作区背景**：支持选择自定义背景并同步系统壁纸。
+
+## 内测反馈群
+
+欢迎加入 OneStep4.0 内测反馈群，交流使用体验、反馈问题并参与功能测试。
+
+<p align="center">
+  <img src="assets/readme/qq-feedback-group.jpg" width="360" alt="OneStep4.0 内测反馈群二维码">
+</p>
+
+<p align="center"><strong>QQ 群：1081638982</strong></p>
