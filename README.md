@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="app/src/main/res/drawable-nodpi/ic_launcher_artwork.png" width="168" height="168" alt="OneStep4.0 应用图标">
+  <img src="assets/readme/icon.png" width="168" alt="OneStep4.0 应用图标">
 </p>
 
 <h1 align="center">OneStep4.0</h1>
@@ -10,6 +10,13 @@
   <img src="https://img.shields.io/badge/API-24--36-1976d2" alt="Android API 24 至 36">
   <img src="https://img.shields.io/badge/Root-Required-e53935" alt="需要 Root 或系统特权权限">
   <img src="https://img.shields.io/badge/License-Apache--2.0-1565c0" alt="Apache License 2.0">
+</p>
+
+<p align="center">
+  <img src="assets/readme/navigation.png" width="23%" alt="导航组件与多窗口演示">
+  <img src="assets/readme/media.png" width="23%" alt="媒体组件与多窗口演示">
+  <img src="assets/readme/settings.png" width="23%" alt="一步设置与多窗口演示">
+  <img src="assets/readme/recorder.png" width="23%" alt="录音组件与多窗口演示">
 </p>
 
 ## 项目简介

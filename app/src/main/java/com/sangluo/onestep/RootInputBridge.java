@@ -346,6 +346,7 @@ public final class RootInputBridge {
         try {
             getSetDisplayIdMethod().invoke(event, displayId);
             event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
+            RootVirtualDisplayBridge.noteVirtualInput(displayId);
             Object result = injectInputEventMethod.invoke(inputManager, event, injectMode);
             accepted = !Boolean.FALSE.equals(result);
             if (!accepted) {
@@ -424,6 +425,7 @@ public final class RootInputBridge {
         long startWallTime = System.currentTimeMillis();
         boolean accepted = false;
         try {
+            RootVirtualDisplayBridge.noteVirtualInput(displayId);
             Object result = injectInputEventMethod.invoke(inputManager, event, injectMode);
             accepted = !Boolean.FALSE.equals(result);
             if (!accepted) {
@@ -1086,6 +1088,7 @@ public final class RootInputBridge {
             throws ReflectiveOperationException {
         getSetDisplayIdMethod().invoke(event, displayId);
         event.setSource(InputDevice.SOURCE_KEYBOARD);
+        RootVirtualDisplayBridge.noteVirtualInput(displayId);
         Object result = injectInputEventMethod.invoke(inputManager, event,
                 INJECT_INPUT_EVENT_MODE_ASYNC);
         if (Boolean.FALSE.equals(result)) {

@@ -195,6 +195,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         void setRootInputBridgeLastStartUptime(long uptime);
         boolean claimTrustedDisplayRoleSetup();
         Rect[] calculateWindowRects();
+        Intent consumeRoutedLaunchIntent(int slot, String packageName);
+        boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
+                                 Intent intent, String targetPackage);
     }
 
     private static final String TAG = "OneStep40";
@@ -228,6 +231,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final String VIRTUAL_DISPLAY_ROLE =
             "android.app.role.COMPANION_DEVICE_APP_STREAMING";
     private static final int[] HOSTED_TASK_RESOLUTION_DELAYS_MS = {80, 240, 700, 1500};
+    private static final long ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS = 240L;
     private final MainActivity owner;
     private final Callbacks callbacks;
     private final PackageManager packageManager;
@@ -288,6 +292,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private String launchRequestedPackage = "";
     private int launchRequestedDisplayId = -1;
     private volatile int taskResolutionToken;
+    private int hostedTaskValidationGeneration;
+    private boolean hostedTaskValidationInFlight;
+    private int routedLaunchGeneration;
     private boolean surfaceDetached;
     private int displayReleaseGeneration;
     private boolean virtualDisplayCreationInProgress;
@@ -499,8 +506,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return false;
         }
 
-        Intent launchIntent = packageManager.getLaunchIntentForPackage(app.packageName);
-        if (launchIntent == null) {
+        Intent launcherIntent = packageManager.getLaunchIntentForPackage(app.packageName);
+        if (launcherIntent == null) {
             unavailableReason = "找不到启动入口";
             return false;
         }
@@ -521,7 +528,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             }
         }
 
-        boolean reusingHostedApp = displayId == launchRequestedDisplayId
+        Intent routedLaunchIntent = callbacks.consumeRoutedLaunchIntent(
+                slot, app.packageName);
+        boolean reusingHostedApp = routedLaunchIntent == null
+                && displayId == launchRequestedDisplayId
                 && TextUtils.equals(launchRequestedPackage, app.packageName);
         if (!reusingHostedApp && imePolicyLaunchPendingDisplayId == displayId
                 && imePolicyLaunchPendingStartEpoch == startEpoch
@@ -538,19 +548,23 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             checkDisplayImeLocalPolicy(
                     "main display app launch " + app.packageName,
                     () -> finishMainDisplayLaunchPolicyCheck(requestGeneration,
-                            targetDisplayId, startEpoch, app, launchIntent, true),
+                            targetDisplayId, startEpoch, app, launcherIntent,
+                            routedLaunchIntent, true),
                     () -> finishMainDisplayLaunchPolicyCheck(requestGeneration,
-                            targetDisplayId, startEpoch, app, launchIntent, false));
+                            targetDisplayId, startEpoch, app, launcherIntent,
+                            routedLaunchIntent, false));
             return true;
         }
-        return continueHostedAppStart(app, launchIntent, startEpoch, reusingHostedApp);
+        return continueHostedAppStart(app, launcherIntent, routedLaunchIntent,
+                startEpoch, reusingHostedApp);
     }
 
     private void finishMainDisplayLaunchPolicyCheck(int requestGeneration,
                                                     int targetDisplayId,
                                                     int startEpoch,
                                                     LauncherApp app,
-                                                    Intent launchIntent,
+                                                    Intent launcherIntent,
+                                                    Intent routedLaunchIntent,
                                                     boolean configured) {
         if (requestGeneration != imePolicyLaunchGeneration) {
             return;
@@ -576,7 +590,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     Toast.LENGTH_SHORT).show();
             return;
         }
-        boolean live = continueHostedAppStart(app, launchIntent, startEpoch, false);
+        boolean live = continueHostedAppStart(app, launcherIntent, routedLaunchIntent,
+                startEpoch, false);
         windowViews[slot].setLiveAppVisible(live);
         if (!live) {
             Log.w(TAG, "Cannot embed " + app.packageName + " in slot " + slot
@@ -585,7 +600,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
     }
 
-    private boolean continueHostedAppStart(LauncherApp app, Intent launchIntent,
+    private boolean continueHostedAppStart(LauncherApp app, Intent launcherIntent,
+                                           Intent routedLaunchIntent,
                                            int startEpoch,
                                            boolean reusingHostedApp) {
         if (!shouldRunEmbeddedStart(startEpoch) || embeddedSlotClosing[slot]
@@ -598,14 +614,33 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (reusingHostedApp) {
             pendingApp = null;
             unavailableReason = "";
+            validateReusedHostedApp(app, startEpoch);
             return true;
         }
 
         pendingApp = null;
-        hostedTaskId = -1;
+        invalidateTaskResolution();
 
+        syncLaunchRoutingSource();
+        rootVirtualDisplayBridgeClient.allowNextLaunch(
+                getRootInputBridgeToken(), app.packageName);
+
+        if (routedLaunchIntent != null && systemLaunchAvailable
+                && !skipActivityOptionsLaunch
+                && startWithActivityOptions(launcherIntent, app.packageName, startEpoch)) {
+            launchRequestedPackage = app.packageName;
+            launchRequestedDisplayId = displayId;
+            scheduleHostedTaskResolution("launch main before routed " + app.packageName);
+            scheduleRoutedLaunch(app, routedLaunchIntent, startEpoch, displayId);
+            unavailableReason = "";
+            return true;
+        }
+
+        Intent requestedLaunchIntent = routedLaunchIntent != null
+                ? routedLaunchIntent : launcherIntent;
         if (systemLaunchAvailable && !skipActivityOptionsLaunch
-                && startWithActivityOptions(launchIntent, app.packageName, startEpoch)) {
+                && startWithActivityOptions(requestedLaunchIntent,
+                app.packageName, startEpoch)) {
             launchRequestedPackage = app.packageName;
             launchRequestedDisplayId = displayId;
             scheduleHostedTaskResolution("launch " + app.packageName);
@@ -613,7 +648,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return true;
         }
 
-        ComponentName componentName = resolveLaunchComponent(launchIntent);
+        ComponentName componentName = resolveLaunchComponent(requestedLaunchIntent);
         if (componentName != null) {
             String command = "am start --display " + displayId
                     + " -n " + shellQuote(componentName.flattenToShortString());
@@ -630,6 +665,89 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
         return false;
+    }
+
+    private void scheduleRoutedLaunch(LauncherApp app, Intent routedLaunchIntent,
+                                      int startEpoch, int targetDisplayId) {
+        final int generation = ++routedLaunchGeneration;
+        final Intent routedIntent = new Intent(routedLaunchIntent);
+        mainHandler.postDelayed(() -> {
+            LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS
+                    ? windowApps[slot] : null;
+            if (generation != routedLaunchGeneration
+                    || targetDisplayId != displayId
+                    || !shouldRunEmbeddedStart(startEpoch)
+                    || embeddedSlotClosing[slot]
+                    || currentApp == null
+                    || !TextUtils.equals(currentApp.packageName, app.packageName)) {
+                return;
+            }
+            rootVirtualDisplayBridgeClient.allowNextLaunch(
+                    getRootInputBridgeToken(), app.packageName);
+            if (startWithActivityOptions(routedIntent, app.packageName, startEpoch)) {
+                scheduleHostedTaskResolution("routed launch " + app.packageName);
+            }
+            // The launcher task remains visible if an app-owned routing activity exits.
+            unavailableReason = "";
+        }, ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS);
+    }
+
+    private void validateReusedHostedApp(LauncherApp app, int startEpoch) {
+        if (!rootAvailable || hostedTaskValidationInFlight
+                || displayId <= DEFAULT_DISPLAY_ID) {
+            return;
+        }
+        final int generation = ++hostedTaskValidationGeneration;
+        final int targetDisplayId = displayId;
+        final String targetPackage = app.packageName;
+        hostedTaskValidationInFlight = true;
+        try {
+            rootExecutor.execute(() -> {
+                ShellCommandResult stackList = runPrivilegedCommand(
+                        "cmd activity stack list", "validate reused hosted app", false);
+                int resolvedTaskId = stackList.exitCode == 0
+                        && !TextUtils.isEmpty(stackList.output)
+                        ? HostedTaskParser.findHostedTaskId(
+                        stackList.output, targetDisplayId, targetPackage)
+                        : -1;
+                boolean scanSucceeded = stackList.exitCode == 0
+                        && !TextUtils.isEmpty(stackList.output);
+                mainHandler.post(() -> {
+                    if (generation != hostedTaskValidationGeneration) {
+                        return;
+                    }
+                    hostedTaskValidationInFlight = false;
+                    LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS
+                            ? windowApps[slot] : null;
+                    if (!scanSucceeded || targetDisplayId != displayId
+                            || !shouldRunEmbeddedStart(startEpoch)
+                            || embeddedSlotClosing[slot]
+                            || currentApp == null
+                            || !TextUtils.equals(currentApp.packageName, targetPackage)
+                            || !TextUtils.equals(launchRequestedPackage, targetPackage)
+                            || launchRequestedDisplayId != targetDisplayId) {
+                        return;
+                    }
+                    if (resolvedTaskId > 0) {
+                        hostedTaskId = resolvedTaskId;
+                        return;
+                    }
+                    Log.w(TAG, "Restart hosted app after stale task reuse: slot=" + slot
+                            + ", display=" + targetDisplayId
+                            + ", package=" + targetPackage);
+                    hostedTaskId = -1;
+                    launchRequestedPackage = "";
+                    launchRequestedDisplayId = -1;
+                    boolean live = start(app);
+                    windowViews[slot].setLiveAppVisible(live);
+                    if (!live) {
+                        unavailableReason = "应用任务已结束，重新启动失败";
+                    }
+                });
+            });
+        } catch (RuntimeException e) {
+            hostedTaskValidationInFlight = false;
+        }
     }
 
     private void syncHostedSensorIsolation(String packageName) {
@@ -928,6 +1046,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     public void invalidateTaskResolution() {
         taskResolutionToken++;
         taskResolutionInFlight = false;
+        hostedTaskId = -1;
+        hostedTaskValidationGeneration++;
+        hostedTaskValidationInFlight = false;
+        routedLaunchGeneration++;
     }
 
     @Override
@@ -1356,6 +1478,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     void focusHostedDisplayAsync(Runnable onFinished) {
         final int targetDisplayId = displayId;
         final int requestGeneration = ++focusRequestGeneration;
+        syncLaunchRoutingSource();
         try {
             displayImePolicyExecutor.execute(() -> {
                 boolean currentRequest = requestGeneration == focusRequestGeneration
@@ -1385,6 +1508,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     boolean focusDefaultDisplayForSystemNavigation(String reason) {
         focusRequestGeneration++;
+        rootVirtualDisplayBridgeClient.updateLaunchSource(
+                getRootInputBridgeToken(), DEFAULT_DISPLAY_ID, "", false);
         if (!rootAvailable) {
             return false;
         }
@@ -2684,6 +2809,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     && (!requireRoot || (currentBridgeUid == 0 && displayBridgeUid == 0));
             if (bridgeReady) {
                 if (!force) {
+                    registerCrossAppLaunchRouting(bridgeToken);
                     return true;
                 }
                 Log.w(TAG, "Restart direct input bridge after operation failure: uid="
@@ -2733,6 +2859,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         ShellCommandResult rootResult = runRootCommand(
                 cleanupCommand + policyCommand + bridgeCommand);
         if (waitForRootInputBridge(bridgeToken)) {
+            registerCrossAppLaunchRouting(bridgeToken);
             Log.i(TAG, "Root secure-display bridge ready: uid=0, launcherExit="
                     + rootResult.exitCode);
             return true;
@@ -2741,6 +2868,24 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 + rootResult.exitCode
                 + ", rootOutput=" + rootResult.output);
         return false;
+    }
+
+    private void registerCrossAppLaunchRouting(String bridgeToken) {
+        if (!rootVirtualDisplayBridgeClient.registerCrossAppLaunchCallback(
+                bridgeToken, callbacks::onCrossAppLaunch)) {
+            Log.w(TAG, "Cross-app launch routing callback unavailable for slot " + slot);
+        }
+    }
+
+    private void syncLaunchRoutingSource() {
+        boolean active = slot == callbacks.activeMainSlot()
+                && displayId > DEFAULT_DISPLAY_ID
+                && slot >= 0 && slot < MAX_WINDOWS
+                && windowApps[slot] != null;
+        String packageName = active ? windowApps[slot].packageName : "";
+        rootVirtualDisplayBridgeClient.updateLaunchSource(
+                getRootInputBridgeToken(), active ? displayId : DEFAULT_DISPLAY_ID,
+                packageName, active);
     }
 
     private boolean waitForRootInputBridge(String bridgeToken) {

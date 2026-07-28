@@ -73,9 +73,12 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -137,6 +140,8 @@ public class MainActivity extends Activity {
     private static final int EMBEDDED_LAYOUT_REFRESH_DELAY_MS = 320;
     private static final int VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX = 1080;
     private static final long POST_ANIMATION_NON_CRITICAL_WORK_DELAY_MS = 64L;
+    private static final long CROSS_APP_ROUTE_RETRY_MS = 60L;
+    private static final int MAX_PENDING_CROSS_APP_ROUTES = 8;
     private static final int DEFERRED_MEDIA_SESSION_REFRESH = 1;
     private static final int DEFERRED_MEDIA_UI_REFRESH = 1 << 1;
     private static final int DEFERRED_PLAYLIST_REFRESH = 1 << 2;
@@ -164,6 +169,8 @@ public class MainActivity extends Activity {
     private final boolean[] embeddedSlotClosing = new boolean[MAX_WINDOWS];
     private final List<AppShortcutView> shortcutViews = new ArrayList<>();
     private final List<Integer> sideSlotOrder = new ArrayList<>();
+    private final ArrayDeque<RoutedAppLaunch> pendingCrossAppRoutes = new ArrayDeque<>();
+    private final Map<String, Intent> routedLaunchIntents = new HashMap<>();
 
     private List<LauncherApp> launcherApps = Collections.emptyList();
     private LauncherAppRepository launcherAppRepository;
@@ -185,6 +192,7 @@ public class MainActivity extends Activity {
     private final Runnable refreshAllEmbeddedSlotLayoutsRunnable =
             this::refreshAllEmbeddedSlotLayouts;
     private final Runnable cornerTriggerPreviewHideRunnable = this::hideCornerTriggerPreview;
+    private final Runnable drainCrossAppRoutesRunnable = this::drainCrossAppRoutes;
     private final OneStepWindowView.Callbacks windowViewCallbacks =
             new OneStepWindowView.Callbacks() {
                 @Override
@@ -339,6 +347,16 @@ public class MainActivity extends Activity {
                 }
                 @Override public Rect[] calculateWindowRects() {
                     return MainActivity.this.calculateWindowRects();
+                }
+                @Override public Intent consumeRoutedLaunchIntent(
+                        int slot, String packageName) {
+                    return MainActivity.this.consumeRoutedLaunchIntent(slot, packageName);
+                }
+                @Override public boolean onCrossAppLaunch(
+                        int sourceDisplayId, String sourcePackage,
+                        Intent intent, String targetPackage) {
+                    return MainActivity.this.onCrossAppLaunch(
+                            sourceDisplayId, sourcePackage, intent, targetPackage);
                 }
             };
     private OneStepSettingsStore settingsStore;
@@ -784,12 +802,15 @@ public class MainActivity extends Activity {
             systemUiController = null;
         }
         mainHandler.removeCallbacks(cornerTriggerPreviewHideRunnable);
+        mainHandler.removeCallbacks(drainCrossAppRoutesRunnable);
         mainHandler.removeCallbacks(flushDeferredWindowSwitchWorkRunnable);
         mainHandler.removeCallbacks(showDesktopHomeRunnable);
         mainHandler.removeCallbacks(pipMonitorRunnable);
         mainHandler.removeCallbacks(pipDockBoundsUpdateRunnable);
         windowSwitchAnimationCritical = false;
         deferredWindowSwitchUiWork = 0;
+        pendingCrossAppRoutes.clear();
+        routedLaunchIntents.clear();
         pauseMediaMonitoring();
         if (!supersededOnDefaultDisplay && (isFinishing() || exitOneStepPending)) {
             backgroundOpenedApps();
@@ -2780,6 +2801,103 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
+                                     Intent intent, String targetPackage) {
+        if (activityDestroyed || intent == null || TextUtils.isEmpty(sourcePackage)
+                || TextUtils.isEmpty(targetPackage)
+                || TextUtils.equals(sourcePackage, targetPackage)
+                || TextUtils.equals(getPackageName(), targetPackage)) {
+            return false;
+        }
+        RootVirtualDisplayHost sourceHost = findRootVirtualDisplayHost(sourceDisplayId);
+        if (sourceHost == null) {
+            return false;
+        }
+        int sourceSlot = sourceHost.getSlot();
+        LauncherApp sourceApp = sourceSlot >= 0 && sourceSlot < MAX_WINDOWS
+                ? windowApps[sourceSlot] : null;
+        if (sourceApp == null || !TextUtils.equals(sourceApp.packageName, sourcePackage)) {
+            return false;
+        }
+        LauncherApp targetApp = createLauncherAppForPackage(targetPackage);
+        if (targetApp == null) {
+            return false;
+        }
+        ComponentName component = intent.getComponent();
+        if (component != null && !TextUtils.equals(component.getPackageName(), targetPackage)) {
+            return false;
+        }
+        RoutedAppLaunch routedLaunch = new RoutedAppLaunch(
+                sourceSlot, sourcePackage, targetApp, new Intent(intent));
+        return mainHandler.post(() -> enqueueCrossAppRoute(routedLaunch));
+    }
+
+    private void enqueueCrossAppRoute(RoutedAppLaunch routedLaunch) {
+        if (activityDestroyed || routedLaunch == null) {
+            return;
+        }
+        while (pendingCrossAppRoutes.size() >= MAX_PENDING_CROSS_APP_ROUTES) {
+            pendingCrossAppRoutes.removeFirst();
+        }
+        pendingCrossAppRoutes.addLast(routedLaunch);
+        mainHandler.removeCallbacks(drainCrossAppRoutesRunnable);
+        mainHandler.post(drainCrossAppRoutesRunnable);
+    }
+
+    private void drainCrossAppRoutes() {
+        if (activityDestroyed || pendingCrossAppRoutes.isEmpty()) {
+            return;
+        }
+        if (isCrossAppRouteUiBusy()) {
+            mainHandler.postDelayed(drainCrossAppRoutesRunnable, CROSS_APP_ROUTE_RETRY_MS);
+            return;
+        }
+        RoutedAppLaunch launch = pendingCrossAppRoutes.peekFirst();
+        LauncherApp currentSource = launch.sourceSlot >= 0 && launch.sourceSlot < MAX_WINDOWS
+                ? windowApps[launch.sourceSlot] : null;
+        if (currentSource != null
+                && TextUtils.equals(currentSource.packageName, launch.sourcePackage)
+                && launch.sourceSlot != activeMainSlot) {
+            switchMainSlot(launch.sourceSlot, true);
+            mainHandler.postDelayed(drainCrossAppRoutesRunnable, CROSS_APP_ROUTE_RETRY_MS);
+            return;
+        }
+
+        pendingCrossAppRoutes.removeFirst();
+        routedLaunchIntents.put(launch.targetApp.packageName, launch.intent);
+        int existingSlot = findSlot(launch.targetApp.packageName);
+        if (existingSlot >= 0 && existingSlot != activeMainSlot
+                && !embeddedSlotClosing[existingSlot]) {
+            switchMainSlot(existingSlot, true);
+        } else {
+            addOrFocusApp(launch.targetApp);
+        }
+        Log.i(TAG, "Route cross-app launch inside OneStep: source=" + launch.sourcePackage
+                + " sourceSlot=" + launch.sourceSlot
+                + " target=" + launch.targetApp.packageName
+                + " existingSlot=" + existingSlot);
+        if (!pendingCrossAppRoutes.isEmpty()) {
+            mainHandler.postDelayed(drainCrossAppRoutesRunnable, CROSS_APP_ROUTE_RETRY_MS);
+        }
+    }
+
+    private boolean isCrossAppRouteUiBusy() {
+        return isWindowAnimationRunning() || mainSlotSwitchPendingSlot >= 0
+                || mainContentReplacementPendingSlot >= 0 || pendingMainAppStartSlot >= 0
+                || pendingInternalSettingsSlot >= 0 || pendingDesktopHomeSlot >= 0;
+    }
+
+    private Intent consumeRoutedLaunchIntent(int slot, String packageName) {
+        if (slot < 0 || slot >= MAX_WINDOWS || TextUtils.isEmpty(packageName)) {
+            return null;
+        }
+        LauncherApp app = windowApps[slot];
+        if (app == null || !TextUtils.equals(app.packageName, packageName)) {
+            return null;
+        }
+        return routedLaunchIntents.remove(packageName);
+    }
+
     private void addOrFocusApp(LauncherApp app) {
         if (app == null || isWindowAnimationRunning() || mainSlotSwitchPendingSlot >= 0
                 || mainContentReplacementPendingSlot >= 0 || pendingMainAppStartSlot >= 0
@@ -3817,6 +3935,11 @@ public class MainActivity extends Activity {
             showPendingInternalSettingsAfterPromotion(newMainSlot);
             showPendingDesktopHomeAfterPromotion(newMainSlot);
             refreshEmbeddedSlotsAfterRoleChange(oldMainSlot, newMainSlot);
+            LauncherApp newMainApp = windowApps[newMainSlot];
+            if (newMainApp != null
+                    && routedLaunchIntents.containsKey(newMainApp.packageName)) {
+                syncEmbeddedSlot(newMainSlot);
+            }
             if (onLayoutSettled != null) {
                 onLayoutSettled.run();
             }
@@ -4204,6 +4327,21 @@ public class MainActivity extends Activity {
 
     private static void setDpTextSize(TextView view, float value) {
         view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, value);
+    }
+
+    private static final class RoutedAppLaunch {
+        final int sourceSlot;
+        final String sourcePackage;
+        final LauncherApp targetApp;
+        final Intent intent;
+
+        RoutedAppLaunch(int sourceSlot, String sourcePackage,
+                        LauncherApp targetApp, Intent intent) {
+            this.sourceSlot = sourceSlot;
+            this.sourcePackage = sourcePackage;
+            this.targetApp = targetApp;
+            this.intent = intent;
+        }
     }
 
 }

@@ -1,5 +1,6 @@
 package com.sangluo.onestep.system.display;
 
+import android.content.Intent;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Parcel;
@@ -17,7 +18,10 @@ public final class RootVirtualDisplayBridgeClient {
     private static final String TAG = "OneStep40";
 
     private final IBinder ownerToken = new Binder();
+    private final IBinder launchCallbackBinder = new LaunchCallbackBinder();
     private IBinder service;
+    private volatile CrossAppLaunchListener crossAppLaunchListener;
+    private boolean launchCallbackRegistered;
 
     public CreateResult create(String bridgeToken, int slot, String name,
                                int width, int height, int densityDpi,
@@ -72,6 +76,42 @@ public final class RootVirtualDisplayBridgeClient {
                 data -> data.writeInt(slot));
     }
 
+    public boolean registerCrossAppLaunchCallback(String bridgeToken,
+                                                  CrossAppLaunchListener listener) {
+        crossAppLaunchListener = listener;
+        if (launchCallbackRegistered && service != null && service.isBinderAlive()) {
+            return true;
+        }
+        boolean registered = transactBoolean(
+                bridgeToken, RootVirtualDisplayBridge.TRANSACTION_REGISTER_LAUNCH_CALLBACK,
+                data -> data.writeStrongBinder(launchCallbackBinder));
+        launchCallbackRegistered = registered;
+        if (!registered) {
+            Log.w(TAG, "Root cross-app launch callback registration failed");
+        }
+        return registered;
+    }
+
+    public boolean allowNextLaunch(String bridgeToken, String packageName) {
+        if (packageName == null || packageName.isEmpty()) {
+            return false;
+        }
+        return transactBoolean(
+                bridgeToken, RootVirtualDisplayBridge.TRANSACTION_ALLOW_NEXT_LAUNCH,
+                data -> data.writeString(packageName));
+    }
+
+    public boolean updateLaunchSource(String bridgeToken, int displayId,
+                                      String packageName, boolean enabled) {
+        return transactBoolean(
+                bridgeToken, RootVirtualDisplayBridge.TRANSACTION_UPDATE_LAUNCH_SOURCE,
+                data -> {
+                    data.writeInt(displayId);
+                    data.writeString(packageName);
+                    data.writeInt(enabled ? 1 : 0);
+                });
+    }
+
     public Integer getBridgeUid(String bridgeToken) {
         Parcel data = Parcel.obtain();
         Parcel reply = Parcel.obtain();
@@ -92,6 +132,7 @@ public final class RootVirtualDisplayBridgeClient {
 
     public void close() {
         service = null;
+        launchCallbackRegistered = false;
     }
 
     private boolean transactBoolean(String bridgeToken, int transaction,
@@ -158,6 +199,47 @@ public final class RootVirtualDisplayBridgeClient {
 
     private interface ParcelWriter {
         void write(Parcel data);
+    }
+
+    public interface CrossAppLaunchListener {
+        boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
+                                 Intent intent, String targetPackage);
+    }
+
+    private final class LaunchCallbackBinder extends Binder {
+        LaunchCallbackBinder() {
+            attachInterface(null, RootVirtualDisplayBridge.LAUNCH_CALLBACK_DESCRIPTOR);
+        }
+
+        @Override
+        protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
+                throws RemoteException {
+            if (code == INTERFACE_TRANSACTION) {
+                reply.writeString(RootVirtualDisplayBridge.LAUNCH_CALLBACK_DESCRIPTOR);
+                return true;
+            }
+            if (code != RootVirtualDisplayBridge.LAUNCH_CALLBACK_TRANSACTION) {
+                return super.onTransact(code, data, reply, flags);
+            }
+            data.enforceInterface(RootVirtualDisplayBridge.LAUNCH_CALLBACK_DESCRIPTOR);
+            int sourceDisplayId = data.readInt();
+            String sourcePackage = data.readString();
+            Intent intent = data.readInt() == 0
+                    ? null : Intent.CREATOR.createFromParcel(data);
+            String targetPackage = data.readString();
+            CrossAppLaunchListener listener = crossAppLaunchListener;
+            boolean accepted = false;
+            try {
+                accepted = listener != null && listener.onCrossAppLaunch(
+                        sourceDisplayId, sourcePackage, intent, targetPackage);
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Cross-app launch callback handler failed: "
+                        + e.getClass().getSimpleName());
+            }
+            reply.writeNoException();
+            reply.writeInt(accepted ? 1 : 0);
+            return true;
+        }
     }
 
     public static final class CreateResult {
