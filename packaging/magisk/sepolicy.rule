@@ -1,0 +1,4 @@
+allow magisk default_android_service service_manager add
+allow priv_app default_android_service service_manager find
+allow priv_app magisk binder { call transfer }
+allow magisk priv_app binder { call transfer }

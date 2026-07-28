@@ -34,7 +34,7 @@ public final class RootInputBridge {
     private static final int ARG_ALLOWED_UID = 0;
     private static final int ARG_BRIDGE_TOKEN = 1;
     private static final String SOCKET_NAME_PREFIX = "onestep_input_bridge_";
-    public static final String HELLO_RESPONSE_PREFIX = "onestep-input-bridge-v19";
+    public static final String HELLO_RESPONSE_PREFIX = "onestep-input-bridge-v20";
     private static final int ROOT_UID = 0;
     private static final int SHELL_UID = 2000;
     private static final int WINDOWING_MODE_PINNED = 2;
@@ -70,7 +70,7 @@ public final class RootInputBridge {
     private long pipDockLeaseUptime;
     private long lastFailureLogUptime;
 
-    private RootInputBridge(int allowedUid, String bridgeToken)
+    private RootInputBridge(int allowedUid, String bridgeToken, Context systemContext)
             throws ReflectiveOperationException {
         this.allowedUid = allowedUid;
         this.bridgeToken = bridgeToken;
@@ -101,7 +101,6 @@ public final class RootInputBridge {
             }
         }
         if (resolvedInputManager == null || resolvedInjectInputEventMethod == null) {
-            Context systemContext = createSystemContext();
             resolvedInputManager = systemContext.getSystemService(Context.INPUT_SERVICE);
             resolvedInjectInputEventMethod = resolvedInputManager == null ? null
                     : findInjectInputEventMethod(resolvedInputManager.getClass());
@@ -135,7 +134,12 @@ public final class RootInputBridge {
                 + " allowedUid=" + allowedUid
                 + " bridgeToken=" + bridgeToken);
         try {
-            new RootInputBridge(allowedUid, bridgeToken).serve();
+            disableHiddenApiChecks();
+            Context systemContext = createSystemContext();
+            RootInputBridge bridge = new RootInputBridge(
+                    allowedUid, bridgeToken, systemContext);
+            RootVirtualDisplayBridge.publish(systemContext, allowedUid, bridgeToken);
+            bridge.serve();
         } catch (Throwable throwable) {
             Log.e(TAG, "bridge crashed", throwable);
         }

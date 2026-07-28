@@ -29,6 +29,7 @@ cp "$ROOT_DIR/packaging/magisk/update-binary" \
 cp "$ROOT_DIR/packaging/magisk/updater-script" \
     "$WORK_DIR/META-INF/com/google/android/updater-script"
 cp "$ROOT_DIR/packaging/magisk/customize.sh" "$WORK_DIR/customize.sh"
+cp "$ROOT_DIR/packaging/magisk/sepolicy.rule" "$WORK_DIR/sepolicy.rule"
 cp "$APK_PATH" "$WORK_DIR/system/priv-app/OneStep4/OneStep4.apk"
 cp "$ROOT_DIR/packaging/root/privapp-permissions-com.sangluo.onestep.xml" \
     "$WORK_DIR/system/etc/permissions/privapp-permissions-onestep.xml"
@@ -41,6 +42,7 @@ awk -v version="$APP_VERSION_NAME" -v version_code="$APP_VERSION_CODE" '
 chmod 0755 "$WORK_DIR/META-INF/com/google/android/update-binary"
 chmod 0644 "$WORK_DIR/META-INF/com/google/android/updater-script"
 chmod 0755 "$WORK_DIR/customize.sh"
+chmod 0644 "$WORK_DIR/sepolicy.rule"
 chmod 0644 "$WORK_DIR/system/priv-app/OneStep4/OneStep4.apk"
 chmod 0644 "$WORK_DIR/system/etc/permissions/privapp-permissions-onestep.xml"
 chmod 0644 "$WORK_DIR/module.prop"
