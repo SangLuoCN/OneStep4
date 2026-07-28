@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$ROOT_DIR/dist"
-WORK_DIR="$(mktemp -d "$ROOT_DIR/build/magisk-privapp.XXXXXX")"
+WORK_DIR="$(mktemp -d "$ROOT_DIR/build/ksu-privapp.XXXXXX")"
 APK_PATH="$ROOT_DIR/app/build/outputs/apk/debug/app-debug.apk"
 APP_GRADLE="$ROOT_DIR/app/build.gradle.kts"
 APP_VERSION_NAME="$(awk -F'"' '/^[[:space:]]*versionName[[:space:]]*=/ { print $2; exit }' "$APP_GRADLE")"
@@ -45,41 +45,33 @@ if [[ ! -f "$APK_PATH" ]]; then
 fi
 
 APK_SHA256="$(sha256_file "$APK_PATH")"
-OUT_ZIP="$OUT_DIR/OneStep4-$APP_VERSION_NAME-magisk-$(date +%Y%m%d-%H%M%S).zip"
+OUT_ZIP="$OUT_DIR/OneStep4-$APP_VERSION_NAME-ksu-$(date +%Y%m%d-%H%M%S).zip"
 
-mkdir -p "$WORK_DIR/META-INF/com/google/android"
 mkdir -p "$WORK_DIR/system/priv-app/$SYSTEM_APP_DIR"
 mkdir -p "$WORK_DIR/system/etc/permissions"
 
-cp "$ROOT_DIR/packaging/magisk/update-binary" \
-    "$WORK_DIR/META-INF/com/google/android/update-binary"
-cp "$ROOT_DIR/packaging/magisk/updater-script" \
-    "$WORK_DIR/META-INF/com/google/android/updater-script"
-cp "$ROOT_DIR/packaging/magisk/customize.sh" "$WORK_DIR/customize.sh"
-cp "$ROOT_DIR/packaging/magisk/service.sh" "$WORK_DIR/service.sh"
-cp "$ROOT_DIR/packaging/magisk/sepolicy.rule" "$WORK_DIR/sepolicy.rule"
-cp "$APK_PATH" "$WORK_DIR/system/priv-app/$SYSTEM_APP_DIR/OneStep4.apk"
-
-COPIED_APK_SHA256="$(sha256_file "$WORK_DIR/$APK_ENTRY")"
-if [[ "$COPIED_APK_SHA256" != "$APK_SHA256" ]]; then
-    echo "复制到 Magisk 工作目录的 APK 校验失败" >&2
-    exit 1
-fi
-
+cp "$ROOT_DIR/packaging/ksu/customize.sh" "$WORK_DIR/customize.sh"
+cp "$ROOT_DIR/packaging/magisk/service.sh" "$WORK_DIR/boot-completed.sh"
+cp "$ROOT_DIR/packaging/ksu/sepolicy.rule" "$WORK_DIR/sepolicy.rule"
+cp "$APK_PATH" "$WORK_DIR/$APK_ENTRY"
 cp "$ROOT_DIR/packaging/root/privapp-permissions-com.sangluo.onestep.xml" \
     "$WORK_DIR/system/etc/permissions/privapp-permissions-onestep.xml"
 awk -v version="$APP_VERSION_NAME" -v version_code="$APP_VERSION_CODE" '
     /^version=/ { print "version=" version; next }
     /^versionCode=/ { print "versionCode=" version_code; next }
     { print }
-' "$ROOT_DIR/packaging/magisk/module.prop" > "$WORK_DIR/module.prop"
+' "$ROOT_DIR/packaging/ksu/module.prop" > "$WORK_DIR/module.prop"
 
-chmod 0755 "$WORK_DIR/META-INF/com/google/android/update-binary"
-chmod 0644 "$WORK_DIR/META-INF/com/google/android/updater-script"
+COPIED_APK_SHA256="$(sha256_file "$WORK_DIR/$APK_ENTRY")"
+if [[ "$COPIED_APK_SHA256" != "$APK_SHA256" ]]; then
+    echo "复制到 KernelSU 工作目录的 APK 校验失败" >&2
+    exit 1
+fi
+
 chmod 0755 "$WORK_DIR/customize.sh"
-chmod 0755 "$WORK_DIR/service.sh"
+chmod 0755 "$WORK_DIR/boot-completed.sh"
 chmod 0644 "$WORK_DIR/sepolicy.rule"
-chmod 0644 "$WORK_DIR/system/priv-app/$SYSTEM_APP_DIR/OneStep4.apk"
+chmod 0644 "$WORK_DIR/$APK_ENTRY"
 chmod 0644 "$WORK_DIR/system/etc/permissions/privapp-permissions-onestep.xml"
 chmod 0644 "$WORK_DIR/module.prop"
 
@@ -93,7 +85,7 @@ mkdir -p "$VERIFY_DIR"
 unzip -qq "$OUT_ZIP" "$APK_ENTRY" -d "$VERIFY_DIR"
 PACKAGED_APK_SHA256="$(sha256_file "$VERIFY_DIR/$APK_ENTRY")"
 if [[ "$PACKAGED_APK_SHA256" != "$APK_SHA256" ]]; then
-    echo "Magisk ZIP 内 APK 与最新构建 APK 不一致" >&2
+    echo "KernelSU ZIP 内 APK 与最新构建 APK 不一致" >&2
     exit 1
 fi
 

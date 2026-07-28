@@ -498,6 +498,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     @Override
+    public boolean canStartBeforeLayout() {
+        return true;
+    }
+
+    @Override
     public boolean start(LauncherApp app) {
         if (!isAvailable() || embeddedSlotClosing[slot]) {
             return false;

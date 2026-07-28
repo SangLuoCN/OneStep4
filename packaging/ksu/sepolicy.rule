@@ -1,0 +1,4 @@
+allow ksu default_android_service service_manager add
+allow priv_app default_android_service service_manager find
+allow priv_app ksu binder { call transfer }
+allow ksu priv_app binder { call transfer }

@@ -87,6 +87,7 @@ public final class SettingsPanelController {
         void saveMediaPlayerVisible(boolean visible);
         void saveVerticalWindowLayout(boolean enabled);
         void saveSideWindowCount(int count);
+        void exportSessionLog();
     }
 
     private static final String BILIBILI_PROFILE_URL = "https://space.bilibili.com/1037274194";
@@ -322,6 +323,13 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
         legalNoticesLp.topMargin = dp(12);
         list.addView(legalNoticesItem, legalNoticesLp);
+
+        LinearLayout exportLogItem = createSettingsItem("导出日志", "导出");
+        exportLogItem.setOnClickListener(v -> callbacks.exportSessionLog());
+        LinearLayout.LayoutParams exportLogLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
+        exportLogLp.topMargin = dp(12);
+        list.addView(exportLogItem, exportLogLp);
 
         LinearLayout footer = new LinearLayout(activity);
         footer.setOrientation(LinearLayout.VERTICAL);

@@ -1,6 +1,7 @@
 package com.sangluo.onestep;
 
 import android.annotation.SuppressLint;
+import android.Manifest;
 import android.app.Activity;
 import android.app.ActivityOptions;
 import android.app.WallpaperManager;
@@ -53,6 +54,7 @@ import com.sangluo.onestep.feature.embedding.EmbeddedAppHost;
 import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
+import com.sangluo.onestep.feature.logging.SessionLogRecorder;
 import com.sangluo.onestep.model.LauncherApp;
 import com.sangluo.onestep.model.PinnedTaskState;
 import com.sangluo.onestep.system.root.PersistentRootShell;
@@ -119,6 +121,7 @@ public class MainActivity extends Activity {
             new WeakReference<>(null);
     private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 1;
     private static final int REQUEST_PICK_BACKGROUND = 42;
+    private static final int REQUEST_EXPORT_LOG_STORAGE = 43;
     private static final int TOP_MEDIA_AREA_MIN_HEIGHT_DP = 116;
     private static final int TOP_MEDIA_PLAYER_HEIGHT_DP = 76;
     private static final long PIP_MONITOR_INTERVAL_MS = 450L;
@@ -126,8 +129,8 @@ public class MainActivity extends Activity {
     private static final long SUPERSEDED_DISPLAY_RELEASE_GRACE_MS = 5000L;
     private static final int TOP_BAR_HEIGHT_DEFAULT_DP = 74;
     private static final int MEDIA_ROOT_COMMAND_TIMEOUT_SECONDS = 8;
-    private static final int EMBEDDED_START_RETRY_MS = 16;
-    private static final int EMBEDDED_START_MAX_RETRIES = 8;
+    private static final int EMBEDDED_START_RETRY_MS = 25;
+    private static final int EMBEDDED_START_MAX_RETRIES = 120;
     private static final int WINDOW_FRAME_SWITCH_ANIMATION_MS = 200;
     private static final long WINDOW_SWITCH_IDLE_WARMUP_THRESHOLD_MS = 3000L;
     private static final int SIDE_DISMISS_DISTANCE_DP = 48;
@@ -436,6 +439,7 @@ public class MainActivity extends Activity {
     private int oneStepTriggerAreaScalePct = ONE_STEP_TRIGGER_AREA_SCALE_DEFAULT;
     private int cornerTriggerSensitivityPct = CORNER_TRIGGER_SENSITIVITY_DEFAULT;
     private SystemUiController systemUiController;
+    private SessionLogRecorder sessionLogRecorder;
     private SettingsPanelController settingsPanelController;
     private TopPanelController topPanelController;
     private android.window.OnBackInvokedCallback systemBackCallback;
@@ -467,6 +471,8 @@ public class MainActivity extends Activity {
             redirectHomeToDefaultDisplay();
             return;
         }
+        sessionLogRecorder = new SessionLogRecorder(getApplicationContext());
+        sessionLogRecorder.start();
         defaultDisplayInstance = new WeakReference<>(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         Window hostWindow = getWindow();
@@ -791,6 +797,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
+        if (sessionLogRecorder != null) {
+            sessionLogRecorder.close();
+            sessionLogRecorder = null;
+        }
         MainActivity replacementActivity = defaultDisplayInstance.get();
         boolean supersededOnDefaultDisplay = replacementActivity != null
                 && replacementActivity != this
@@ -884,6 +894,50 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQUEST_PICK_BACKGROUND && resultCode == RESULT_OK && data != null) {
             saveSelectedBackground(data.getData(), data.getFlags());
+        }
+    }
+
+    private void exportSessionLog() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                    REQUEST_EXPORT_LOG_STORAGE);
+            return;
+        }
+        performSessionLogExport();
+    }
+
+    private void performSessionLogExport() {
+        SessionLogRecorder recorder = sessionLogRecorder;
+        if (recorder == null) {
+            Toast.makeText(this, "日志记录器未启动", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        boolean accepted = recorder.export(result -> mainHandler.post(() -> {
+            if (activityDestroyed) {
+                return;
+            }
+            String message = result.isSuccessful()
+                    ? "日志已导出：Download/" + result.getFileName()
+                    : "日志导出失败：" + result.getErrorMessage();
+            Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+        }));
+        Toast.makeText(this, accepted ? "正在导出日志…" : "日志正在导出",
+                Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_EXPORT_LOG_STORAGE) {
+            return;
+        }
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            performSessionLogExport();
+        } else {
+            Toast.makeText(this, "未获得存储权限，无法导出日志", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1957,6 +2011,9 @@ public class MainActivity extends Activity {
             }
             @Override public void saveSideWindowCount(int count) {
                 MainActivity.this.saveSideWindowCount(count);
+            }
+            @Override public void exportSessionLog() {
+                MainActivity.this.exportSessionLog();
             }
         });
     }
@@ -4124,7 +4181,8 @@ public class MainActivity extends Activity {
                 && hostView != null
                 && hostView.getWidth() > 0
                 && hostView.getHeight() > 0;
-        if (!ready && retriesLeft > 0) {
+        boolean canStartBeforeLayout = host.canStartBeforeLayout();
+        if (!ready && !canStartBeforeLayout && retriesLeft > 0) {
             windowView.postDelayed(() -> startEmbeddedSlotWhenReady(slot, generation,
                     startEpoch, expectedApp, retriesLeft - 1), EMBEDDED_START_RETRY_MS);
             return;
@@ -4143,7 +4201,7 @@ public class MainActivity extends Activity {
                 + " host=" + hostSize
                 + " type=" + host.getClass().getSimpleName());
 
-        boolean live = ready && host.start(currentApp);
+        boolean live = (ready || canStartBeforeLayout) && host.start(currentApp);
         windowView.setLiveAppVisible(live
                 && !isMainAppReplacementRevealPending(slot, currentApp.packageName));
         if (!live) {

@@ -2,6 +2,18 @@
 
 PACKAGE_NAME="com.sangluo.onestep"
 VIRTUAL_DISPLAY_ROLE="android.app.role.COMPANION_DEVICE_APP_STREAMING"
+MODULE_VERSION_CODE="$(sed -n 's/^versionCode=//p' "$MODPATH/module.prop" | head -n 1)"
+APK_PATH="$MODPATH/system/priv-app/OneStep4_v${MODULE_VERSION_CODE}/OneStep4.apk"
+
+if [ -f "$APK_PATH" ]; then
+  touch "$APK_PATH"
+  touch "${APK_PATH%/*}"
+  set_perm "$APK_PATH" 0 0 0644
+fi
+
+if [ -f "$MODPATH/service.sh" ]; then
+  set_perm "$MODPATH/service.sh" 0 0 0755
+fi
 
 if pm path "$PACKAGE_NAME" >/dev/null 2>&1; then
   if cmd role get-role-holders --user 0 "$VIRTUAL_DISPLAY_ROLE" 2>/dev/null \

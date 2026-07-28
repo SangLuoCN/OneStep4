@@ -10,6 +10,10 @@ public interface EmbeddedAppHost {
 
     View getView();
 
+    default boolean canStartBeforeLayout() {
+        return false;
+    }
+
     boolean start(LauncherApp app);
 
     void refreshContainerSize();
