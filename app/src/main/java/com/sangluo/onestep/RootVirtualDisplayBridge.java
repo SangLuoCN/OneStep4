@@ -43,8 +43,6 @@ public final class RootVirtualDisplayBridge extends Binder {
             IBinder.FIRST_CALL_TRANSACTION + 7;
 
     private static final int ROOT_UID = 0;
-    private static final int VIRTUAL_DISPLAY_FLAG_SUPPORTS_PROTECTED_BUFFERS = 1 << 5;
-    private static final int VIRTUAL_DISPLAY_FLAG_TRUSTED = 1 << 10;
     private static final long LAUNCH_BYPASS_TIMEOUT_MS = 3000L;
     private static final long ROUTING_INPUT_ARM_TIMEOUT_MS = 5000L;
     private static volatile RootVirtualDisplayBridge publishedBridge;
@@ -179,15 +177,7 @@ public final class RootVirtualDisplayBridge extends Binder {
             releaseLocked(slot);
             if (surface != null && surface.isValid() && requestedCandidates != null) {
                 for (int requestedFlags : requestedCandidates) {
-                    // Android rejects PUBLIC + SECURE. Root-owned private displays are made
-                    // accessible by launchDisplayAccessActivity() after creation.
-                    if ((requestedFlags & DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC) != 0) {
-                        continue;
-                    }
-                    int secureFlags = requestedFlags
-                            | DisplayManager.VIRTUAL_DISPLAY_FLAG_SECURE
-                            | VIRTUAL_DISPLAY_FLAG_SUPPORTS_PROTECTED_BUFFERS
-                            | VIRTUAL_DISPLAY_FLAG_TRUSTED;
+                    int secureFlags = SecureVirtualDisplayFlags.forRootBridge(requestedFlags);
                     VirtualDisplay candidate = null;
                     try {
                         candidate = displayManager.createVirtualDisplay(
