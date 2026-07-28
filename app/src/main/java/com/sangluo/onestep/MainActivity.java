@@ -68,6 +68,7 @@ import com.sangluo.onestep.ui.widget.FixedViewportFrameLayout;
 import com.sangluo.onestep.ui.widget.PagingHorizontalScrollView;
 import com.sangluo.onestep.ui.window.AppLaunchPlacement;
 import com.sangluo.onestep.ui.window.OneStepWindowView;
+import com.sangluo.onestep.ui.window.SideWindowInputShieldController;
 import com.sangluo.onestep.ui.window.WindowAnimationController;
 import com.sangluo.onestep.ui.window.WindowLayoutCalculator;
 
@@ -199,6 +200,8 @@ public class MainActivity extends Activity {
     private final Object rootInputBridgeStartLock = new Object();
     private final Runnable refreshAllEmbeddedSlotLayoutsRunnable =
             this::refreshAllEmbeddedSlotLayouts;
+    private final Runnable syncSideInputProtectionRunnable =
+            this::syncSideInputProtection;
     private final Runnable cornerTriggerPreviewHideRunnable = this::hideCornerTriggerPreview;
     private final Runnable drainCrossAppRoutesRunnable = this::drainCrossAppRoutes;
     private final OneStepWindowView.Callbacks windowViewCallbacks =
@@ -442,6 +445,7 @@ public class MainActivity extends Activity {
     private SessionLogRecorder sessionLogRecorder;
     private SettingsPanelController settingsPanelController;
     private TopPanelController topPanelController;
+    private SideWindowInputShieldController sideInputShieldController;
     private android.window.OnBackInvokedCallback systemBackCallback;
     private boolean pipMonitoringActive;
     private boolean pipQueryInFlight;
@@ -493,6 +497,18 @@ public class MainActivity extends Activity {
         launcherAppRepository = new LauncherAppRepository(this);
         launcherApps = launcherAppRepository.loadLauncherApps();
         setContentView(createDesktop());
+        sideInputShieldController = new SideWindowInputShieldController(
+                this, MAX_WINDOWS, new SideWindowInputShieldController.Callbacks() {
+            @Override
+            public boolean shouldShieldSlot(int slot) {
+                return shouldShieldSideInput(slot);
+            }
+
+            @Override
+            public OneStepWindowView windowView(int slot) {
+                return slot >= 0 && slot < MAX_WINDOWS ? windowViews[slot] : null;
+            }
+        });
         // setContentView installs the decor and may refresh its default pixel format.
         // Keep the HOME task opaque so a system HOME transition cannot expose wallpaper.
         hostWindow.setFormat(PixelFormat.OPAQUE);
@@ -533,6 +549,7 @@ public class MainActivity extends Activity {
         hostedDisplayRotationController.enable();
         resumeMediaMonitoring();
         startPipMonitoring();
+        scheduleSideInputProtectionSync();
     }
 
     @Override
@@ -595,6 +612,7 @@ public class MainActivity extends Activity {
         hostedDisplayRotationController.clearLatestRotation();
         pauseMediaMonitoring();
         stopPipMonitoring(true);
+        suspendWindowInputRouting();
         super.onStop();
     }
 
@@ -603,6 +621,7 @@ public class MainActivity extends Activity {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
             applyStatusBarForCurrentMode();
+            scheduleSideInputProtectionSync();
         }
     }
 
@@ -832,6 +851,11 @@ public class MainActivity extends Activity {
         mainHandler.removeCallbacks(showDesktopHomeRunnable);
         mainHandler.removeCallbacks(pipMonitorRunnable);
         mainHandler.removeCallbacks(pipDockBoundsUpdateRunnable);
+        mainHandler.removeCallbacks(syncSideInputProtectionRunnable);
+        if (sideInputShieldController != null) {
+            sideInputShieldController.release();
+            sideInputShieldController = null;
+        }
         windowSwitchAnimationCritical = false;
         deferredWindowSwitchUiWork = 0;
         pendingCrossAppRoutes.clear();
@@ -1063,6 +1087,7 @@ public class MainActivity extends Activity {
         }
 
         Rect[] targetRects = calculateWindowRects();
+        suspendWindowInputRouting();
         updateScreenContainerBackground();
         ensureWindowChildren();
 
@@ -1073,6 +1098,7 @@ public class MainActivity extends Activity {
         }
 
         Runnable layoutFinished = () -> {
+            restoreWindowInputRoutingAfterLayout();
             configureDesktopHomeViewport(windowViews[activeMainSlot]);
             if (onAnimationFinished != null) {
                 onAnimationFinished.run();
@@ -4258,6 +4284,65 @@ public class MainActivity extends Activity {
                     : backgroundAppPackages.contains(packageName)
                     ? AppShortcutView.AppStatus.BACKGROUND
                     : AppShortcutView.AppStatus.NONE);
+        }
+        scheduleSideInputProtectionSync();
+    }
+
+    private boolean shouldShieldSideInput(int slot) {
+        return activityResumed && !activityDestroyed
+                && slot >= 0 && slot < MAX_WINDOWS
+                && slot != activeMainSlot
+                && isWindowSlotEnabled(slot)
+                && !embeddedSlotClosing[slot]
+                && (windowApps[slot] != null
+                || isInternalSettingsSlot(slot)
+                || isDesktopHomeSlot(slot));
+    }
+
+    private void suspendWindowInputRouting() {
+        mainHandler.removeCallbacks(syncSideInputProtectionRunnable);
+        if (sideInputShieldController != null) {
+            sideInputShieldController.hideAll();
+        }
+        for (EmbeddedAppHost host : embeddedHosts) {
+            if (host instanceof RootVirtualDisplayHost) {
+                ((RootVirtualDisplayHost) host).setDisplayMirrorInputBlocked(true);
+            }
+        }
+    }
+
+    private void restoreWindowInputRoutingAfterLayout() {
+        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
+            EmbeddedAppHost host = embeddedHosts[slot];
+            if (host instanceof RootVirtualDisplayHost) {
+                ((RootVirtualDisplayHost) host).setDisplayMirrorInputBlocked(
+                        slot != activeMainSlot);
+            }
+        }
+        scheduleSideInputProtectionSync();
+    }
+
+    private void scheduleSideInputProtectionSync() {
+        if (workspace == null || activityDestroyed) {
+            return;
+        }
+        mainHandler.removeCallbacks(syncSideInputProtectionRunnable);
+        workspace.postOnAnimation(syncSideInputProtectionRunnable);
+    }
+
+    private void syncSideInputProtection() {
+        if (activityDestroyed || isWindowAnimationRunning()) {
+            return;
+        }
+        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
+            EmbeddedAppHost host = embeddedHosts[slot];
+            if (host instanceof RootVirtualDisplayHost) {
+                ((RootVirtualDisplayHost) host).setDisplayMirrorInputBlocked(
+                        slot != activeMainSlot);
+            }
+        }
+        if (sideInputShieldController != null) {
+            sideInputShieldController.update();
         }
     }
 

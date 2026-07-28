@@ -44,8 +44,8 @@ android {
         applicationId = "com.sangluo.onestep"
         minSdk = 24
         targetSdk = 36
-        versionCode = 5
-        versionName = "1.0.0"
+        versionCode = 7
+        versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

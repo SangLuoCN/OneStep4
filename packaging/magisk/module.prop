@@ -1,6 +1,6 @@
 id=onestep40_privapp
 name=OneStep4
-version=1.0.0
-versionCode=5
+version=1.0.2
+versionCode=7
 author=sangluo
 description=将 OneStep4 安装为系统特权应用，提供主屏与侧边小窗应用容器、可信虚拟显示、应用切换及输入交互所需的系统权限。

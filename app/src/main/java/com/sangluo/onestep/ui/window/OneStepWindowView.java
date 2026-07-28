@@ -141,7 +141,9 @@ public final class OneStepWindowView extends FrameLayout {
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent event) {
-        if (!mainWindow && slot >= 0 && callbacks.canDismissSlot(slot)) {
+        // Side windows are previews, never interactive app surfaces. Consume the complete
+        // gesture here so no event can reach the embedded SurfaceView during state changes.
+        if (!mainWindow && slot >= 0) {
             return handleSideWindowTouch(event);
         }
         return super.dispatchTouchEvent(event);

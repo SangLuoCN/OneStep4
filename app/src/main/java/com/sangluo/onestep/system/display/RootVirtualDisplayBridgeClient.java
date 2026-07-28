@@ -2,11 +2,15 @@ package com.sangluo.onestep.system.display;
 
 import android.content.Intent;
 import android.os.Binder;
+import android.os.Build;
 import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.util.Log;
 import android.view.Surface;
+import android.view.SurfaceControl;
+
+import androidx.annotation.RequiresApi;
 
 import com.sangluo.onestep.RootVirtualDisplayBridge;
 
@@ -74,6 +78,61 @@ public final class RootVirtualDisplayBridgeClient {
     public boolean release(String bridgeToken, int slot) {
         return transactBoolean(bridgeToken, RootVirtualDisplayBridge.TRANSACTION_RELEASE,
                 data -> data.writeInt(slot));
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    public MirrorResult createDisplayMirror(String bridgeToken, int slot, int displayId) {
+        Parcel data = Parcel.obtain();
+        Parcel reply = Parcel.obtain();
+        try {
+            IBinder target = requireService();
+            writeHeader(data, bridgeToken);
+            data.writeInt(slot);
+            data.writeInt(displayId);
+            target.transact(RootVirtualDisplayBridge.TRANSACTION_CREATE_DISPLAY_MIRROR,
+                    data, reply, 0);
+            reply.readException();
+            SurfaceControl mirror = reply.readInt() == 0
+                    ? null : SurfaceControl.CREATOR.createFromParcel(reply);
+            return new MirrorResult(mirror, reply.readString());
+        } catch (RemoteException | RuntimeException e) {
+            service = null;
+            Log.w(TAG, "Root display mirror create failed: " + describe(e));
+            return new MirrorResult(null, describe(e));
+        } finally {
+            reply.recycle();
+            data.recycle();
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    public boolean setSkipScreenshot(String bridgeToken, SurfaceControl surfaceControl,
+                                     boolean skipScreenshot) {
+        if (surfaceControl == null || !surfaceControl.isValid()) {
+            return false;
+        }
+        return transactBoolean(
+                bridgeToken, RootVirtualDisplayBridge.TRANSACTION_SET_SKIP_SCREENSHOT,
+                data -> {
+                    data.writeInt(1);
+                    surfaceControl.writeToParcel(data, 0);
+                    data.writeInt(skipScreenshot ? 1 : 0);
+                });
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    public boolean setDropInputMode(String bridgeToken, SurfaceControl surfaceControl,
+                                    boolean dropInput) {
+        if (surfaceControl == null || !surfaceControl.isValid()) {
+            return false;
+        }
+        return transactBoolean(
+                bridgeToken, RootVirtualDisplayBridge.TRANSACTION_SET_DROP_INPUT_MODE,
+                data -> {
+                    data.writeInt(1);
+                    surfaceControl.writeToParcel(data, 0);
+                    data.writeInt(dropInput ? 1 : 0);
+                });
     }
 
     public boolean registerCrossAppLaunchCallback(String bridgeToken,
@@ -255,6 +314,21 @@ public final class RootVirtualDisplayBridgeClient {
 
         public boolean isSuccess() {
             return displayId > 0;
+        }
+    }
+
+    public static final class MirrorResult {
+        public final SurfaceControl surfaceControl;
+        public final String failure;
+
+        MirrorResult(SurfaceControl surfaceControl, String failure) {
+            this.surfaceControl = surfaceControl;
+            this.failure = failure == null ? "" : failure;
+        }
+
+        @RequiresApi(Build.VERSION_CODES.Q)
+        public boolean isSuccess() {
+            return surfaceControl != null && surfaceControl.isValid();
         }
     }
 }

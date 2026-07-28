@@ -1,6 +1,6 @@
 id=onestep4_ksu_privapp
 name=OneStep4 (KernelSU)
-version=1.0.0
-versionCode=5
+version=1.0.2
+versionCode=7
 author=sangluo
 description=KernelSU 系统特权应用模块；KernelSU 3.x 需要先安装并启用 meta-overlayfs 或其他兼容 metamodule。

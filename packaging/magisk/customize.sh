@@ -2,8 +2,11 @@
 
 PACKAGE_NAME="com.sangluo.onestep"
 VIRTUAL_DISPLAY_ROLE="android.app.role.COMPANION_DEVICE_APP_STREAMING"
-MODULE_VERSION_CODE="$(sed -n 's/^versionCode=//p' "$MODPATH/module.prop" | head -n 1)"
-APK_PATH="$MODPATH/system/priv-app/OneStep4_v${MODULE_VERSION_CODE}/OneStep4.apk"
+REPLACE="
+/system/priv-app/OneStep4_v5
+/system/priv-app/OneStep4_v6
+"
+APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
 
 if [ -f "$APK_PATH" ]; then
   touch "$APK_PATH"

@@ -28,7 +28,7 @@ if [[ -z "$APP_VERSION_NAME" || ! "$APP_VERSION_CODE" =~ ^[0-9]+$ ]]; then
     exit 1
 fi
 
-SYSTEM_APP_DIR="OneStep4_v$APP_VERSION_CODE"
+SYSTEM_APP_DIR="OneStep4"
 APK_ENTRY="system/priv-app/$SYSTEM_APP_DIR/OneStep4.apk"
 
 mkdir -p "$OUT_DIR"
