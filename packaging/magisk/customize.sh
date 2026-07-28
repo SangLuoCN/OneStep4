@@ -8,6 +8,11 @@ REPLACE="
 "
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
 
+ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"
+if ! echo "$ZYGISK_STATE" | grep -q "value=1"; then
+  ui_print "! 请在 Magisk 设置中启用 Zygisk，否则 FLAG_SECURE 页面仍会显示黑屏"
+fi
+
 if [ -f "$APK_PATH" ]; then
   touch "$APK_PATH"
   touch "${APK_PATH%/*}"

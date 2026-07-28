@@ -11,7 +11,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 
-/** Places touch-only application sub-windows above mirrored side-window input clones. */
+/** Places touch-only application sub-windows above side-window content. */
 public final class SideWindowInputShieldController {
     public interface Callbacks {
         boolean shouldShieldSlot(int slot);

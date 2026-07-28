@@ -19,12 +19,10 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.graphics.PixelFormat;
-import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
@@ -249,17 +247,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private final EmbeddedStartEpochStore embeddedStartEpochStore;
     private final Object rootInputBridgeStartLock;
     private final FrameLayout hostView;
-    private final SurfaceView mirrorSurfaceView;
     private final SurfaceView surfaceView;
     private SurfaceControl windowAnimationLeash;
     private SurfaceControl windowAnimationSurface;
-    private SurfaceControl windowAnimationMirrorSurface;
-    private SurfaceControl displayMirror;
-    private int displayMirrorSourceId = -1;
-    private SurfaceControl skipScreenshotSurface;
-    private SurfaceControl dropInputModeSurface;
-    private boolean displayMirrorInputBlocked;
-    private boolean appliedDisplayMirrorInputBlocked;
     private final ExecutorService rootExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService inputDispatchExecutor =
             Executors.newSingleThreadExecutor();
@@ -350,34 +340,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         displayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
         hostView = new FrameLayout(context);
         hostView.setClipChildren(true);
-        mirrorSurfaceView = new SurfaceView(context);
-        mirrorSurfaceView.setFocusable(false);
-        mirrorSurfaceView.setFocusableInTouchMode(false);
-        mirrorSurfaceView.getHolder().setFormat(PixelFormat.OPAQUE);
-        mirrorSurfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
-            @Override
-            public void surfaceCreated(SurfaceHolder holder) {
-                drawMirrorCaptureBackdrop(holder);
-                mirrorSurfaceView.post(RootVirtualDisplayHost.this::ensureDisplayMirror);
-            }
-
-            @Override
-            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-                drawMirrorCaptureBackdrop(holder);
-                attachDisplayMirror();
-            }
-
-            @Override
-            public void surfaceDestroyed(SurfaceHolder holder) {
-                detachDisplayMirror();
-                releaseStaleWindowAnimationLeash();
-            }
-        });
         surfaceView = new SurfaceView(context);
-        surfaceView.setSecure(true);
-        // The secure framebuffer is the visible layer. During capture SurfaceFlinger omits it,
-        // revealing the display mirror below, where each app window keeps its own secure flag.
-        surfaceView.setZOrderMediaOverlay(true);
         // Touch is injected into the hosted display directly.  The host SurfaceView must not
         // become the default-display IME target when the remote app focuses an editor.
         surfaceView.setFocusable(false);
@@ -390,9 +353,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         surfaceView.getHolder().addCallback(this);
         FrameLayout.LayoutParams matchParent = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        hostView.addView(mirrorSurfaceView, matchParent);
-        hostView.addView(surfaceView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        hostView.addView(surfaceView, matchParent);
         rootAvailable = hasSuCommand();
         systemLaunchAvailable = hasGrantedSystemEmbeddingPermission() || isSystemAppInstall();
         recoverStaleSensorServiceUidOverridesAsync();
@@ -426,21 +387,17 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     public boolean ensureWindowAnimationLeash() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
-                || !surfaceView.isAttachedToWindow()
-                || !mirrorSurfaceView.isAttachedToWindow()) {
+                || !surfaceView.isAttachedToWindow()) {
             return false;
         }
         SurfaceControl surfaceControl = surfaceView.getSurfaceControl();
-        SurfaceControl mirrorSurfaceControl = mirrorSurfaceView.getSurfaceControl();
         AttachedSurfaceControl rootSurfaceControl = surfaceView.getRootSurfaceControl();
         if (surfaceControl == null || !surfaceControl.isValid()
-                || mirrorSurfaceControl == null || !mirrorSurfaceControl.isValid()
                 || rootSurfaceControl == null) {
             return false;
         }
         if (windowAnimationLeash != null && windowAnimationLeash.isValid()
-                && windowAnimationSurface == surfaceControl
-                && windowAnimationMirrorSurface == mirrorSurfaceControl) {
+                && windowAnimationSurface == surfaceControl) {
             return true;
         }
         releaseStaleWindowAnimationLeash();
@@ -456,17 +413,14 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 leash.release();
                 return false;
             }
-            transaction.reparent(mirrorSurfaceControl, leash)
-                    .setLayer(mirrorSurfaceControl, 0)
-                    .reparent(surfaceControl, leash)
-                    .setLayer(surfaceControl, 1)
+            transaction.reparent(surfaceControl, leash)
+                    .setLayer(surfaceControl, 0)
                     .setLayer(leash, WINDOW_SURFACE_RESTING_LAYER_BASE - slot)
                     .setVisibility(leash, true)
                     .apply();
             transaction.close();
             windowAnimationLeash = leash;
             windowAnimationSurface = surfaceControl;
-            windowAnimationMirrorSurface = mirrorSurfaceControl;
             return true;
         } catch (RuntimeException e) {
             if (leash != null) {
@@ -483,8 +437,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         transaction.setPosition(windowAnimationLeash, 0f, 0f)
                 .setScale(windowAnimationLeash, 1f, 1f)
                 .setLayer(windowAnimationLeash, layer)
-                .setLayer(windowAnimationMirrorSurface, 0)
-                .setLayer(windowAnimationSurface, 1)
+                .setLayer(windowAnimationSurface, 0)
                 .setVisibility(windowAnimationLeash, true);
     }
 
@@ -512,10 +465,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
         SurfaceControl leash = windowAnimationLeash;
         SurfaceControl surfaceControl = windowAnimationSurface;
-        SurfaceControl mirrorSurfaceControl = windowAnimationMirrorSurface;
         windowAnimationLeash = null;
         windowAnimationSurface = null;
-        windowAnimationMirrorSurface = null;
         if (leash == null) {
             return;
         }
@@ -525,16 +476,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     && surfaceControl.isValid() && rootSurfaceControl != null
                     ? rootSurfaceControl.buildReparentTransaction(surfaceControl) : null;
             if (transaction != null) {
-                if (mirrorSurfaceControl != null && mirrorSurfaceControl.isValid()) {
-                    SurfaceControl.Transaction mirrorTransaction =
-                            rootSurfaceControl.buildReparentTransaction(mirrorSurfaceControl);
-                    if (mirrorTransaction != null) {
-                        transaction.merge(mirrorTransaction);
-                        mirrorTransaction.close();
-                        transaction.setLayer(mirrorSurfaceControl,
-                                WINDOW_SURFACE_RESTING_LAYER_BASE - slot - 1);
-                    }
-                }
                 transaction.setLayer(surfaceControl,
                                 WINDOW_SURFACE_RESTING_LAYER_BASE - slot)
                         .reparent(leash, null)
@@ -1060,7 +1001,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             displayWidth = spec.width;
             displayHeight = spec.height;
             displayDensityDpi = spec.densityDpi;
-            attachDisplayMirror();
             return;
         } catch (RuntimeException e) {
             Log.w(TAG, "Resize virtual display failed for slot " + slot + ": "
@@ -1194,10 +1134,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        surfaceView.post(() -> {
-            ensureDisplayMirror();
-            ensureWindowAnimationLeash();
-        });
+        surfaceView.post(this::ensureWindowAnimationLeash);
     }
 
     @Override
@@ -1234,224 +1171,14 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             pendingApp = null;
             start(appToStart);
         }
-        ensureDisplayMirror();
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         // SurfaceView may recreate its Surface during visibility and layout changes. Keep the
         // display/task and reattach in surfaceChanged instead of creating another SF output.
-        skipScreenshotSurface = null;
         detachVirtualDisplaySurface();
         releaseStaleWindowAnimationLeash();
-    }
-
-    private void ensureDisplayMirror() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R
-                || !rootManagedVirtualDisplay
-                || displayId <= DEFAULT_DISPLAY_ID
-                || !mirrorSurfaceView.isAttachedToWindow()) {
-            return;
-        }
-        if (!ensureSecureSurfaceSkippedFromCapture()) {
-            return;
-        }
-        SurfaceControl currentMirror = displayMirror;
-        if (currentMirror != null && currentMirror.isValid()
-                && displayMirrorSourceId == displayId) {
-            attachDisplayMirror();
-            return;
-        }
-        releaseDisplayMirror();
-        int requestedDisplayId = displayId;
-        RootVirtualDisplayBridgeClient.MirrorResult result =
-                rootVirtualDisplayBridgeClient.createDisplayMirror(
-                        getRootInputBridgeToken(), slot, requestedDisplayId);
-        if (!result.isSuccess()) {
-            Log.w(TAG, "Display mirror unavailable for slot " + slot
-                    + ", display=" + requestedDisplayId + ": " + result.failure);
-            return;
-        }
-        if (!rootManagedVirtualDisplay || displayId != requestedDisplayId) {
-            result.surfaceControl.release();
-            return;
-        }
-        displayMirror = result.surfaceControl;
-        displayMirrorSourceId = requestedDisplayId;
-        attachDisplayMirror();
-        applyDisplayMirrorInputMode();
-        Log.i(TAG, "Display mirror ready for selective secure capture: slot=" + slot
-                + ", display=" + requestedDisplayId);
-    }
-
-    public void setDisplayMirrorInputBlocked(boolean blocked) {
-        displayMirrorInputBlocked = blocked;
-        applyDisplayMirrorInputMode();
-    }
-
-    private void applyDisplayMirrorInputMode() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            return;
-        }
-        SurfaceControl mirror = displayMirror;
-        if (mirror == null || !mirror.isValid()) {
-            return;
-        }
-        if (dropInputModeSurface == mirror
-                && appliedDisplayMirrorInputBlocked == displayMirrorInputBlocked) {
-            return;
-        }
-        boolean applied = rootVirtualDisplayBridgeClient.setDropInputMode(
-                getRootInputBridgeToken(), mirror, displayMirrorInputBlocked);
-        if (!applied) {
-            Log.w(TAG, "Display mirror input mode update failed: slot=" + slot
-                    + ", blocked=" + displayMirrorInputBlocked);
-            return;
-        }
-        dropInputModeSurface = mirror;
-        appliedDisplayMirrorInputBlocked = displayMirrorInputBlocked;
-        Log.i(TAG, "Display mirror input mode updated: slot=" + slot
-                + ", blocked=" + displayMirrorInputBlocked);
-    }
-
-    private boolean ensureSecureSurfaceSkippedFromCapture() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R
-                || !rootManagedVirtualDisplay
-                || !surfaceView.isAttachedToWindow()) {
-            return false;
-        }
-        SurfaceControl surfaceControl = surfaceView.getSurfaceControl();
-        if (surfaceControl == null || !surfaceControl.isValid()) {
-            return false;
-        }
-        if (skipScreenshotSurface == surfaceControl) {
-            return true;
-        }
-        boolean applied = rootVirtualDisplayBridgeClient.setSkipScreenshot(
-                getRootInputBridgeToken(), surfaceControl, true);
-        if (!applied) {
-            Log.w(TAG, "Secure display surface could not be excluded from capture for slot "
-                    + slot + "; retaining full secure blackout");
-            return false;
-        }
-        skipScreenshotSurface = surfaceControl;
-        Log.i(TAG, "Secure display surface excluded from capture for slot " + slot);
-        return true;
-    }
-
-    private void drawMirrorCaptureBackdrop(SurfaceHolder holder) {
-        if (holder == null || holder.getSurface() == null || !holder.getSurface().isValid()) {
-            return;
-        }
-        Canvas canvas = null;
-        try {
-            canvas = holder.lockCanvas();
-            if (canvas != null) {
-                canvas.drawColor(Color.BLACK);
-            }
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Draw display mirror backdrop failed for slot " + slot + ": "
-                    + e.getClass().getSimpleName());
-        } finally {
-            if (canvas != null) {
-                try {
-                    holder.unlockCanvasAndPost(canvas);
-                } catch (RuntimeException e) {
-                    Log.w(TAG, "Post display mirror backdrop failed for slot " + slot + ": "
-                            + e.getClass().getSimpleName());
-                }
-            }
-        }
-    }
-
-    private void attachDisplayMirror() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            return;
-        }
-        SurfaceControl mirror = displayMirror;
-        if (mirror == null || !mirror.isValid()
-                || !mirrorSurfaceView.isAttachedToWindow()) {
-            return;
-        }
-        SurfaceControl parent = mirrorSurfaceView.getSurfaceControl();
-        int targetWidth = mirrorSurfaceView.getWidth();
-        int targetHeight = mirrorSurfaceView.getHeight();
-        if (parent == null || !parent.isValid() || targetWidth <= 0 || targetHeight <= 0
-                || displayWidth <= 0 || displayHeight <= 0) {
-            return;
-        }
-        Rect source = getDisplayMirrorSourceBounds();
-        Rect destination = new Rect(0, 0, targetWidth, targetHeight);
-        try (SurfaceControl.Transaction transaction = new SurfaceControl.Transaction()) {
-            transaction.reparent(mirror, parent)
-                    .setLayer(mirror, 1)
-                    .setGeometry(mirror, source, destination, Surface.ROTATION_0)
-                    .setVisibility(mirror, true)
-                    .apply();
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Attach display mirror failed for slot " + slot + ": "
-                    + e.getClass().getSimpleName());
-        }
-    }
-
-    private Rect getDisplayMirrorSourceBounds() {
-        int sourceWidth = displayWidth;
-        int sourceHeight = displayHeight;
-        Display display = getHostedDisplay();
-        if (display != null && display.getDisplayId() == displayMirrorSourceId) {
-            try {
-                Point size = new Point();
-                display.getRealSize(size);
-                if (size.x > 0 && size.y > 0) {
-                    sourceWidth = size.x;
-                    sourceHeight = size.y;
-                }
-            } catch (RuntimeException e) {
-                Log.w(TAG, "Read display mirror bounds failed for slot " + slot + ": "
-                        + e.getClass().getSimpleName());
-            }
-        }
-        return new Rect(0, 0, sourceWidth, sourceHeight);
-    }
-
-    private void detachDisplayMirror() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            return;
-        }
-        SurfaceControl mirror = displayMirror;
-        if (mirror == null || !mirror.isValid()) {
-            return;
-        }
-        try (SurfaceControl.Transaction transaction = new SurfaceControl.Transaction()) {
-            transaction.setVisibility(mirror, false)
-                    .reparent(mirror, null)
-                    .apply();
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Detach display mirror failed for slot " + slot + ": "
-                    + e.getClass().getSimpleName());
-        }
-    }
-
-    private void releaseDisplayMirror() {
-        SurfaceControl mirror = displayMirror;
-        displayMirror = null;
-        displayMirrorSourceId = -1;
-        dropInputModeSurface = null;
-        appliedDisplayMirrorInputBlocked = false;
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || mirror == null) {
-            return;
-        }
-        if (mirror.isValid()) {
-            try (SurfaceControl.Transaction transaction = new SurfaceControl.Transaction()) {
-                transaction.setVisibility(mirror, false)
-                        .reparent(mirror, null)
-                        .apply();
-            } catch (RuntimeException e) {
-                Log.w(TAG, "Release display mirror detach failed for slot " + slot + ": "
-                        + e.getClass().getSimpleName());
-            }
-        }
-        mirror.release();
     }
 
     private final class PendingMotionEvent {
@@ -2588,7 +2315,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         String failures = "";
         if (rootAvailable) {
             if (!startRootInputBridgeIfNeeded(false, true)) {
-                unavailableReason = "root 安全显示桥未就绪";
+                unavailableReason = "root 虚拟显示桥未就绪";
                 Log.e(TAG, unavailableReason + " for slot " + slot);
                 return;
             }
@@ -2655,9 +2382,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         int actualDisplayFlags = getDisplayFlagsForDiagnostics(hostedDisplay);
         if (rootManagedVirtualDisplay
                 && (actualDisplayFlags < 0
-                || (actualDisplayFlags & Display.FLAG_SECURE) == 0
                 || (actualDisplayFlags & DISPLAY_FLAG_TRUSTED_HIDDEN) == 0)) {
-            unavailableReason = "root 虚拟显示未获得 secure+trusted 标志";
+            unavailableReason = "root 虚拟显示未获得 trusted 标志";
             Log.e(TAG, unavailableReason + ": display=" + displayId
                     + ", flags=0x" + Integer.toHexString(actualDisplayFlags));
             releaseVirtualDisplay();
@@ -2682,7 +2408,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 + ", displayRotatesWithContent="
                 + (actualDisplayFlags < 0 ? "unknown" : String.valueOf(
                 (actualDisplayFlags & DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN) != 0)));
-        ensureDisplayMirror();
         configureNativeDisplayOrientationAsync(displayId, "initialize virtual display");
         ensureRootInputBridgeStarted();
     }
@@ -2738,7 +2463,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             displayWidth = spec.width;
             displayHeight = spec.height;
             displayDensityDpi = spec.densityDpi;
-            attachDisplayMirror();
             return;
         } catch (RuntimeException e) {
             Log.w(TAG, "Resize virtual display failed for slot " + slot + ": "
@@ -2841,7 +2565,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
         rootInputBridgeClient.close();
-        releaseDisplayMirror();
         VirtualDisplay displayToRelease = virtualDisplay;
         boolean rootDisplayToRelease = rootManagedVirtualDisplay;
         int displayIdToRelease = displayId;
@@ -3110,7 +2833,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 return restartRootInputBridge(bridgeToken);
             }
             if (currentBridgeUid != null) {
-                Log.w(TAG, "Replace bridge without root secure-display service: inputUid="
+                Log.w(TAG, "Replace bridge without root display service: inputUid="
                         + currentBridgeUid + ", displayUid=" + displayBridgeUid);
             }
             long now = SystemClock.uptimeMillis();
@@ -3161,11 +2884,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 cleanupCommand + policyCommand + bridgeCommand);
         if (waitForRootInputBridge(bridgeToken)) {
             registerCrossAppLaunchRouting(bridgeToken);
-            Log.i(TAG, "Root secure-display bridge ready: uid=0, launcherExit="
+            Log.i(TAG, "Root display bridge ready: uid=0, launcherExit="
                     + rootResult.exitCode);
             return true;
         }
-        Log.w(TAG, "Root secure-display bridge did not become ready: rootExit="
+        Log.w(TAG, "Root display bridge did not become ready: rootExit="
                 + rootResult.exitCode
                 + ", rootOutput=" + rootResult.output);
         return false;

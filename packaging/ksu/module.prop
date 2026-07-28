@@ -3,4 +3,4 @@ name=OneStep4 (KernelSU)
 version=1.0.2
 versionCode=7
 author=sangluo
-description=KernelSU 系统特权应用模块；KernelSU 3.x 需要先安装并启用 meta-overlayfs 或其他兼容 metamodule。
+description=KernelSU 系统特权应用与 FLAG_SECURE 虚拟屏兼容模块；需启用 ZygiskNext，KernelSU 3.x 还需兼容 metamodule。

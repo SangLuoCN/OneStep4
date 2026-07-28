@@ -8,6 +8,8 @@ if [ "$BOOTMODE" != "true" ]; then
   abort "! KernelSU modules must be installed from KernelSU Manager"
 fi
 
+ui_print "- FLAG_SECURE 兼容功能需要安装并启用 ZygiskNext"
+
 ksu_version_code="${KSU_VER_CODE:-0}"
 case "$ksu_version_code" in
   ''|*[!0-9]*)

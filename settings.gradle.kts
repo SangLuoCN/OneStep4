@@ -19,6 +19,14 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven {
+            name = "Aliucord"
+            url = uri("https://maven.aliucord.com/releases")
+            content {
+                includeGroup("com.aliucord")
+                includeGroup("com.aliucord.lsplant")
+            }
+        }
     }
 }
 

@@ -1,12 +1,10 @@
 package com.sangluo.onestep;
 
-import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.os.Binder;
-import android.os.Build;
 import android.os.IBinder;
 import android.os.Parcel;
 import android.os.RemoteException;
@@ -14,21 +12,16 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
-import android.view.SurfaceControl;
-
-import androidx.annotation.RequiresApi;
 
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-/** Owns secure virtual displays inside the root app_process bridge. */
+/** Owns virtual displays inside the root app_process bridge. */
 public final class RootVirtualDisplayBridge extends Binder {
     private static final String TAG = "OneStepDisplayBridge";
 
@@ -36,7 +29,7 @@ public final class RootVirtualDisplayBridge extends Binder {
     public static final String LAUNCH_CALLBACK_DESCRIPTOR =
             "com.sangluo.onestep.ICrossAppLaunchCallback";
     public static final int LAUNCH_CALLBACK_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION;
-    public static final String SERVICE_NAME_PREFIX = "onestep_secure_display_";
+    public static final String SERVICE_NAME_PREFIX = "onestep_display_";
     public static final int TRANSACTION_CREATE = IBinder.FIRST_CALL_TRANSACTION;
     public static final int TRANSACTION_RESIZE = IBinder.FIRST_CALL_TRANSACTION + 1;
     public static final int TRANSACTION_SET_SURFACE = IBinder.FIRST_CALL_TRANSACTION + 2;
@@ -48,12 +41,6 @@ public final class RootVirtualDisplayBridge extends Binder {
             IBinder.FIRST_CALL_TRANSACTION + 6;
     public static final int TRANSACTION_UPDATE_LAUNCH_SOURCE =
             IBinder.FIRST_CALL_TRANSACTION + 7;
-    public static final int TRANSACTION_CREATE_DISPLAY_MIRROR =
-            IBinder.FIRST_CALL_TRANSACTION + 8;
-    public static final int TRANSACTION_SET_SKIP_SCREENSHOT =
-            IBinder.FIRST_CALL_TRANSACTION + 9;
-    public static final int TRANSACTION_SET_DROP_INPUT_MODE =
-            IBinder.FIRST_CALL_TRANSACTION + 10;
 
     private static final int ROOT_UID = 0;
     private static final long LAUNCH_BYPASS_TIMEOUT_MS = 3000L;
@@ -85,7 +72,7 @@ public final class RootVirtualDisplayBridge extends Binder {
                                                    String bridgeToken)
             throws ReflectiveOperationException {
         if (android.os.Process.myUid() != ROOT_UID) {
-            throw new SecurityException("secure display bridge requires uid 0");
+            throw new SecurityException("display bridge requires uid 0");
         }
         RootVirtualDisplayBridge bridge = new RootVirtualDisplayBridge(
                 context, allowedUid, bridgeToken);
@@ -153,31 +140,6 @@ public final class RootVirtualDisplayBridge extends Binder {
                 case TRANSACTION_UPDATE_LAUNCH_SOURCE:
                     handleUpdateLaunchSource(data, reply);
                     return true;
-                case TRANSACTION_CREATE_DISPLAY_MIRROR:
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        handleCreateDisplayMirror(data, reply);
-                    } else {
-                        reply.writeNoException();
-                        reply.writeInt(0);
-                        reply.writeString("display mirroring requires Android 11 or newer");
-                    }
-                    return true;
-                case TRANSACTION_SET_SKIP_SCREENSHOT:
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        handleSetSkipScreenshot(data, reply);
-                    } else {
-                        reply.writeNoException();
-                        reply.writeInt(0);
-                    }
-                    return true;
-                case TRANSACTION_SET_DROP_INPUT_MODE:
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        handleSetDropInputMode(data, reply);
-                    } else {
-                        reply.writeNoException();
-                        reply.writeInt(0);
-                    }
-                    return true;
                 default:
                     return super.onTransact(code, data, reply, flags);
             }
@@ -215,14 +177,14 @@ public final class RootVirtualDisplayBridge extends Binder {
             releaseLocked(slot);
             if (surface != null && surface.isValid() && requestedCandidates != null) {
                 for (int requestedFlags : requestedCandidates) {
-                    int secureFlags = SecureVirtualDisplayFlags.forRootBridge(requestedFlags);
+                    int displayFlags = RootVirtualDisplayFlags.forRootBridge(requestedFlags);
                     VirtualDisplay candidate = null;
                     try {
                         candidate = displayManager.createVirtualDisplay(
-                                name, width, height, densityDpi, surface, secureFlags);
+                                name, width, height, densityDpi, surface, displayFlags);
                         Display display = candidate == null ? null : candidate.getDisplay();
                         if (display == null) {
-                            failure = "create returned no display for flags=" + secureFlags;
+                            failure = "create returned no display for flags=" + displayFlags;
                             if (candidate != null) {
                                 candidate.release();
                             }
@@ -233,17 +195,17 @@ public final class RootVirtualDisplayBridge extends Binder {
                         record.linkToOwnerDeath();
                         displays.put(slot, record);
                         displayId = display.getDisplayId();
-                        selectedFlags = secureFlags;
+                        selectedFlags = displayFlags;
                         launchDisplayAccessActivity(displayId);
                         failure = "";
                         break;
                     } catch (RuntimeException e) {
                         displayId = -1;
                         selectedFlags = 0;
-                        failure = "flags=" + secureFlags + ":"
+                        failure = "flags=" + displayFlags + ":"
                                 + e.getClass().getSimpleName() + ":" + e.getMessage();
                         Log.w(TAG, "candidate failed slot=" + slot
-                                + " flags=0x" + Integer.toHexString(secureFlags), e);
+                                + " flags=0x" + Integer.toHexString(displayFlags), e);
                         DisplayRecord record = displays.get(slot);
                         if (record != null && record.display == candidate) {
                             releaseLocked(slot);
@@ -360,178 +322,6 @@ public final class RootVirtualDisplayBridge extends Binder {
         }
         reply.writeNoException();
         reply.writeInt(released ? 1 : 0);
-    }
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private void handleCreateDisplayMirror(Parcel data, Parcel reply) {
-        int slot = data.readInt();
-        int requestedDisplayId = data.readInt();
-        SurfaceControl mirror = null;
-        String failure = "display not found";
-        long callingIdentity = Binder.clearCallingIdentity();
-        try {
-            synchronized (displays) {
-                DisplayRecord record = displays.get(slot);
-                Display display = record == null ? null : record.display.getDisplay();
-                if (display != null && display.getDisplayId() == requestedDisplayId) {
-                    record.releaseMirror();
-                    try {
-                        mirror = createDisplayMirror(requestedDisplayId);
-                        if (mirror != null && mirror.isValid()) {
-                            record.mirror = mirror;
-                            failure = "";
-                        } else {
-                            if (mirror != null) {
-                                mirror.release();
-                                mirror = null;
-                            }
-                            failure = "window manager returned no mirror";
-                        }
-                    } catch (ReflectiveOperationException | RuntimeException e) {
-                        failure = e.getClass().getSimpleName()
-                                + (e.getMessage() == null ? "" : ":" + e.getMessage());
-                        Log.w(TAG, "create display mirror failed slot=" + slot
-                                + " display=" + requestedDisplayId, e);
-                    }
-                }
-            }
-        } finally {
-            Binder.restoreCallingIdentity(callingIdentity);
-        }
-        reply.writeNoException();
-        if (mirror == null) {
-            reply.writeInt(0);
-        } else {
-            reply.writeInt(1);
-            // Keep the root-process reference alive for the lifetime of the virtual display.
-            mirror.writeToParcel(reply, 0);
-        }
-        reply.writeString(failure);
-    }
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private static SurfaceControl createDisplayMirror(int displayId)
-            throws ReflectiveOperationException {
-        Class<?> windowManagerGlobalClass = Class.forName("android.view.WindowManagerGlobal");
-        Method getWindowManagerService = windowManagerGlobalClass.getDeclaredMethod(
-                "getWindowManagerService");
-        getWindowManagerService.setAccessible(true);
-        Object windowManager = getWindowManagerService.invoke(null);
-        if (windowManager == null) {
-            throw new IllegalStateException("window manager unavailable");
-        }
-
-        Constructor<SurfaceControl> constructor = SurfaceControl.class.getDeclaredConstructor();
-        constructor.setAccessible(true);
-        SurfaceControl mirror = constructor.newInstance();
-        try {
-            Method mirrorDisplay = windowManager.getClass().getMethod(
-                    "mirrorDisplay", int.class, SurfaceControl.class);
-            mirrorDisplay.setAccessible(true);
-            Object result = mirrorDisplay.invoke(windowManager, displayId, mirror);
-            if (!(result instanceof Boolean) || !((Boolean) result)) {
-                mirror.release();
-                return null;
-            }
-            return mirror;
-        } catch (InvocationTargetException e) {
-            mirror.release();
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException) {
-                throw (RuntimeException) cause;
-            }
-            throw e;
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            mirror.release();
-            throw e;
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    private void handleSetSkipScreenshot(Parcel data, Parcel reply) {
-        SurfaceControl target = data.readInt() == 0
-                ? null : SurfaceControl.CREATOR.createFromParcel(data);
-        boolean skipScreenshot = data.readInt() != 0;
-        boolean applied = false;
-        long callingIdentity = Binder.clearCallingIdentity();
-        try {
-            if (target != null && target.isValid()) {
-                setSkipScreenshot(target, skipScreenshot);
-                applied = true;
-            }
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            Log.w(TAG, "Set skip-screenshot failed", e);
-        } finally {
-            Binder.restoreCallingIdentity(callingIdentity);
-            if (target != null) {
-                target.release();
-            }
-        }
-        reply.writeNoException();
-        reply.writeInt(applied ? 1 : 0);
-    }
-
-    @RequiresApi(Build.VERSION_CODES.Q)
-    @SuppressLint("BlockedPrivateApi")
-    private static void setSkipScreenshot(SurfaceControl target, boolean skipScreenshot)
-            throws ReflectiveOperationException {
-        try (SurfaceControl.Transaction transaction = new SurfaceControl.Transaction()) {
-            Method method = SurfaceControl.Transaction.class.getDeclaredMethod(
-                    "setSkipScreenshot", SurfaceControl.class, boolean.class);
-            method.setAccessible(true);
-            method.invoke(transaction, target, skipScreenshot);
-            transaction.apply();
-        } catch (InvocationTargetException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException) {
-                throw (RuntimeException) cause;
-            }
-            throw e;
-        }
-    }
-
-    @RequiresApi(Build.VERSION_CODES.S)
-    private void handleSetDropInputMode(Parcel data, Parcel reply) {
-        SurfaceControl target = data.readInt() == 0
-                ? null : SurfaceControl.CREATOR.createFromParcel(data);
-        boolean dropInput = data.readInt() != 0;
-        boolean applied = false;
-        long callingIdentity = Binder.clearCallingIdentity();
-        try {
-            if (target != null && target.isValid()) {
-                setDropInputMode(target, dropInput);
-                applied = true;
-            }
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            Log.w(TAG, "Set mirror drop-input mode failed", e);
-        } finally {
-            Binder.restoreCallingIdentity(callingIdentity);
-            if (target != null) {
-                target.release();
-            }
-        }
-        reply.writeNoException();
-        reply.writeInt(applied ? 1 : 0);
-    }
-
-    @RequiresApi(Build.VERSION_CODES.S)
-    @SuppressLint("BlockedPrivateApi")
-    private static void setDropInputMode(SurfaceControl target, boolean dropInput)
-            throws ReflectiveOperationException {
-        try (SurfaceControl.Transaction transaction = new SurfaceControl.Transaction()) {
-            Method method = SurfaceControl.Transaction.class.getDeclaredMethod(
-                    "setDropInputMode", SurfaceControl.class, int.class);
-            method.setAccessible(true);
-            // android.gui.DropInputMode: NONE=0, ALL=1.
-            method.invoke(transaction, target, dropInput ? 1 : 0);
-            transaction.apply();
-        } catch (InvocationTargetException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof RuntimeException) {
-                throw (RuntimeException) cause;
-            }
-            throw e;
-        }
     }
 
     private void handleRegisterLaunchCallback(Parcel data, Parcel reply) {
@@ -765,7 +555,6 @@ public final class RootVirtualDisplayBridge extends Binder {
         final VirtualDisplay display;
         final IBinder ownerToken;
         Surface surface;
-        SurfaceControl mirror;
 
         DisplayRecord(int slot, VirtualDisplay display, Surface surface, IBinder ownerToken) {
             this.slot = slot;
@@ -796,9 +585,6 @@ public final class RootVirtualDisplayBridge extends Binder {
 
         void release() {
             ownerToken.unlinkToDeath(this, 0);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                releaseMirror();
-            }
             try {
                 display.setSurface(null);
             } catch (RuntimeException ignored) {
@@ -808,14 +594,6 @@ public final class RootVirtualDisplayBridge extends Binder {
             if (surface != null) {
                 surface.release();
                 surface = null;
-            }
-        }
-
-        @RequiresApi(Build.VERSION_CODES.Q)
-        void releaseMirror() {
-            if (mirror != null) {
-                mirror.release();
-                mirror = null;
             }
         }
 

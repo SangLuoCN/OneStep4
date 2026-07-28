@@ -61,6 +61,37 @@ OneStep4.0 的原创代码和文档，以及下列明确标注为 Apache License
 - 来源：https://github.com/google/guava
 - 许可证：Apache License 2.0
 
+## 随 Root 模块分发的 Hook 运行时
+
+以下组件只会打包到 Magisk/KernelSU 模块的 Zygisk 运行时中，
+不会打包进 OneStep4 APK：
+
+### AliuHook
+
+- 组件：`com.aliucord:Aliuhook:1.1.4`
+- 来源：https://github.com/Aliucord/hook
+- 许可证：Open Software License 3.0
+- 用途：在 `system_server` 中为 OneStep 虚拟屏安装限定范围的窗口方法 Hook。
+
+### LSPlant
+
+- 组件：`com.aliucord.lsplant:lsplant:6.4-aliucord.4`
+- 来源：https://github.com/LSPosed/LSPlant
+- 许可证：GNU Lesser General Public License 3.0
+- 用途：AliuHook 的 Android Runtime 方法 Hook 引擎。
+
+### Dobby
+
+- 来源：https://github.com/jmpews/Dobby
+- 许可证：Apache License 2.0
+- 用途：作为 AliuHook 运行时的原生 Hook 依赖。
+
+### LLVM libc++
+
+- 来源：https://github.com/llvm/llvm-project
+- 许可证：Apache License 2.0 with LLVM Exceptions
+- 用途：AliuHook/LSPlant 原生库的 C++ 运行时。
+
 ### Error Prone Annotations
 
 - 组件：`com.google.errorprone:error_prone_annotations:2.15.0`

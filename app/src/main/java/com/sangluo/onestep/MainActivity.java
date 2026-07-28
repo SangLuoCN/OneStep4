@@ -163,8 +163,6 @@ public class MainActivity extends Activity {
             "android.permission.INTERNAL_SYSTEM_WINDOW",
             "android.permission.REAL_GET_TASKS",
             "android.permission.START_ACTIVITIES_FROM_BACKGROUND",
-            "android.permission.CAPTURE_VIDEO_OUTPUT",
-            "android.permission.CAPTURE_SECURE_VIDEO_OUTPUT",
             "android.permission.ADD_TRUSTED_DISPLAY",
             "android.permission.MEDIA_CONTENT_CONTROL",
             "android.permission.STATUS_BAR"
@@ -4304,21 +4302,9 @@ public class MainActivity extends Activity {
         if (sideInputShieldController != null) {
             sideInputShieldController.hideAll();
         }
-        for (EmbeddedAppHost host : embeddedHosts) {
-            if (host instanceof RootVirtualDisplayHost) {
-                ((RootVirtualDisplayHost) host).setDisplayMirrorInputBlocked(true);
-            }
-        }
     }
 
     private void restoreWindowInputRoutingAfterLayout() {
-        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
-            EmbeddedAppHost host = embeddedHosts[slot];
-            if (host instanceof RootVirtualDisplayHost) {
-                ((RootVirtualDisplayHost) host).setDisplayMirrorInputBlocked(
-                        slot != activeMainSlot);
-            }
-        }
         scheduleSideInputProtectionSync();
     }
 
@@ -4333,13 +4319,6 @@ public class MainActivity extends Activity {
     private void syncSideInputProtection() {
         if (activityDestroyed || isWindowAnimationRunning()) {
             return;
-        }
-        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
-            EmbeddedAppHost host = embeddedHosts[slot];
-            if (host instanceof RootVirtualDisplayHost) {
-                ((RootVirtualDisplayHost) host).setDisplayMirrorInputBlocked(
-                        slot != activeMainSlot);
-            }
         }
         if (sideInputShieldController != null) {
             sideInputShieldController.update();
