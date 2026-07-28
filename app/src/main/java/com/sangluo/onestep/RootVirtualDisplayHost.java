@@ -198,6 +198,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         Intent consumeRoutedLaunchIntent(int slot, String packageName);
         boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
                                  Intent intent, String targetPackage);
+        boolean shouldDeferHostedAppReveal(int slot, String packageName);
+        void onHostedAppReady(int slot, String packageName);
     }
 
     private static final String TAG = "OneStep40";
@@ -592,7 +594,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
         boolean live = continueHostedAppStart(app, launcherIntent, routedLaunchIntent,
                 startEpoch, false);
-        windowViews[slot].setLiveAppVisible(live);
+        windowViews[slot].setLiveAppVisible(live
+                && !callbacks.shouldDeferHostedAppReveal(slot, app.packageName));
         if (!live) {
             Log.w(TAG, "Cannot embed " + app.packageName + " in slot " + slot
                     + " after IME policy confirmation: " + unavailableReason);
@@ -730,6 +733,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     }
                     if (resolvedTaskId > 0) {
                         hostedTaskId = resolvedTaskId;
+                        callbacks.onHostedAppReady(slot, targetPackage);
                         return;
                     }
                     Log.w(TAG, "Restart hosted app after stale task reuse: slot=" + slot
@@ -2181,6 +2185,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     private void resolveHostedTask(String reason, int token) {
         final int targetDisplayId = displayId;
+        final String targetPackage = getHostedPackageName();
         if (!canResolveHostedTask() || hostedTaskId > 0 || taskResolutionInFlight) {
             return;
         }
@@ -2201,12 +2206,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         return;
                     }
                     int resolvedTaskId = HostedTaskParser.findHostedTaskId(
-                            stackList.output, targetDisplayId, getHostedPackageName());
+                            stackList.output, targetDisplayId, targetPackage);
                     if (resolvedTaskId > 0) {
                         hostedTaskId = resolvedTaskId;
                         Log.i(TAG, "Resolved hosted task: slot=" + slot
                                 + ", display=" + targetDisplayId
                                 + ", taskId=" + resolvedTaskId);
+                        mainHandler.post(() -> callbacks.onHostedAppReady(slot, targetPackage));
                     }
                 } finally {
                     taskResolutionInFlight = false;

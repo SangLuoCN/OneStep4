@@ -2,9 +2,11 @@ package com.sangluo.onestep.ui.widget;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -15,10 +17,23 @@ import com.sangluo.onestep.model.LauncherApp;
 
 /** Reusable launcher icon used by the top strip, dock, and paged desktop grid. */
 public final class AppShortcutView extends LinearLayout {
+    public enum AppStatus {
+        NONE,
+        BACKGROUND,
+        FOREGROUND
+    }
+
+    private static final int BACKGROUND_STATUS_COLOR = 0xff0a84ff;
+    private static final int FOREGROUND_STATUS_COLOR = 0xff34c759;
+
     private final FrameLayout iconFrame;
     private final ImageView icon;
+    private final View statusIndicator;
     private final TextView label;
     private String packageName = "";
+    private String appLabel = "";
+    private boolean statusIndicatorEnabled;
+    private AppStatus appStatus = AppStatus.NONE;
 
     public AppShortcutView(Context context, boolean showLabel, int iconSizeDp, float textSizeDp) {
         super(context);
@@ -38,6 +53,16 @@ public final class AppShortcutView extends LinearLayout {
         iconFrame.addView(icon, new FrameLayout.LayoutParams(
                 dp(iconSizeDp), dp(iconSizeDp), Gravity.CENTER));
 
+        statusIndicator = new View(context);
+        statusIndicator.setElevation(dp(2));
+        statusIndicator.setVisibility(GONE);
+        int statusSize = dp(10);
+        FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(
+                statusSize, statusSize, Gravity.TOP | Gravity.END);
+        statusParams.topMargin = dp(1);
+        statusParams.setMarginEnd(dp(1));
+        iconFrame.addView(statusIndicator, statusParams);
+
         label = new TextView(context);
         label.setGravity(Gravity.CENTER);
         label.setSingleLine(true);
@@ -54,9 +79,10 @@ public final class AppShortcutView extends LinearLayout {
 
     public void bind(LauncherApp app) {
         packageName = app.packageName;
+        appLabel = app.label;
         icon.setImageDrawable(app.icon);
         label.setText(app.label);
-        setContentDescription(app.label);
+        updateContentDescription();
     }
 
     public String getPackageNameValue() {
@@ -66,6 +92,40 @@ public final class AppShortcutView extends LinearLayout {
     public void setActive(boolean active) {
         iconFrame.setBackgroundColor(Color.TRANSPARENT);
         label.setTextColor(active ? 0xffffffff : 0xddffffff);
+    }
+
+    public void setStatusIndicatorEnabled(boolean enabled) {
+        statusIndicatorEnabled = enabled;
+        updateStatusIndicator();
+    }
+
+    public void setAppStatus(AppStatus status) {
+        appStatus = status == null ? AppStatus.NONE : status;
+        updateStatusIndicator();
+        updateContentDescription();
+    }
+
+    private void updateStatusIndicator() {
+        if (!statusIndicatorEnabled || appStatus == AppStatus.NONE) {
+            statusIndicator.setVisibility(GONE);
+            return;
+        }
+        GradientDrawable marker = new GradientDrawable();
+        marker.setShape(GradientDrawable.OVAL);
+        marker.setColor(appStatus == AppStatus.FOREGROUND
+                ? FOREGROUND_STATUS_COLOR : BACKGROUND_STATUS_COLOR);
+        marker.setStroke(dp(1), 0xe6ffffff);
+        statusIndicator.setBackground(marker);
+        statusIndicator.setVisibility(VISIBLE);
+    }
+
+    private void updateContentDescription() {
+        if (!statusIndicatorEnabled || appStatus == AppStatus.NONE) {
+            setContentDescription(appLabel);
+            return;
+        }
+        setContentDescription(appLabel + (appStatus == AppStatus.FOREGROUND
+                ? "，已在窗口中打开" : "，正在后台运行"));
     }
 
     private int dp(float value) {
