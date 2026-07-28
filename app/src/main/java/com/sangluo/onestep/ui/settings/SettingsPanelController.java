@@ -74,8 +74,9 @@ public final class SettingsPanelController {
         int topAppIconScalePct();
         int topAppStripSpacingScalePct();
         int topAppStripVerticalPaddingScalePct();
-        boolean mediaPlayerVisible();
+        boolean topComponentsVisible();
         boolean verticalWindowLayout();
+        boolean logRecordingEnabled();
         int sideWindowCount();
         void saveGridLayout(int rows, int columns);
         void saveOneStepTriggerAreaScale(int value);
@@ -84,8 +85,9 @@ public final class SettingsPanelController {
         void saveTopAppIconScale(int value);
         void saveTopAppStripSpacingScale(int value);
         void saveTopAppStripVerticalPaddingScale(int value);
-        void saveMediaPlayerVisible(boolean visible);
+        void saveTopComponentsVisible(boolean visible);
         void saveVerticalWindowLayout(boolean enabled);
+        void saveLogRecordingEnabled(boolean enabled);
         void saveSideWindowCount(int count);
         void exportSessionLog();
     }
@@ -103,14 +105,17 @@ public final class SettingsPanelController {
     private TextView topAppIconSizeValueView;
     private TextView topAppStripSpacingValueView;
     private TextView topAppStripVerticalPaddingValueView;
-    private TextView mediaPlayerVisibleValueView;
+    private TextView topComponentsVisibleValueView;
     private TextView verticalWindowLayoutValueView;
     private TextView sideWindowCountValueView;
     private TextView topNavVerticalMarginValueView;
     private TextView oneStepTriggerAreaValueView;
     private TextView cornerTriggerSensitivityValueView;
-    private Switch mediaPlayerVisibleSwitch;
+    private TextView logRecordingEnabledValueView;
+    private Switch topComponentsVisibleSwitch;
     private Switch verticalWindowLayoutSwitch;
+    private Switch logRecordingEnabledSwitch;
+    private LinearLayout exportLogItem;
     private int desktopGridRows;
     private int desktopGridColumns;
     private int oneStepTriggerAreaScalePct;
@@ -119,8 +124,9 @@ public final class SettingsPanelController {
     private int topAppIconScalePct;
     private int topAppStripSpacingScalePct;
     private int topAppStripVerticalPaddingScalePct;
-    private boolean mediaPlayerVisible;
+    private boolean topComponentsVisible;
     private boolean verticalWindowLayout;
+    private boolean logRecordingEnabled;
     private int sideWindowCount;
 
     public SettingsPanelController(Activity activity, Callbacks callbacks) {
@@ -317,6 +323,15 @@ public final class SettingsPanelController {
         topVerticalPaddingLp.topMargin = dp(12);
         list.addView(topVerticalPaddingItem, topVerticalPaddingLp);
 
+        LinearLayout topComponentsVisibleItem = createSwitchSettingsItem(
+                "顶部组件显示", topComponentsVisible, this::saveTopComponentsVisible);
+        topComponentsVisibleValueView = (TextView) topComponentsVisibleItem.getTag();
+        topComponentsVisibleSwitch = findSwitchInItem(topComponentsVisibleItem);
+        LinearLayout.LayoutParams topComponentsVisibleLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
+        topComponentsVisibleLp.topMargin = dp(12);
+        list.addView(topComponentsVisibleItem, topComponentsVisibleLp);
+
         LinearLayout legalNoticesItem = createSettingsItem("开源许可与第三方声明", "查看");
         legalNoticesItem.setOnClickListener(v -> showLegalNoticesPage());
         LinearLayout.LayoutParams legalNoticesLp = new LinearLayout.LayoutParams(
@@ -324,8 +339,18 @@ public final class SettingsPanelController {
         legalNoticesLp.topMargin = dp(12);
         list.addView(legalNoticesItem, legalNoticesLp);
 
-        LinearLayout exportLogItem = createSettingsItem("导出日志", "导出");
+        LinearLayout logRecordingItem = createSwitchSettingsItem(
+                "记录日志", logRecordingEnabled, this::saveLogRecordingEnabled);
+        logRecordingEnabledValueView = (TextView) logRecordingItem.getTag();
+        logRecordingEnabledSwitch = findSwitchInItem(logRecordingItem);
+        LinearLayout.LayoutParams logRecordingLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
+        logRecordingLp.topMargin = dp(12);
+        list.addView(logRecordingItem, logRecordingLp);
+
+        exportLogItem = createSettingsItem("导出日志", "导出");
         exportLogItem.setOnClickListener(v -> callbacks.exportSessionLog());
+        exportLogItem.setVisibility(logRecordingEnabled ? View.VISIBLE : View.GONE);
         LinearLayout.LayoutParams exportLogLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
         exportLogLp.topMargin = dp(12);
@@ -920,12 +945,12 @@ public final class SettingsPanelController {
             topAppStripVerticalPaddingValueView.setText(
                     formatPercentValue(topAppStripVerticalPaddingScalePct));
         }
-        if (mediaPlayerVisibleValueView != null) {
-            mediaPlayerVisibleValueView.setText(formatSwitchValue(mediaPlayerVisible));
+        if (topComponentsVisibleValueView != null) {
+            topComponentsVisibleValueView.setText(formatSwitchValue(topComponentsVisible));
         }
-        if (mediaPlayerVisibleSwitch != null
-                && mediaPlayerVisibleSwitch.isChecked() != mediaPlayerVisible) {
-            mediaPlayerVisibleSwitch.setChecked(mediaPlayerVisible);
+        if (topComponentsVisibleSwitch != null
+                && topComponentsVisibleSwitch.isChecked() != topComponentsVisible) {
+            topComponentsVisibleSwitch.setChecked(topComponentsVisible);
         }
         if (verticalWindowLayoutValueView != null) {
             verticalWindowLayoutValueView.setText(formatSwitchValue(verticalWindowLayout));
@@ -933,6 +958,16 @@ public final class SettingsPanelController {
         if (verticalWindowLayoutSwitch != null
                 && verticalWindowLayoutSwitch.isChecked() != verticalWindowLayout) {
             verticalWindowLayoutSwitch.setChecked(verticalWindowLayout);
+        }
+        if (logRecordingEnabledValueView != null) {
+            logRecordingEnabledValueView.setText(formatSwitchValue(logRecordingEnabled));
+        }
+        if (logRecordingEnabledSwitch != null
+                && logRecordingEnabledSwitch.isChecked() != logRecordingEnabled) {
+            logRecordingEnabledSwitch.setChecked(logRecordingEnabled);
+        }
+        if (exportLogItem != null) {
+            exportLogItem.setVisibility(logRecordingEnabled ? View.VISIBLE : View.GONE);
         }
         if (sideWindowCountValueView != null) {
             sideWindowCountValueView.setText(getSideWindowCountLabel());
@@ -977,7 +1012,7 @@ public final class SettingsPanelController {
                 .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                     int count = MIN_SIDE_WINDOWS + which;
                     if (!canUseSideWindowCount(count)) {
-                        Toast.makeText(activity, "关闭播放组件或开启竖向布局后可选择更多小窗口",
+                        Toast.makeText(activity, "不支持该小窗口数量",
                                 Toast.LENGTH_SHORT).show();
                         return;
                     }
@@ -997,8 +1032,9 @@ public final class SettingsPanelController {
         topAppIconScalePct = callbacks.topAppIconScalePct();
         topAppStripSpacingScalePct = callbacks.topAppStripSpacingScalePct();
         topAppStripVerticalPaddingScalePct = callbacks.topAppStripVerticalPaddingScalePct();
-        mediaPlayerVisible = callbacks.mediaPlayerVisible();
+        topComponentsVisible = callbacks.topComponentsVisible();
         verticalWindowLayout = callbacks.verticalWindowLayout();
+        logRecordingEnabled = callbacks.logRecordingEnabled();
         sideWindowCount = callbacks.sideWindowCount();
     }
     private void saveGridLayout(int r,int c){callbacks.saveGridLayout(r,c);refresh();}
@@ -1008,8 +1044,9 @@ public final class SettingsPanelController {
     private void saveTopAppIconScale(int v){callbacks.saveTopAppIconScale(v);}
     private void saveTopAppStripSpacingScale(int v){callbacks.saveTopAppStripSpacingScale(v);}
     private void saveTopAppStripVerticalPaddingScale(int v){callbacks.saveTopAppStripVerticalPaddingScale(v);}
-    private void saveMediaPlayerVisible(boolean v){callbacks.saveMediaPlayerVisible(v);}
+    private void saveTopComponentsVisible(boolean v){callbacks.saveTopComponentsVisible(v);}
     private void saveVerticalWindowLayout(boolean v){callbacks.saveVerticalWindowLayout(v);}
+    private void saveLogRecordingEnabled(boolean v){callbacks.saveLogRecordingEnabled(v);}
     private void saveSideWindowCount(int v){callbacks.saveSideWindowCount(v);refresh();}
     private void pickBackgroundFromGallery(){callbacks.pickBackground();}
     private void applyCurrentListBackground(ImageView target){callbacks.applyBackground(target);}

@@ -433,12 +433,13 @@ public class MainActivity extends Activity {
     private int topAppStripSpacingScalePct = TOP_APP_STRIP_SPACING_SCALE_DEFAULT;
     private int topAppStripVerticalPaddingScalePct =
             TOP_APP_STRIP_VERTICAL_PADDING_SCALE_DEFAULT;
-    private boolean mediaPlayerVisible = true;
+    private boolean topComponentsVisible = true;
     private boolean verticalWindowLayout;
     private int sideWindowCount = DEFAULT_SIDE_WINDOWS;
     private int topNavVerticalMarginScalePct = TOP_NAV_VERTICAL_MARGIN_SCALE_DEFAULT;
     private int oneStepTriggerAreaScalePct = ONE_STEP_TRIGGER_AREA_SCALE_DEFAULT;
     private int cornerTriggerSensitivityPct = CORNER_TRIGGER_SENSITIVITY_DEFAULT;
+    private boolean logRecordingEnabled;
     private SystemUiController systemUiController;
     private SessionLogRecorder sessionLogRecorder;
     private SettingsPanelController settingsPanelController;
@@ -473,8 +474,6 @@ public class MainActivity extends Activity {
             redirectHomeToDefaultDisplay();
             return;
         }
-        sessionLogRecorder = new SessionLogRecorder(getApplicationContext());
-        sessionLogRecorder.start();
         defaultDisplayInstance = new WeakReference<>(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         Window hostWindow = getWindow();
@@ -488,6 +487,9 @@ public class MainActivity extends Activity {
         }
 
         loadOneStepSettings();
+        if (logRecordingEnabled) {
+            startSessionLogRecording();
+        }
         settingsPanelController = createSettingsPanelController();
         topPanelController = createTopPanelController();
         windowAnimationController = createWindowAnimationController();
@@ -1959,12 +1961,13 @@ public class MainActivity extends Activity {
         topAppIconScalePct = settings.topAppIconScalePct;
         topAppStripSpacingScalePct = settings.topAppStripSpacingScalePct;
         topAppStripVerticalPaddingScalePct = settings.topAppStripVerticalPaddingScalePct;
-        mediaPlayerVisible = settings.mediaPlayerVisible;
+        topComponentsVisible = settings.topComponentsVisible;
         verticalWindowLayout = settings.verticalWindowLayout;
         sideWindowCount = settings.sideWindowCount;
         topNavVerticalMarginScalePct = settings.topNavVerticalMarginScalePct;
         oneStepTriggerAreaScalePct = settings.oneStepTriggerAreaScalePct;
         cornerTriggerSensitivityPct = settings.cornerTriggerSensitivityPct;
+        logRecordingEnabled = settings.logRecordingEnabled;
     }
 
     private SettingsPanelController createSettingsPanelController() {
@@ -2003,8 +2006,9 @@ public class MainActivity extends Activity {
             @Override public int topAppStripVerticalPaddingScalePct() {
                 return topAppStripVerticalPaddingScalePct;
             }
-            @Override public boolean mediaPlayerVisible() { return mediaPlayerVisible; }
+            @Override public boolean topComponentsVisible() { return topComponentsVisible; }
             @Override public boolean verticalWindowLayout() { return verticalWindowLayout; }
+            @Override public boolean logRecordingEnabled() { return logRecordingEnabled; }
             @Override public int sideWindowCount() { return sideWindowCount; }
             @Override public void saveGridLayout(int rows, int columns) {
                 MainActivity.this.saveGridLayout(rows, columns);
@@ -2027,11 +2031,14 @@ public class MainActivity extends Activity {
             @Override public void saveTopAppStripVerticalPaddingScale(int value) {
                 MainActivity.this.saveTopAppStripVerticalPaddingScale(value);
             }
-            @Override public void saveMediaPlayerVisible(boolean visible) {
-                MainActivity.this.saveMediaPlayerVisible(visible);
+            @Override public void saveTopComponentsVisible(boolean visible) {
+                MainActivity.this.saveTopComponentsVisible(visible);
             }
             @Override public void saveVerticalWindowLayout(boolean enabled) {
                 MainActivity.this.saveVerticalWindowLayout(enabled);
+            }
+            @Override public void saveLogRecordingEnabled(boolean enabled) {
+                MainActivity.this.saveLogRecordingEnabled(enabled);
             }
             @Override public void saveSideWindowCount(int count) {
                 MainActivity.this.saveSideWindowCount(count);
@@ -2050,7 +2057,7 @@ public class MainActivity extends Activity {
             }
             @Override public boolean pipActive() { return pipActive; }
             @Override public Rect pipRestoreBounds() { return new Rect(pipRestoreBounds); }
-            @Override public boolean mediaPlayerVisible() { return mediaPlayerVisible; }
+            @Override public boolean topComponentsVisible() { return topComponentsVisible; }
             @Override public boolean activityDestroyed() { return activityDestroyed; }
             @Override public void rebuildTopChromeContent() {
                 MainActivity.this.rebuildTopChromeContent();
@@ -2445,21 +2452,15 @@ public class MainActivity extends Activity {
         rebuildTopChromeContent();
     }
 
-    private void saveMediaPlayerVisible(boolean visible) {
-        if (visible && verticalWindowLayout) {
-            Toast.makeText(this, "竖向布局下不能开启播放组件", Toast.LENGTH_SHORT).show();
-            updateSettingsPageViews();
+    private void saveTopComponentsVisible(boolean visible) {
+        if (visible == topComponentsVisible) {
             return;
         }
-        if (visible == mediaPlayerVisible) {
-            return;
-        }
-        mediaPlayerVisible = visible;
+        topComponentsVisible = visible;
+        settingsStore.saveTopComponentsVisible(visible);
         if (!visible) {
-            topPanelController.removeMediaPage();
+            requestPipUndock();
         }
-        settingsStore.saveMediaPlayerVisible(visible);
-        enforceSideWindowCountLimit();
         updateSettingsPageViews();
         rebuildTopChromeContent();
     }
@@ -2469,21 +2470,47 @@ public class MainActivity extends Activity {
             return;
         }
         verticalWindowLayout = enabled;
-        if (enabled && mediaPlayerVisible) {
-            mediaPlayerVisible = false;
-            topPanelController.removeMediaPage();
-        }
-        settingsStore.saveWindowLayout(enabled, mediaPlayerVisible);
+        settingsStore.saveVerticalWindowLayout(enabled);
         enforceSideWindowCountLimit();
         updateSettingsPageViews();
         rebuildTopChromeContent();
         scheduleEmbeddedSlotRefresh();
     }
 
+    private void saveLogRecordingEnabled(boolean enabled) {
+        if (enabled == logRecordingEnabled) {
+            return;
+        }
+        logRecordingEnabled = enabled;
+        settingsStore.saveLogRecordingEnabled(enabled);
+        if (enabled) {
+            startSessionLogRecording();
+        } else {
+            stopSessionLogRecording();
+        }
+        updateSettingsPageViews();
+    }
+
+    private void startSessionLogRecording() {
+        if (sessionLogRecorder != null) {
+            return;
+        }
+        sessionLogRecorder = new SessionLogRecorder(getApplicationContext());
+        sessionLogRecorder.start();
+    }
+
+    private void stopSessionLogRecording() {
+        SessionLogRecorder recorder = sessionLogRecorder;
+        sessionLogRecorder = null;
+        if (recorder != null) {
+            recorder.close();
+        }
+    }
+
     private void saveSideWindowCount(int count) {
         int sanitized = sanitizeSideWindowCount(count);
         if (!canUseSideWindowCount(sanitized)) {
-            Toast.makeText(this, "关闭播放组件或开启竖向布局后可选择更多小窗口",
+            Toast.makeText(this, "不支持该小窗口数量",
                     Toast.LENGTH_SHORT).show();
             return;
         }
@@ -3277,6 +3304,7 @@ public class MainActivity extends Activity {
                     mainAppReplacementRevealGeneration = replacementGeneration;
                     mainAppReplacementRevealSlot = slot;
                     mainAppReplacementRevealPackage = replacementApp.packageName;
+                    previousHost.suppressNextLaunchAnimation(replacementApp.packageName);
                     startAppInSlot(slot, replacementApp, false, false);
                     holdMainAppReplacementUntilReady(
                             slot, replacementApp, replacementGeneration);

@@ -21,14 +21,15 @@ public final class OneStepSettingsStore {
             "top_app_strip_spacing_scale";
     private static final String PREF_TOP_APP_STRIP_VERTICAL_PADDING_SCALE =
             "top_app_strip_vertical_padding_scale";
-    private static final String PREF_MEDIA_PLAYER_VISIBLE = "media_player_visible";
+    private static final String PREF_TOP_COMPONENTS_VISIBLE = "top_components_visible";
+    private static final String PREF_MEDIA_PLAYER_VISIBLE_LEGACY = "media_player_visible";
     private static final String PREF_SENSOR_UID_OVERRIDES = "sensor_uid_overrides";
     private static final String PREF_ONE_STEP_TRIGGER_AREA_SCALE =
             "one_step_trigger_area_scale";
     private static final String PREF_CORNER_TRIGGER_SIZE_DP = "corner_trigger_size_dp";
     private static final String PREF_CORNER_TRIGGER_SENSITIVITY =
             "corner_trigger_sensitivity";
-    private static final String PREF_MEDIA_PLAYER_DEFAULT_APPLIED =
+    private static final String PREF_MEDIA_PLAYER_DEFAULT_APPLIED_LEGACY =
             "media_player_default_applied";
     private static final String PREF_VERTICAL_WINDOW_LAYOUT = "vertical_window_layout";
     private static final String PREF_SIDE_WINDOW_COUNT = "side_window_count";
@@ -36,6 +37,7 @@ public final class OneStepSettingsStore {
             "top_nav_vertical_margin_scale";
     private static final String PREF_TOP_NAV_HEIGHT_SCALE = "top_nav_height_scale";
     private static final String PREF_TOP_NAV_HEIGHT_LEGACY = "top_nav_height";
+    private static final String PREF_LOG_RECORDING_ENABLED = "log_recording_enabled";
 
     private final SharedPreferences preferences;
 
@@ -53,13 +55,9 @@ public final class OneStepSettingsStore {
             columns = OneStepSettings.DESKTOP_PAGE_COLUMNS;
         }
 
-        boolean mediaPlayerVisible = loadMediaPlayerVisible();
+        boolean topComponentsVisible = loadTopComponentsVisible();
         boolean verticalWindowLayout = preferences.getBoolean(
                 PREF_VERTICAL_WINDOW_LAYOUT, false);
-        if (verticalWindowLayout && mediaPlayerVisible) {
-            mediaPlayerVisible = false;
-            preferences.edit().putBoolean(PREF_MEDIA_PLAYER_VISIBLE, false).apply();
-        }
 
         return new OneStepSettings(
                 rows,
@@ -71,7 +69,7 @@ public final class OneStepSettingsStore {
                 OneStepSettings.sanitizeTopAppStripVerticalPaddingScale(preferences.getInt(
                         PREF_TOP_APP_STRIP_VERTICAL_PADDING_SCALE,
                         OneStepSettings.TOP_APP_STRIP_VERTICAL_PADDING_SCALE_DEFAULT)),
-                mediaPlayerVisible,
+                topComponentsVisible,
                 verticalWindowLayout,
                 OneStepSettings.sanitizeAllowedSideWindowCount(preferences.getInt(
                         PREF_SIDE_WINDOW_COUNT, OneStepSettings.DEFAULT_SIDE_WINDOWS)),
@@ -81,7 +79,8 @@ public final class OneStepSettingsStore {
                         loadOneStepTriggerAreaScale()),
                 OneStepSettings.sanitizeCornerTriggerSensitivity(preferences.getInt(
                         PREF_CORNER_TRIGGER_SENSITIVITY,
-                        OneStepSettings.CORNER_TRIGGER_SENSITIVITY_DEFAULT)));
+                        OneStepSettings.CORNER_TRIGGER_SENSITIVITY_DEFAULT)),
+                preferences.getBoolean(PREF_LOG_RECORDING_ENABLED, false));
     }
 
     public Uri getBackgroundUri() {
@@ -125,15 +124,12 @@ public final class OneStepSettingsStore {
         preferences.edit().putInt(PREF_TOP_APP_STRIP_VERTICAL_PADDING_SCALE, scalePct).apply();
     }
 
-    public void saveMediaPlayerVisible(boolean visible) {
-        preferences.edit().putBoolean(PREF_MEDIA_PLAYER_VISIBLE, visible).apply();
+    public void saveTopComponentsVisible(boolean visible) {
+        preferences.edit().putBoolean(PREF_TOP_COMPONENTS_VISIBLE, visible).apply();
     }
 
-    public void saveWindowLayout(boolean vertical, boolean mediaVisible) {
-        preferences.edit()
-                .putBoolean(PREF_VERTICAL_WINDOW_LAYOUT, vertical)
-                .putBoolean(PREF_MEDIA_PLAYER_VISIBLE, mediaVisible)
-                .apply();
+    public void saveVerticalWindowLayout(boolean vertical) {
+        preferences.edit().putBoolean(PREF_VERTICAL_WINDOW_LAYOUT, vertical).apply();
     }
 
     public void saveSideWindowCount(int count) {
@@ -145,6 +141,10 @@ public final class OneStepSettingsStore {
                 .remove(PREF_TOP_NAV_HEIGHT_SCALE)
                 .remove(PREF_TOP_NAV_HEIGHT_LEGACY)
                 .apply();
+    }
+
+    public void saveLogRecordingEnabled(boolean enabled) {
+        preferences.edit().putBoolean(PREF_LOG_RECORDING_ENABLED, enabled).apply();
     }
 
     public synchronized Set<String> getSensorUidOverrides() {
@@ -180,15 +180,17 @@ public final class OneStepSettingsStore {
         editor.commit();
     }
 
-    private boolean loadMediaPlayerVisible() {
-        if (!preferences.getBoolean(PREF_MEDIA_PLAYER_DEFAULT_APPLIED, false)) {
-            preferences.edit()
-                    .putBoolean(PREF_MEDIA_PLAYER_VISIBLE, true)
-                    .putBoolean(PREF_MEDIA_PLAYER_DEFAULT_APPLIED, true)
-                    .apply();
-            return true;
+    private boolean loadTopComponentsVisible() {
+        if (preferences.contains(PREF_TOP_COMPONENTS_VISIBLE)) {
+            return preferences.getBoolean(PREF_TOP_COMPONENTS_VISIBLE, true);
         }
-        return preferences.getBoolean(PREF_MEDIA_PLAYER_VISIBLE, true);
+        boolean visible = preferences.getBoolean(PREF_MEDIA_PLAYER_VISIBLE_LEGACY, true);
+        preferences.edit()
+                .putBoolean(PREF_TOP_COMPONENTS_VISIBLE, visible)
+                .remove(PREF_MEDIA_PLAYER_VISIBLE_LEGACY)
+                .remove(PREF_MEDIA_PLAYER_DEFAULT_APPLIED_LEGACY)
+                .apply();
+        return visible;
     }
 
     private int loadTopAppIconScale() {

@@ -290,6 +290,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private boolean touchStartedOnMain;
     private boolean touchSequenceSuppressed;
     private boolean skipActivityOptionsLaunch;
+    private String launchWithoutAnimationPackage = "";
     private Boolean suCommandAvailable;
     private String launchRequestedPackage = "";
     private int launchRequestedDisplayId = -1;
@@ -508,6 +509,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     @Override
+    public void suppressNextLaunchAnimation(String packageName) {
+        launchWithoutAnimationPackage = packageName == null ? "" : packageName;
+    }
+
+    @Override
     public boolean start(LauncherApp app) {
         if (!isAvailable() || embeddedSlotClosing[slot]) {
             return false;
@@ -522,6 +528,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (launcherIntent == null) {
             unavailableReason = "找不到启动入口";
             return false;
+        }
+        boolean suppressLaunchAnimation = TextUtils.equals(
+                launchWithoutAnimationPackage, app.packageName);
+        if (suppressLaunchAnimation) {
+            launcherIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
         }
 
         if (displayId < 0) {
@@ -542,6 +553,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
         Intent routedLaunchIntent = callbacks.consumeRoutedLaunchIntent(
                 slot, app.packageName);
+        if (suppressLaunchAnimation && routedLaunchIntent != null) {
+            routedLaunchIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        }
         boolean reusingHostedApp = routedLaunchIntent == null
                 && displayId == launchRequestedDisplayId
                 && TextUtils.equals(launchRequestedPackage, app.packageName);
@@ -623,6 +637,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return false;
         }
         syncHostedSensorIsolationAsync(app.packageName);
+        if (TextUtils.equals(launchWithoutAnimationPackage, app.packageName)) {
+            launchWithoutAnimationPackage = "";
+        }
 
         if (reusingHostedApp) {
             pendingApp = null;
@@ -664,6 +681,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         ComponentName componentName = resolveLaunchComponent(requestedLaunchIntent);
         if (componentName != null) {
             String command = "am start --display " + displayId
+                    + ((requestedLaunchIntent.getFlags()
+                    & Intent.FLAG_ACTIVITY_NO_ANIMATION) != 0
+                    ? " --activity-no-animation" : "")
                     + " -n " + shellQuote(componentName.flattenToShortString());
             launchRequestedPackage = app.packageName;
             launchRequestedDisplayId = displayId;
@@ -2713,7 +2733,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
         Intent displayIntent = new Intent(launchIntent);
         displayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        ActivityOptions options = ActivityOptions.makeBasic();
+        ActivityOptions options = (displayIntent.getFlags()
+                & Intent.FLAG_ACTIVITY_NO_ANIMATION) != 0
+                ? ActivityOptions.makeCustomAnimation(owner, 0, 0)
+                : ActivityOptions.makeBasic();
         options.setLaunchDisplayId(displayId);
         try {
             owner.startActivity(displayIntent, options.toBundle());

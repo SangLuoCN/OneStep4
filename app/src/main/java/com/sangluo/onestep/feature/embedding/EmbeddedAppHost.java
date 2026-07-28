@@ -16,6 +16,9 @@ public interface EmbeddedAppHost {
 
     boolean start(LauncherApp app);
 
+    default void suppressNextLaunchAnimation(String packageName) {
+    }
+
     void refreshContainerSize();
 
     void sendBack();

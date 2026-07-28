@@ -159,7 +159,7 @@ public final class TopPanelController implements AutoCloseable {
         boolean deferWindowSwitchUiWork(int flags);
         boolean pipActive();
         Rect pipRestoreBounds();
-        boolean mediaPlayerVisible();
+        boolean topComponentsVisible();
         boolean activityDestroyed();
         void rebuildTopChromeContent();
         void setTopChromeVisible(boolean visible, boolean animate);
@@ -338,9 +338,7 @@ public final class TopPanelController implements AutoCloseable {
             return mediaArea;
         }
 
-        if (callbacks.mediaPlayerVisible()) {
-            topMusicComponentView = createTopComponentPage(createTopMusicPlayer());
-        }
+        topMusicComponentView = createTopComponentPage(createTopMusicPlayer());
         topNavigationComponentView = createTopComponentPage(createTopNavigationComponent());
         topTimerComponentView = createTopComponentPage(createTopTimerComponent(false));
         topStopwatchComponentView = createTopComponentPage(createTopTimerComponent(true));
@@ -435,12 +433,7 @@ public final class TopPanelController implements AutoCloseable {
     }
 
     public boolean shouldShowTopComponentArea() {
-        return callbacks.pipActive()
-                || callbacks.mediaPlayerVisible()
-                || activeNavigationState != null
-                || activeTimerComponent != null
-                || activeStopwatchComponent != null
-                || activeRecordingComponent != null;
+        return callbacks.topComponentsVisible();
     }
 
     private View createTopNavigationComponent() {
@@ -762,9 +755,9 @@ public final class TopPanelController implements AutoCloseable {
         activeRecordingComponent = nextRecordingComponent;
         syncTimerMillisecondTicker();
         boolean nowVisible = shouldShowTopComponentArea();
-        boolean missingVisibleContent = callbacks.pipActive()
+        boolean missingVisibleContent = nowVisible && (callbacks.pipActive()
                 ? topPipDockSlot == null
-                : nowVisible && topComponentPager == null;
+                : topComponentPager == null);
         if (wasVisible != nowVisible || missingVisibleContent) {
             rebuildTopChromeContent();
             return;
@@ -803,7 +796,7 @@ public final class TopPanelController implements AutoCloseable {
         long currentPageId = adapter.getPageId(pager.getCurrentItem());
         int previousPosition = pager.getCurrentItem();
         List<TopComponentPage> availablePages = new ArrayList<>();
-        if (callbacks.mediaPlayerVisible() && topMusicComponentView != null) {
+        if (callbacks.topComponentsVisible() && topMusicComponentView != null) {
             availablePages.add(new TopComponentPage(
                     TOP_COMPONENT_MEDIA_ID, topMusicComponentView));
         }
@@ -1225,10 +1218,6 @@ public final class TopPanelController implements AutoCloseable {
 
     public FrameLayout getPipDockSlot() {
         return topPipDockSlot;
-    }
-
-    public void removeMediaPage() {
-        topComponentPageOrder.remove(Long.valueOf(TOP_COMPONENT_MEDIA_ID));
     }
 
     @Override public void close() {

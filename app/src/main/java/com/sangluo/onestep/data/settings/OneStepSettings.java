@@ -42,30 +42,32 @@ public final class OneStepSettings {
     public final int topAppIconScalePct;
     public final int topAppStripSpacingScalePct;
     public final int topAppStripVerticalPaddingScalePct;
-    public final boolean mediaPlayerVisible;
+    public final boolean topComponentsVisible;
     public final boolean verticalWindowLayout;
     public final int sideWindowCount;
     public final int topNavVerticalMarginScalePct;
     public final int oneStepTriggerAreaScalePct;
     public final int cornerTriggerSensitivityPct;
+    public final boolean logRecordingEnabled;
 
     public OneStepSettings(int desktopGridRows, int desktopGridColumns,
                            int topAppIconScalePct, int topAppStripSpacingScalePct,
-                           int topAppStripVerticalPaddingScalePct, boolean mediaPlayerVisible,
+                           int topAppStripVerticalPaddingScalePct, boolean topComponentsVisible,
                            boolean verticalWindowLayout, int sideWindowCount,
                            int topNavVerticalMarginScalePct, int oneStepTriggerAreaScalePct,
-                           int cornerTriggerSensitivityPct) {
+                           int cornerTriggerSensitivityPct, boolean logRecordingEnabled) {
         this.desktopGridRows = desktopGridRows;
         this.desktopGridColumns = desktopGridColumns;
         this.topAppIconScalePct = topAppIconScalePct;
         this.topAppStripSpacingScalePct = topAppStripSpacingScalePct;
         this.topAppStripVerticalPaddingScalePct = topAppStripVerticalPaddingScalePct;
-        this.mediaPlayerVisible = mediaPlayerVisible;
+        this.topComponentsVisible = topComponentsVisible;
         this.verticalWindowLayout = verticalWindowLayout;
         this.sideWindowCount = sideWindowCount;
         this.topNavVerticalMarginScalePct = topNavVerticalMarginScalePct;
         this.oneStepTriggerAreaScalePct = oneStepTriggerAreaScalePct;
         this.cornerTriggerSensitivityPct = cornerTriggerSensitivityPct;
+        this.logRecordingEnabled = logRecordingEnabled;
     }
 
     public static int sanitizeGridRows(int rows) {
