@@ -3,7 +3,6 @@ package com.sangluo.onestep.feature.embedding;
 import android.app.ActivityOptions;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.text.TextUtils;
@@ -26,7 +25,6 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
         void close(String packageName, Runnable onClosed);
     }
 
-    private final PackageManager packageManager;
     private final Context context;
     private final BooleanSupplier startAllowed;
     private final AppCloser appCloser;
@@ -39,7 +37,6 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
     public HiddenActivityViewHost(Context context, BooleanSupplier startAllowed,
                                   AppCloser appCloser) {
         this.context = context;
-        packageManager = context.getPackageManager();
         this.startAllowed = startAllowed;
         this.appCloser = appCloser;
         initialize(context);
@@ -65,13 +62,7 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
             return false;
         }
 
-        Intent launchIntent = packageManager.getLaunchIntentForPackage(app.packageName);
-        if (launchIntent == null) {
-            unavailableReason = "找不到启动入口";
-            return false;
-        }
-
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent launchIntent = app.createLaunchIntent();
         Object[] args = makeStartArguments(startActivityMethod.getParameterTypes(), launchIntent);
         if (args == null) {
             unavailableReason = "ActivityView 启动参数不匹配";

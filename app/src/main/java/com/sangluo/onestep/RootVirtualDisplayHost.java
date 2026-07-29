@@ -540,11 +540,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return false;
         }
 
-        Intent launcherIntent = packageManager.getLaunchIntentForPackage(app.packageName);
-        if (launcherIntent == null) {
-            unavailableReason = "找不到启动入口";
-            return false;
-        }
+        Intent launcherIntent = app.createLaunchIntent();
         if (displayId < 0) {
             int viewWidth = surfaceView.getWidth();
             int viewHeight = surfaceView.getHeight();

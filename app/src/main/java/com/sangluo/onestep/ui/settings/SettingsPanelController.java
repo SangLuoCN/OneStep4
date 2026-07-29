@@ -93,6 +93,7 @@ public final class SettingsPanelController {
         void exportSessionLog();
         boolean rootAuthorizationGranted();
         void requestRootAuthorization(RootAuthorizationResultCallback callback);
+        boolean openKernelSuManager();
         void loadZygiskHookSettings(HookSettingsResultCallback callback);
         void saveZygiskHookSettings(boolean secureWindowEnabled,
                                     boolean statusBarOverlayEnabled,
@@ -105,7 +106,13 @@ public final class SettingsPanelController {
     }
 
     public interface RootAuthorizationResultCallback {
-        void onResult(boolean granted);
+        void onResult(RootAuthorizationResult result);
+    }
+
+    public enum RootAuthorizationResult {
+        GRANTED,
+        KERNEL_SU_ACTION_REQUIRED,
+        FAILED
     }
 
     private static final String BILIBILI_PROFILE_URL = "https://space.bilibili.com/1037274194";
@@ -1129,19 +1136,40 @@ public final class SettingsPanelController {
         rootAuthorizationGranted = false;
         rootAuthorizationRequestInFlight = true;
         refreshRootAuthorizationView();
-        callbacks.requestRootAuthorization(granted -> activity.runOnUiThread(() -> {
+        callbacks.requestRootAuthorization(result -> activity.runOnUiThread(() -> {
             rootAuthorizationRequestInFlight = false;
-            rootAuthorizationGranted = granted;
+            rootAuthorizationGranted = result == RootAuthorizationResult.GRANTED;
             refreshRootAuthorizationView();
-            if (granted) {
+            if (rootAuthorizationGranted) {
                 Toast.makeText(activity, "ROOT 权限已授权", Toast.LENGTH_SHORT).show();
                 loadZygiskHookSettings();
+            } else if (result == RootAuthorizationResult.KERNEL_SU_ACTION_REQUIRED) {
+                hookSettingsNeedsRoot = true;
+                refreshZygiskHookSettingsViews();
+                showKernelSuAuthorizationDialog();
             } else {
                 hookSettingsNeedsRoot = true;
                 refreshZygiskHookSettingsViews();
                 Toast.makeText(activity, "ROOT 权限请求失败", Toast.LENGTH_SHORT).show();
             }
         }));
+    }
+
+    private void showKernelSuAuthorizationDialog() {
+        new AlertDialog.Builder(activity)
+                .setTitle("在 KernelSU 中授权")
+                .setMessage("KernelSU 不支持弹窗授权。请打开 KernelSU 后进入“超级用户”，"
+                        + "搜索“One Step”并打开“超级用户”开关。"
+                        + "授权后请清除后台并重新打开 OneStep。"
+                        + "若仍失败，请确认 KernelSU 设置中的“传统 SU 命令支持”已启用。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("打开 KernelSU", (dialog, which) -> {
+                    if (!callbacks.openKernelSuManager()) {
+                        Toast.makeText(activity, "无法打开 KernelSU 管理器",
+                                Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .show();
     }
 
     private void refreshRootAuthorizationView() {

@@ -65,6 +65,7 @@ import com.sangluo.onestep.system.root.ShellCommandResult;
 import com.sangluo.onestep.system.root.ZygiskHookConfig;
 import com.sangluo.onestep.system.ui.SystemUiController;
 import com.sangluo.onestep.ui.background.BlurredBackgroundView;
+import com.sangluo.onestep.ui.gesture.CornerTriggerGesturePolicy;
 import com.sangluo.onestep.ui.settings.SettingsPanelController;
 import com.sangluo.onestep.ui.topbar.TopPanelController;
 import com.sangluo.onestep.ui.widget.AppShortcutView;
@@ -76,7 +77,6 @@ import com.sangluo.onestep.ui.window.SideWindowInputShieldController;
 import com.sangluo.onestep.ui.window.WindowAnimationController;
 import com.sangluo.onestep.ui.window.WindowLayoutCalculator;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
@@ -140,6 +140,10 @@ public class MainActivity extends Activity {
     private static final long SUPERSEDED_DISPLAY_RELEASE_GRACE_MS = 5000L;
     private static final int TOP_BAR_HEIGHT_DEFAULT_DP = 74;
     private static final int MEDIA_ROOT_COMMAND_TIMEOUT_SECONDS = 8;
+    private static final String[] KERNEL_SU_MANAGER_PACKAGES = {
+            "me.weishu.kernelsu",
+            "com.rifsxd.ksunext"
+    };
     private static final int EMBEDDED_START_RETRY_MS = 25;
     private static final int EMBEDDED_START_MAX_RETRIES = 120;
     private static final int WINDOW_FRAME_SWITCH_ANIMATION_MS = 200;
@@ -188,7 +192,6 @@ public class MainActivity extends Activity {
 
     private List<LauncherApp> launcherApps = Collections.emptyList();
     private LauncherAppRepository launcherAppRepository;
-    private Boolean suCommandAvailable;
     private final PersistentRootShell persistentRootShell = new PersistentRootShell();
     private boolean embeddingHintShown;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -657,7 +660,7 @@ public class MainActivity extends Activity {
             for (int i = 0; i < launcherApps.size(); i++) {
                 LauncherApp oldApp = launcherApps.get(i);
                 LauncherApp newApp = refreshedApps.get(i);
-                if (!TextUtils.equals(oldApp.packageName, newApp.packageName)
+                if (!oldApp.componentName.equals(newApp.componentName)
                         || !TextUtils.equals(oldApp.label, newApp.label)) {
                     structureChanged = true;
                     break;
@@ -666,14 +669,23 @@ public class MainActivity extends Activity {
         }
 
         launcherApps = refreshedApps;
+        Map<String, LauncherApp> refreshedByComponent = new HashMap<>();
         Map<String, LauncherApp> refreshedByPackage = new HashMap<>();
         for (LauncherApp app : refreshedApps) {
-            refreshedByPackage.put(app.packageName, app);
+            refreshedByComponent.put(app.componentKey(), app);
+            refreshedByPackage.putIfAbsent(app.packageName, app);
         }
         for (int slot = 0; slot < windowApps.length; slot++) {
             LauncherApp current = windowApps[slot];
-            if (current != null && refreshedByPackage.containsKey(current.packageName)) {
-                windowApps[slot] = refreshedByPackage.get(current.packageName);
+            if (current == null) {
+                continue;
+            }
+            LauncherApp refreshed = refreshedByComponent.get(current.componentKey());
+            if (refreshed == null) {
+                refreshed = refreshedByPackage.get(current.packageName);
+            }
+            if (refreshed != null) {
+                windowApps[slot] = refreshed;
             }
         }
 
@@ -681,7 +693,9 @@ public class MainActivity extends Activity {
             rebuildTopChromeContent();
         } else {
             for (AppShortcutView shortcut : shortcutViews) {
-                LauncherApp app = refreshedByPackage.get(shortcut.getPackageNameValue());
+                ComponentName componentName = shortcut.getComponentNameValue();
+                LauncherApp app = componentName == null ? null
+                        : refreshedByComponent.get(componentName.flattenToString());
                 if (app != null) {
                     shortcut.bind(app);
                 }
@@ -1601,7 +1615,7 @@ public class MainActivity extends Activity {
         final float[] downY = new float[1];
         final boolean[] triggered = new boolean[1];
         trigger.setOnTouchListener((view, event) -> {
-            if (multiWindowMode || isInternalSettingsVisible()) {
+            if (multiWindowMode) {
                 return false;
             }
             switch (event.getActionMasked()) {
@@ -1614,10 +1628,8 @@ public class MainActivity extends Activity {
                     float dx = event.getRawX() - downX[0];
                     float dy = event.getRawY() - downY[0];
                     int triggerDistance = getCornerTriggerDistancePx();
-                    boolean matched = left
-                            ? dx > triggerDistance && dy > triggerDistance
-                            : dx < -triggerDistance && dy > triggerDistance;
-                    if (!triggered[0] && matched && Math.abs(dx) > Math.abs(dy) * 0.42f) {
+                    if (!triggered[0] && CornerTriggerGesturePolicy.matches(
+                            left, dx, dy, triggerDistance)) {
                         triggered[0] = true;
                         enterOneStepMode(left);
                     }
@@ -1662,6 +1674,7 @@ public class MainActivity extends Activity {
         params.width = size;
         params.height = size;
         params.gravity = gravity;
+        params.topMargin = multiWindowMode ? 0 : getStatusBarHeight();
         view.setLayoutParams(params);
     }
 
@@ -1687,14 +1700,24 @@ public class MainActivity extends Activity {
 
     private void updateCornerTriggers() {
         int visibility = multiWindowMode ? View.GONE : View.VISIBLE;
+        updateCornerTriggerBounds();
         if (statusGestureShield != null) {
             statusGestureShield.setVisibility(View.GONE);
         }
         if (leftCornerTrigger != null) {
             leftCornerTrigger.setVisibility(visibility);
+            if (visibility == View.VISIBLE) {
+                leftCornerTrigger.bringToFront();
+            }
         }
         if (rightCornerTrigger != null) {
             rightCornerTrigger.setVisibility(visibility);
+            if (visibility == View.VISIBLE) {
+                rightCornerTrigger.bringToFront();
+            }
+        }
+        if (rootContainer != null) {
+            rootContainer.invalidate();
         }
     }
 
@@ -1940,7 +1963,7 @@ public class MainActivity extends Activity {
             AppShortcutView shortcut = new AppShortcutView(this, false, iconSizeDp, 0);
             shortcut.setStatusIndicatorEnabled(true);
             shortcut.bind(app);
-            shortcut.setOnClickListener(v -> addOrFocusLatestApp(app.packageName));
+            shortcut.setOnClickListener(v -> addOrFocusApp(app));
             int cellWidthDp = getTopAppStripCellWidthDp(iconSizeDp);
             LinearLayout.LayoutParams shortcutLp = new LinearLayout.LayoutParams(dp(cellWidthDp),
                     ViewGroup.LayoutParams.MATCH_PARENT);
@@ -2071,7 +2094,7 @@ public class MainActivity extends Activity {
                 AppShortcutView shortcut = new AppShortcutView(this, true,
                         getDesktopGridIconSizeDp(), getDesktopGridTextSizeDp());
                 shortcut.bind(app);
-                shortcut.setOnClickListener(v -> addOrFocusLatestApp(app.packageName));
+                shortcut.setOnClickListener(v -> addOrFocusApp(app));
                 cell.addView(shortcut, matchFrame());
                 shortcutViews.add(shortcut);
             }
@@ -2198,6 +2221,9 @@ public class MainActivity extends Activity {
             @Override public void requestRootAuthorization(
                     SettingsPanelController.RootAuthorizationResultCallback callback) {
                 MainActivity.this.requestRootAuthorization(callback);
+            }
+            @Override public boolean openKernelSuManager() {
+                return MainActivity.this.openKernelSuManager();
             }
             @Override public void loadZygiskHookSettings(
                     SettingsPanelController.HookSettingsResultCallback callback) {
@@ -2816,7 +2842,7 @@ public class MainActivity extends Activity {
                 LauncherApp app = launcherApps.get(appIndex);
                 AppShortcutView shortcut = new AppShortcutView(this, showLabel, iconSizeDp, textSizeDp);
                 shortcut.bind(app);
-                shortcut.setOnClickListener(v -> addOrFocusLatestApp(app.packageName));
+                shortcut.setOnClickListener(v -> addOrFocusApp(app));
                 cell.addView(shortcut, matchFrame());
                 shortcutViews.add(shortcut);
             }
@@ -4645,14 +4671,9 @@ public class MainActivity extends Activity {
 
     private ShellCommandResult runMainPrivilegedCommand(String command, String description,
                                                        boolean logOutput) {
-        if (mainHasSuCommand()) {
-            long startedAt = System.currentTimeMillis();
-            ShellCommandResult result = runMainRootCommand(command);
-            logMainShellResult(result, description, startedAt, logOutput);
-            return result;
-        }
-        ShellCommandResult result = new ShellCommandResult(-1, "su unavailable");
-        logMainShellResult(result, description, System.currentTimeMillis(), logOutput);
+        long startedAt = System.currentTimeMillis();
+        ShellCommandResult result = runMainRootCommand(command);
+        logMainShellResult(result, description, startedAt, logOutput);
         return result;
     }
 
@@ -4679,9 +4700,14 @@ public class MainActivity extends Activity {
                     "id -u", "request ROOT authorization", false);
             boolean granted = result.isSuccess()
                     && outputContainsLine(result.output, "0");
+            SettingsPanelController.RootAuthorizationResult authorizationResult = granted
+                    ? SettingsPanelController.RootAuthorizationResult.GRANTED
+                    : findKernelSuManagerLaunchIntent() != null
+                    ? SettingsPanelController.RootAuthorizationResult.KERNEL_SU_ACTION_REQUIRED
+                    : SettingsPanelController.RootAuthorizationResult.FAILED;
             mainHandler.post(() -> {
                 if (!activityDestroyed) {
-                    callback.onResult(granted);
+                    callback.onResult(authorizationResult);
                 }
             });
         });
@@ -4724,66 +4750,34 @@ public class MainActivity extends Activity {
                 "svc power reboot || reboot", "reboot for Zygisk hook settings", false));
     }
 
-    private boolean mainHasSuCommand() {
-        if (suCommandAvailable != null) {
-            return suCommandAvailable;
-        }
-        String[] knownPaths = {
-                "/system/bin/su",
-                "/system/xbin/su",
-                "/product/bin/su",
-                "/sbin/su",
-                "/su/bin/su",
-                "/debug_ramdisk/su"
-        };
-        for (String path : knownPaths) {
-            if (new File(path).exists()) {
-                suCommandAvailable = true;
-                return true;
-            }
-        }
-
-        Process process = null;
-        try {
-            process = new ProcessBuilder("sh", "-c", "command -v su")
-                    .redirectErrorStream(true)
-                    .start();
-            boolean finished = waitForProcess(process, 600L);
-            suCommandAvailable = finished && process.exitValue() == 0;
-            return suCommandAvailable;
-        } catch (IOException | InterruptedException | RuntimeException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            suCommandAvailable = false;
-            return false;
-        } finally {
-            if (process != null) {
-                process.destroy();
-            }
-        }
-    }
-
     private ShellCommandResult runMainRootCommand(String command) {
         return persistentRootShell.run(command, MEDIA_ROOT_COMMAND_TIMEOUT_SECONDS);
     }
 
-    private static boolean waitForProcess(Process process, long timeoutMs)
-            throws InterruptedException {
-        long deadline = SystemClock.uptimeMillis() + Math.max(0L, timeoutMs);
-        while (SystemClock.uptimeMillis() <= deadline) {
-            try {
-                process.exitValue();
-                return true;
-            } catch (IllegalThreadStateException running) {
-                long remaining = deadline - SystemClock.uptimeMillis();
-                if (remaining <= 0L) {
-                    return false;
-                }
-                Thread.sleep(Math.min(20L, remaining));
+    private Intent findKernelSuManagerLaunchIntent() {
+        PackageManager packageManager = getPackageManager();
+        for (String packageName : KERNEL_SU_MANAGER_PACKAGES) {
+            Intent launchIntent = packageManager.getLaunchIntentForPackage(packageName);
+            if (launchIntent != null) {
+                return launchIntent;
             }
         }
-        return false;
+        return null;
+    }
+
+    private boolean openKernelSuManager() {
+        Intent launchIntent = findKernelSuManagerLaunchIntent();
+        if (launchIntent == null) {
+            return false;
+        }
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(launchIntent);
+            return true;
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Log.w(TAG, "Unable to open KernelSU manager", e);
+            return false;
+        }
     }
 
     private void logMainShellResult(ShellCommandResult result, String description, long startedAt,
