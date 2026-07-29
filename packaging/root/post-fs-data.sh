@@ -5,12 +5,31 @@ OVERLAY_PATH="/system/etc/onestep/OneStepStatusBarZeroOverlay.apk"
 IDMAP_PATH="/data/resource-cache/system@etc@onestep@OneStepStatusBarZeroOverlay.apk@idmap"
 TARGET_PATH="/system/framework/framework-res.apk"
 LOG_FILE="$MODDIR/statusbar-overlay.log"
+ZYGISK_DIR="$MODDIR/zygisk"
+DISABLE_STATUS_BAR_HOOK="$MODDIR/hook-config/disable-status-bar-overlay"
 
 write_log() {
   message="$1"
   echo "$(date '+%Y-%m-%d %H:%M:%S') $message" >>"$LOG_FILE"
   log -t OneStepStatusBarOverlay "$message" >/dev/null 2>&1 || true
 }
+
+zygisk_payload_active() {
+  [ -f "$ZYGISK_DIR/arm64-v8a.so" ] \
+    && [ -f "$ZYGISK_DIR/armeabi-v7a.so" ]
+}
+
+if [ -e "$DISABLE_STATUS_BAR_HOOK" ]; then
+  rm -f "$IDMAP_PATH"
+  write_log "Status-bar hook disabled by user; overlay disabled"
+  exit 0
+fi
+
+if ! zygisk_payload_active; then
+  rm -f "$IDMAP_PATH"
+  write_log "Zygisk payload inactive; status-bar overlay disabled"
+  exit 0
+fi
 
 if [ ! -f "$OVERLAY_PATH" ] || [ ! -f "$TARGET_PATH" ]; then
   write_log "Overlay or framework resources missing; status-bar overlay disabled"

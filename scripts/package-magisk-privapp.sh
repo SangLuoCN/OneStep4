@@ -86,6 +86,7 @@ cp "$ROOT_DIR/packaging/magisk/customize.sh" "$WORK_DIR/customize.sh"
 cp "$ROOT_DIR/packaging/magisk/service.sh" "$WORK_DIR/service.sh"
 cp "$ROOT_DIR/packaging/magisk/zygisk-toggle.sh" "$WORK_DIR/zygisk-toggle.sh"
 cp "$ROOT_DIR/packaging/magisk/uninstall.sh" "$WORK_DIR/uninstall.sh"
+cp "$ROOT_DIR/packaging/root/action.sh" "$WORK_DIR/action.sh"
 cp "$ROOT_DIR/packaging/root/post-fs-data.sh" \
     "$WORK_DIR/statusbar-post-fs-data.sh"
 cp "$ROOT_DIR/packaging/magisk/sepolicy.rule" "$WORK_DIR/sepolicy.rule"
@@ -126,6 +127,7 @@ chmod 0755 "$WORK_DIR/customize.sh"
 chmod 0755 "$WORK_DIR/service.sh"
 chmod 0755 "$WORK_DIR/zygisk-toggle.sh"
 chmod 0755 "$WORK_DIR/uninstall.sh"
+chmod 0755 "$WORK_DIR/action.sh"
 chmod 0755 "$WORK_DIR/statusbar-post-fs-data.sh"
 chmod 0644 "$WORK_DIR/sepolicy.rule"
 chmod 0644 "$WORK_DIR/system/priv-app/$SYSTEM_APP_DIR/OneStep4.apk"
@@ -156,6 +158,7 @@ unzip -qq "$OUT_ZIP" \
     "zygisk-runtime/aliuhook.dex" \
     "zygisk-toggle.sh" \
     "uninstall.sh" \
+    "action.sh" \
     "statusbar-post-fs-data.sh" \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk" \
     -d "$VERIFY_DIR"
@@ -170,6 +173,7 @@ for required_entry in \
     "zygisk-runtime/aliuhook.dex" \
     "zygisk-toggle.sh" \
     "uninstall.sh" \
+    "action.sh" \
     "statusbar-post-fs-data.sh" \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk"; do
     if [[ ! -s "$VERIFY_DIR/$required_entry" ]]; then

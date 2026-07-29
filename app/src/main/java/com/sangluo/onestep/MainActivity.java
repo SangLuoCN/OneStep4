@@ -62,6 +62,7 @@ import com.sangluo.onestep.model.LauncherApp;
 import com.sangluo.onestep.model.PinnedTaskState;
 import com.sangluo.onestep.system.root.PersistentRootShell;
 import com.sangluo.onestep.system.root.ShellCommandResult;
+import com.sangluo.onestep.system.root.ZygiskHookConfig;
 import com.sangluo.onestep.system.ui.SystemUiController;
 import com.sangluo.onestep.ui.background.BlurredBackgroundView;
 import com.sangluo.onestep.ui.settings.SettingsPanelController;
@@ -192,6 +193,7 @@ public class MainActivity extends Activity {
     private boolean embeddingHintShown;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService mediaRootExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService hookSettingsExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService displayImePolicyExecutor =
             Executors.newSingleThreadExecutor();
     private final ExecutorService sensorPolicyExecutor =
@@ -968,6 +970,7 @@ public class MainActivity extends Activity {
         if (nonDefaultDisplayHomeRelay) {
             launcherIconExecutor.shutdownNow();
             mediaRootExecutor.shutdownNow();
+            hookSettingsExecutor.shutdownNow();
             visualEffectExecutor.shutdownNow();
             wallpaperExecutor.shutdownNow();
             pipDockExecutor.shutdownNow();
@@ -1009,6 +1012,7 @@ public class MainActivity extends Activity {
             topPanelController = null;
         }
         mediaRootExecutor.shutdownNow();
+        hookSettingsExecutor.shutdownNow();
         launcherIconExecutor.shutdownNow();
         visualEffectExecutor.shutdownNow();
         wallpaperExecutor.shutdownNow();
@@ -2187,6 +2191,27 @@ public class MainActivity extends Activity {
             }
             @Override public void exportSessionLog() {
                 MainActivity.this.exportSessionLog();
+            }
+            @Override public boolean rootAuthorizationGranted() {
+                return persistentRootShell.hasConfirmedRootAccess();
+            }
+            @Override public void requestRootAuthorization(
+                    SettingsPanelController.RootAuthorizationResultCallback callback) {
+                MainActivity.this.requestRootAuthorization(callback);
+            }
+            @Override public void loadZygiskHookSettings(
+                    SettingsPanelController.HookSettingsResultCallback callback) {
+                MainActivity.this.loadZygiskHookSettings(callback);
+            }
+            @Override public void saveZygiskHookSettings(
+                    boolean secureWindowEnabled,
+                    boolean statusBarOverlayEnabled,
+                    SettingsPanelController.HookSettingsResultCallback callback) {
+                MainActivity.this.saveZygiskHookSettings(
+                        secureWindowEnabled, statusBarOverlayEnabled, callback);
+            }
+            @Override public void rebootDevice() {
+                MainActivity.this.rebootDeviceForHookSettings();
             }
         });
     }
@@ -4629,6 +4654,74 @@ public class MainActivity extends Activity {
         ShellCommandResult result = new ShellCommandResult(-1, "su unavailable");
         logMainShellResult(result, description, System.currentTimeMillis(), logOutput);
         return result;
+    }
+
+    private void loadZygiskHookSettings(
+            SettingsPanelController.HookSettingsResultCallback callback) {
+        hookSettingsExecutor.execute(() -> {
+            ShellCommandResult result = runMainPrivilegedCommand(
+                    ZygiskHookConfig.readCommand(), "read Zygisk hook settings", false);
+            ZygiskHookConfig.State state = result.isSuccess()
+                    ? ZygiskHookConfig.parse(result.output) : null;
+            String error = result.isSuccess() ? "Hook 设置数据无效" : "无法读取 Hook 设置";
+            mainHandler.post(() -> {
+                if (!activityDestroyed) {
+                    callback.onResult(state, state == null ? error : null);
+                }
+            });
+        });
+    }
+
+    private void requestRootAuthorization(
+            SettingsPanelController.RootAuthorizationResultCallback callback) {
+        hookSettingsExecutor.execute(() -> {
+            ShellCommandResult result = runMainPrivilegedCommand(
+                    "id -u", "request ROOT authorization", false);
+            boolean granted = result.isSuccess()
+                    && outputContainsLine(result.output, "0");
+            mainHandler.post(() -> {
+                if (!activityDestroyed) {
+                    callback.onResult(granted);
+                }
+            });
+        });
+    }
+
+    private static boolean outputContainsLine(String output, String expected) {
+        if (output == null) {
+            return false;
+        }
+        for (String line : output.split("\\n")) {
+            if (expected.equals(line.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void saveZygiskHookSettings(
+            boolean secureWindowEnabled,
+            boolean statusBarOverlayEnabled,
+            SettingsPanelController.HookSettingsResultCallback callback) {
+        hookSettingsExecutor.execute(() -> {
+            ShellCommandResult result = runMainPrivilegedCommand(
+                    ZygiskHookConfig.writeCommand(
+                            secureWindowEnabled, statusBarOverlayEnabled),
+                    "save Zygisk hook settings", false);
+            ZygiskHookConfig.State state = result.isSuccess()
+                    ? ZygiskHookConfig.parse(result.output) : null;
+            String error = result.isSuccess() ? "Hook 设置数据无效" : "无法保存 Hook 设置";
+            mainHandler.post(() -> {
+                if (!activityDestroyed) {
+                    callback.onResult(state, state == null ? error : null);
+                }
+            });
+        });
+    }
+
+    private void rebootDeviceForHookSettings() {
+        hookSettingsExecutor.execute(() -> runMainPrivilegedCommand(
+                "svc power reboot || reboot", "reboot for Zygisk hook settings", false));
     }
 
     private boolean mainHasSuCommand() {

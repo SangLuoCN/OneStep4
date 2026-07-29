@@ -161,7 +161,7 @@ restore_for_user() {
 
 write_log "Waiting for Android boot completion"
 if [ -x "$MODDIR/statusbar-post-fs-data.sh" ]; then
-  write_log "Generating status-bar idmap after module mounts are available"
+  write_log "Checking optional Zygisk status-bar overlay"
   "$MODDIR/statusbar-post-fs-data.sh"
 fi
 

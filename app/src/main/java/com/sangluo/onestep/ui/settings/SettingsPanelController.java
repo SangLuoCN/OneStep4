@@ -30,6 +30,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.sangluo.onestep.R;
+import com.sangluo.onestep.system.root.ZygiskHookConfig;
 import com.sangluo.onestep.ui.widget.AspectRatioImageView;
 import com.sangluo.onestep.ui.widget.FixedViewportFrameLayout;
 import com.sangluo.onestep.ui.window.OneStepWindowView;
@@ -90,6 +91,21 @@ public final class SettingsPanelController {
         void saveLogRecordingEnabled(boolean enabled);
         void saveSideWindowCount(int count);
         void exportSessionLog();
+        boolean rootAuthorizationGranted();
+        void requestRootAuthorization(RootAuthorizationResultCallback callback);
+        void loadZygiskHookSettings(HookSettingsResultCallback callback);
+        void saveZygiskHookSettings(boolean secureWindowEnabled,
+                                    boolean statusBarOverlayEnabled,
+                                    HookSettingsResultCallback callback);
+        void rebootDevice();
+    }
+
+    public interface HookSettingsResultCallback {
+        void onResult(ZygiskHookConfig.State state, String error);
+    }
+
+    public interface RootAuthorizationResultCallback {
+        void onResult(boolean granted);
     }
 
     private static final String BILIBILI_PROFILE_URL = "https://space.bilibili.com/1037274194";
@@ -100,6 +116,7 @@ public final class SettingsPanelController {
     private final Callbacks callbacks;
     private FrameLayout internalSettingsPage;
     private FrameLayout legalNoticesPage;
+    private LinearLayout rootAuthorizationItem;
     private ImageView settingsBackgroundPreview;
     private TextView gridLayoutValueView;
     private TextView topAppIconSizeValueView;
@@ -115,6 +132,13 @@ public final class SettingsPanelController {
     private Switch topComponentsVisibleSwitch;
     private Switch verticalWindowLayoutSwitch;
     private Switch logRecordingEnabledSwitch;
+    private TextView rootAuthorizationValueView;
+    private TextView zygiskHookStatusValueView;
+    private TextView secureWindowHookValueView;
+    private TextView statusBarOverlayHookValueView;
+    private Switch secureWindowHookSwitch;
+    private Switch statusBarOverlayHookSwitch;
+    private LinearLayout applyHookSettingsItem;
     private LinearLayout exportLogItem;
     private int desktopGridRows;
     private int desktopGridColumns;
@@ -127,6 +151,18 @@ public final class SettingsPanelController {
     private boolean topComponentsVisible;
     private boolean verticalWindowLayout;
     private boolean logRecordingEnabled;
+    private boolean secureWindowHookEnabled = true;
+    private boolean statusBarOverlayHookEnabled = true;
+    private boolean zygiskModuleInstalled;
+    private boolean zygiskPayloadActive;
+    private boolean hookSettingsLoaded;
+    private boolean hookSettingsSaving;
+    private boolean updatingHookSwitches;
+    private boolean hookSettingsReadFailed;
+    private boolean hookSettingsNeedsRoot;
+    private boolean rootAuthorizationGranted;
+    private boolean rootAuthorizationRequestInFlight;
+    private int hookSettingsRequestGeneration;
     private int sideWindowCount;
 
     public SettingsPanelController(Activity activity, Callbacks callbacks) {
@@ -157,6 +193,7 @@ public final class SettingsPanelController {
             targetWindowView.showInternalOverlay(internalSettingsPage);
         }
         refresh();
+        prepareZygiskHookSettings();
         internalSettingsPage.bringToFront();
     }
 
@@ -331,6 +368,58 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
         topComponentsVisibleLp.topMargin = dp(12);
         list.addView(topComponentsVisibleItem, topComponentsVisibleLp);
+
+        rootAuthorizationItem = createSettingsItem(
+                "ROOT 权限", "必需授权才可正常使用", "未授权");
+        rootAuthorizationValueView = (TextView) rootAuthorizationItem.getTag();
+        rootAuthorizationItem.setOnClickListener(v -> requestRootAuthorization());
+        LinearLayout.LayoutParams rootAuthorizationLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(88));
+        rootAuthorizationLp.topMargin = dp(12);
+        list.addView(rootAuthorizationItem, rootAuthorizationLp);
+
+        LinearLayout zygiskHookStatusItem = createSettingsItem(
+                "Zygisk状态", "开启后才可使用增强功能", "读取中");
+        zygiskHookStatusValueView = (TextView) zygiskHookStatusItem.getTag();
+        LinearLayout.LayoutParams zygiskStatusLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(88));
+        zygiskStatusLp.topMargin = dp(12);
+        list.addView(zygiskHookStatusItem, zygiskStatusLp);
+
+        LinearLayout secureWindowHookItem = createSwitchSettingsItem(
+                "隐私窗口显示",
+                "开启可正常显示隐私窗口（必需开启Zygisk）",
+                secureWindowHookEnabled,
+                enabled -> updateZygiskHookSettings(
+                        enabled, statusBarOverlayHookEnabled));
+        secureWindowHookValueView = (TextView) secureWindowHookItem.getTag();
+        secureWindowHookSwitch = findSwitchInItem(secureWindowHookItem);
+        LinearLayout.LayoutParams secureWindowHookLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
+        secureWindowHookLp.topMargin = dp(12);
+        list.addView(secureWindowHookItem, secureWindowHookLp);
+
+        LinearLayout statusBarOverlayHookItem = createSwitchSettingsItem(
+                "顶部间距去除",
+                "开启可去除应用界面顶部的间距（必需开启Zygisk），部分应用无效",
+                statusBarOverlayHookEnabled,
+                enabled -> updateZygiskHookSettings(
+                        secureWindowHookEnabled, enabled));
+        statusBarOverlayHookValueView = (TextView) statusBarOverlayHookItem.getTag();
+        statusBarOverlayHookSwitch = findSwitchInItem(statusBarOverlayHookItem);
+        LinearLayout.LayoutParams statusBarOverlayHookLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
+        statusBarOverlayHookLp.topMargin = dp(12);
+        list.addView(statusBarOverlayHookItem, statusBarOverlayHookLp);
+
+        applyHookSettingsItem = createSettingsItem("应用 Hook 设置", "重启");
+        applyHookSettingsItem.setOnClickListener(v -> showHookSettingsRebootDialog());
+        LinearLayout.LayoutParams applyHookSettingsLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
+        applyHookSettingsLp.topMargin = dp(12);
+        list.addView(applyHookSettingsItem, applyHookSettingsLp);
+        refreshRootAuthorizationView();
+        refreshZygiskHookSettingsViews();
 
         LinearLayout legalNoticesItem = createSettingsItem("开源许可与第三方声明", "查看");
         legalNoticesItem.setOnClickListener(v -> showLegalNoticesPage());
@@ -671,20 +760,20 @@ public final class SettingsPanelController {
     }
 
     private LinearLayout createSettingsItem(String titleText, String valueText) {
+        return createSettingsItem(titleText, null, valueText);
+    }
+
+    private LinearLayout createSettingsItem(String titleText, String subtitleText,
+                                            String valueText) {
         LinearLayout item = new LinearLayout(activity);
         item.setOrientation(LinearLayout.HORIZONTAL);
         item.setGravity(Gravity.CENTER_VERTICAL);
         item.setPadding(dp(16), dp(12), dp(16), dp(12));
         item.setBackground(makePanelBackground(Color.WHITE, 0x00000000, dp(6)));
 
-        TextView title = new TextView(activity);
-        title.setText(titleText);
-        title.setTextColor(0xff222222);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setSingleLine(true);
-        setDpTextSize(title, 15);
-        item.addView(title, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        item.addView(createSettingsLabel(titleText, subtitleText),
+                new LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView value = new TextView(activity);
         value.setText(valueText);
@@ -777,20 +866,21 @@ public final class SettingsPanelController {
 
     private LinearLayout createSwitchSettingsItem(String titleText, boolean checked,
                                                   SwitchSettingChangeListener listener) {
+        return createSwitchSettingsItem(titleText, null, checked, listener);
+    }
+
+    private LinearLayout createSwitchSettingsItem(String titleText, String subtitleText,
+                                                  boolean checked,
+                                                  SwitchSettingChangeListener listener) {
         LinearLayout item = new LinearLayout(activity);
         item.setOrientation(LinearLayout.HORIZONTAL);
         item.setGravity(Gravity.CENTER_VERTICAL);
         item.setPadding(dp(16), dp(12), dp(16), dp(12));
         item.setBackground(makePanelBackground(Color.WHITE, 0x00000000, dp(6)));
 
-        TextView title = new TextView(activity);
-        title.setText(titleText);
-        title.setTextColor(0xff222222);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        title.setSingleLine(true);
-        setDpTextSize(title, 15);
-        item.addView(title, new LinearLayout.LayoutParams(0,
-                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        item.addView(createSettingsLabel(titleText, subtitleText),
+                new LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
         TextView value = new TextView(activity);
         value.setText(formatSwitchValue(checked));
@@ -809,6 +899,36 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         item.setTag(value);
         return item;
+    }
+
+    private LinearLayout createSettingsLabel(String titleText, String subtitleText) {
+        LinearLayout label = new LinearLayout(activity);
+        label.setOrientation(LinearLayout.VERTICAL);
+        label.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView title = new TextView(activity);
+        title.setText(titleText);
+        title.setTextColor(0xff222222);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setSingleLine(true);
+        setDpTextSize(title, 15);
+        label.addView(title, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        if (!TextUtils.isEmpty(subtitleText)) {
+            TextView subtitle = new TextView(activity);
+            subtitle.setText(subtitleText);
+            subtitle.setTextColor(0xff888888);
+            subtitle.setMaxLines(3);
+            subtitle.setLineSpacing(0f, 1.08f);
+            setDpTextSize(subtitle, 10.5f);
+            LinearLayout.LayoutParams subtitleLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            subtitleLp.topMargin = dp(3);
+            label.addView(subtitle, subtitleLp);
+        }
+        return label;
     }
 
     private Switch findSwitchInItem(LinearLayout item) {
@@ -976,6 +1096,210 @@ public final class SettingsPanelController {
             topNavVerticalMarginValueView.setText(
                     formatPercentValue(topNavVerticalMarginScalePct));
         }
+        refreshRootAuthorizationView();
+        refreshZygiskHookSettingsViews();
+    }
+
+    private void prepareZygiskHookSettings() {
+        rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
+        refreshRootAuthorizationView();
+        if (rootAuthorizationGranted) {
+            loadZygiskHookSettings();
+            return;
+        }
+        ++hookSettingsRequestGeneration;
+        hookSettingsLoaded = false;
+        hookSettingsSaving = false;
+        hookSettingsReadFailed = false;
+        hookSettingsNeedsRoot = true;
+        refreshZygiskHookSettingsViews();
+    }
+
+    private void requestRootAuthorization() {
+        if (rootAuthorizationRequestInFlight) {
+            return;
+        }
+        if (callbacks.rootAuthorizationGranted()) {
+            rootAuthorizationGranted = true;
+            refreshRootAuthorizationView();
+            Toast.makeText(activity, "ROOT 权限已授权，无需重复授权",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        rootAuthorizationGranted = false;
+        rootAuthorizationRequestInFlight = true;
+        refreshRootAuthorizationView();
+        callbacks.requestRootAuthorization(granted -> activity.runOnUiThread(() -> {
+            rootAuthorizationRequestInFlight = false;
+            rootAuthorizationGranted = granted;
+            refreshRootAuthorizationView();
+            if (granted) {
+                Toast.makeText(activity, "ROOT 权限已授权", Toast.LENGTH_SHORT).show();
+                loadZygiskHookSettings();
+            } else {
+                hookSettingsNeedsRoot = true;
+                refreshZygiskHookSettingsViews();
+                Toast.makeText(activity, "ROOT 权限请求失败", Toast.LENGTH_SHORT).show();
+            }
+        }));
+    }
+
+    private void refreshRootAuthorizationView() {
+        if (rootAuthorizationValueView != null) {
+            rootAuthorizationValueView.setText(rootAuthorizationRequestInFlight
+                    ? "请求中" : rootAuthorizationGranted ? "已授权" : "未授权");
+        }
+        if (rootAuthorizationItem != null) {
+            rootAuthorizationItem.setEnabled(!rootAuthorizationRequestInFlight);
+            rootAuthorizationItem.setAlpha(rootAuthorizationRequestInFlight ? 0.5f : 1f);
+        }
+    }
+
+    private void loadZygiskHookSettings() {
+        int requestGeneration = ++hookSettingsRequestGeneration;
+        hookSettingsLoaded = false;
+        hookSettingsSaving = false;
+        hookSettingsReadFailed = false;
+        hookSettingsNeedsRoot = false;
+        refreshZygiskHookSettingsViews();
+        callbacks.loadZygiskHookSettings((state, error) -> activity.runOnUiThread(() -> {
+            if (requestGeneration != hookSettingsRequestGeneration) {
+                return;
+            }
+            if (state == null) {
+                hookSettingsLoaded = false;
+                hookSettingsSaving = false;
+                hookSettingsReadFailed = true;
+                rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
+                hookSettingsNeedsRoot = !rootAuthorizationGranted;
+                refreshRootAuthorizationView();
+                refreshZygiskHookSettingsViews();
+                Toast.makeText(activity, TextUtils.isEmpty(error)
+                                ? "读取 Hook 设置失败" : error,
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            applyZygiskHookState(state);
+            hookSettingsLoaded = true;
+            hookSettingsSaving = false;
+            hookSettingsReadFailed = false;
+            hookSettingsNeedsRoot = false;
+            refreshZygiskHookSettingsViews();
+        }));
+    }
+
+    private void updateZygiskHookSettings(boolean secureWindowEnabled,
+                                          boolean statusBarOverlayEnabled) {
+        if (updatingHookSwitches || !hookSettingsLoaded || hookSettingsSaving) {
+            return;
+        }
+        boolean previousSecureWindowEnabled = this.secureWindowHookEnabled;
+        boolean previousStatusBarOverlayEnabled = this.statusBarOverlayHookEnabled;
+        this.secureWindowHookEnabled = secureWindowEnabled;
+        this.statusBarOverlayHookEnabled = statusBarOverlayEnabled;
+        hookSettingsSaving = true;
+        int requestGeneration = ++hookSettingsRequestGeneration;
+        refreshZygiskHookSettingsViews();
+        callbacks.saveZygiskHookSettings(
+                secureWindowEnabled,
+                statusBarOverlayEnabled,
+                (state, error) -> activity.runOnUiThread(() -> {
+                    if (requestGeneration != hookSettingsRequestGeneration) {
+                        return;
+                    }
+                    hookSettingsSaving = false;
+                    if (state == null) {
+                        this.secureWindowHookEnabled = previousSecureWindowEnabled;
+                        this.statusBarOverlayHookEnabled = previousStatusBarOverlayEnabled;
+                        rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
+                        hookSettingsNeedsRoot = !rootAuthorizationGranted;
+                        refreshRootAuthorizationView();
+                        refreshZygiskHookSettingsViews();
+                        Toast.makeText(activity, TextUtils.isEmpty(error)
+                                        ? "保存 Hook 设置失败" : error,
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    applyZygiskHookState(state);
+                    hookSettingsLoaded = true;
+                    hookSettingsReadFailed = false;
+                    hookSettingsNeedsRoot = false;
+                    refreshZygiskHookSettingsViews();
+                    Toast.makeText(activity, "已保存，重启后生效",
+                            Toast.LENGTH_SHORT).show();
+                }));
+    }
+
+    private void applyZygiskHookState(ZygiskHookConfig.State state) {
+        secureWindowHookEnabled = state.secureWindowEnabled;
+        statusBarOverlayHookEnabled = state.statusBarOverlayEnabled;
+        zygiskModuleInstalled = state.moduleInstalled;
+        zygiskPayloadActive = state.zygiskPayloadActive;
+    }
+
+    private void refreshZygiskHookSettingsViews() {
+        if (zygiskHookStatusValueView != null) {
+            if (hookSettingsSaving) {
+                zygiskHookStatusValueView.setText("保存中");
+            } else if (hookSettingsNeedsRoot) {
+                zygiskHookStatusValueView.setText("需要 ROOT");
+            } else if (hookSettingsReadFailed) {
+                zygiskHookStatusValueView.setText("读取失败");
+            } else if (!hookSettingsLoaded) {
+                zygiskHookStatusValueView.setText("读取中");
+            } else if (!zygiskModuleInstalled) {
+                zygiskHookStatusValueView.setText("模块不可用");
+            } else {
+                zygiskHookStatusValueView.setText(
+                        zygiskPayloadActive ? "已启用" : "未启用");
+            }
+        }
+        if (secureWindowHookValueView != null) {
+            secureWindowHookValueView.setText(formatSwitchValue(secureWindowHookEnabled));
+        }
+        if (statusBarOverlayHookValueView != null) {
+            statusBarOverlayHookValueView.setText(
+                    formatSwitchValue(statusBarOverlayHookEnabled));
+        }
+        boolean controlsEnabled = hookSettingsLoaded
+                && zygiskModuleInstalled && !hookSettingsSaving;
+        updatingHookSwitches = true;
+        try {
+            updateHookSwitch(secureWindowHookSwitch, secureWindowHookEnabled, controlsEnabled);
+            updateHookSwitch(statusBarOverlayHookSwitch,
+                    statusBarOverlayHookEnabled, controlsEnabled);
+        } finally {
+            updatingHookSwitches = false;
+        }
+        if (applyHookSettingsItem != null) {
+            applyHookSettingsItem.setEnabled(controlsEnabled);
+            applyHookSettingsItem.setAlpha(controlsEnabled ? 1f : 0.5f);
+        }
+    }
+
+    private void updateHookSwitch(Switch toggle, boolean checked, boolean enabled) {
+        if (toggle == null) {
+            return;
+        }
+        if (toggle.isChecked() != checked) {
+            toggle.setChecked(checked);
+        }
+        toggle.setEnabled(enabled);
+    }
+
+    private void showHookSettingsRebootDialog() {
+        if (!hookSettingsLoaded || hookSettingsSaving) {
+            return;
+        }
+        new AlertDialog.Builder(activity)
+                .setTitle("重启设备")
+                .setMessage("Hook 设置将在重启后生效。")
+                .setNegativeButton("稍后", null)
+                .setPositiveButton("立即重启", (dialog, which) -> {
+                    Toast.makeText(activity, "正在重启", Toast.LENGTH_SHORT).show();
+                    callbacks.rebootDevice();
+                })
+                .show();
     }
 
     private String getGridLayoutLabel() {
@@ -1036,6 +1360,7 @@ public final class SettingsPanelController {
         verticalWindowLayout = callbacks.verticalWindowLayout();
         logRecordingEnabled = callbacks.logRecordingEnabled();
         sideWindowCount = callbacks.sideWindowCount();
+        rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
     }
     private void saveGridLayout(int r,int c){callbacks.saveGridLayout(r,c);refresh();}
     private void saveOneStepTriggerAreaScale(int v){callbacks.saveOneStepTriggerAreaScale(v);}

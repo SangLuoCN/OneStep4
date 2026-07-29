@@ -31,6 +31,16 @@ REPLACE="
 
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
+HOOK_CONFIG_DIR="$MODPATH/hook-config"
+PREVIOUS_HOOK_CONFIG_DIR="/data/adb/modules/onestep4_ksu_privapp/hook-config"
+
+mkdir -p "$HOOK_CONFIG_DIR"
+for hook_marker in disable-secure-window disable-status-bar-overlay; do
+  if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/$hook_marker" ]; then
+    : >"$HOOK_CONFIG_DIR/$hook_marker"
+  fi
+done
+set_perm_recursive "$HOOK_CONFIG_DIR" 0 0 0700 0600
 
 if [ ! -f "$APK_PATH" ]; then
   abort "! OneStep4 APK is missing from the module"
@@ -47,6 +57,7 @@ set_perm "$APK_PATH" 0 0 0644
 set_perm "$MODPATH/boot-completed.sh" 0 0 0755
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/statusbar-post-fs-data.sh" 0 0 0755
+set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" 0 0 0644
 set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
 

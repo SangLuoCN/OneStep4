@@ -18,6 +18,14 @@ public final class PersistentRootShell implements AutoCloseable {
     private BufferedWriter inputWriter;
     private Thread readerThread;
     private int commandSequence;
+    private volatile boolean rootAccessConfirmed;
+
+    public synchronized boolean hasConfirmedRootAccess() {
+        if (rootAccessConfirmed && !isProcessRunning(process)) {
+            closeLocked();
+        }
+        return rootAccessConfirmed;
+    }
 
     public synchronized ShellCommandResult run(String command, int timeoutSeconds) {
         if (!ensureStarted()) {
@@ -64,6 +72,7 @@ public final class PersistentRootShell implements AutoCloseable {
 
             String markerPrefix = marker + ":";
             if (line.startsWith(markerPrefix)) {
+                rootAccessConfirmed = true;
                 return new ShellCommandResult(
                         parseExitCode(line.substring(markerPrefix.length())), output.toString());
             }
@@ -144,6 +153,7 @@ public final class PersistentRootShell implements AutoCloseable {
     }
 
     private void closeLocked() {
+        rootAccessConfirmed = false;
         if (inputWriter != null) {
             try {
                 inputWriter.write("exit\n");

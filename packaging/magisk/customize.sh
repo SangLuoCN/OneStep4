@@ -9,6 +9,16 @@ REPLACE="
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 GLOBAL_ZYGISK_TOGGLE="/data/adb/post-fs-data.d/onestep40-zygisk-toggle.sh"
+HOOK_CONFIG_DIR="$MODPATH/hook-config"
+PREVIOUS_HOOK_CONFIG_DIR="/data/adb/modules/onestep40_privapp/hook-config"
+
+mkdir -p "$HOOK_CONFIG_DIR"
+for hook_marker in disable-secure-window disable-status-bar-overlay; do
+  if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/$hook_marker" ]; then
+    : >"$HOOK_CONFIG_DIR/$hook_marker"
+  fi
+done
+set_perm_recursive "$HOOK_CONFIG_DIR" 0 0 0700 0600
 
 ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"
 if ! echo "$ZYGISK_STATE" | grep -q "value=1"; then
@@ -30,6 +40,7 @@ chmod 0755 "$GLOBAL_ZYGISK_TOGGLE"
 set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
 set_perm "$MODPATH/zygisk-toggle.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
+set_perm "$MODPATH/action.sh" 0 0 0755
 
 if [ -f "$APK_PATH" ]; then
   touch "$APK_PATH"

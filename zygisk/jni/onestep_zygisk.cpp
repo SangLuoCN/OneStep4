@@ -28,6 +28,10 @@ constexpr const char *kHookClass =
         "com.sangluo.onestep.hook.OneStepSecureWindowHook";
 constexpr const char *kStatusBarOverlayHookClass =
         "com.sangluo.onestep.hook.OneStepStatusBarOverlayHook";
+constexpr const char *kDisableSecureWindowHook =
+        "hook-config/disable-secure-window";
+constexpr const char *kDisableStatusBarOverlayHook =
+        "hook-config/disable-status-bar-overlay";
 
 #if defined(__aarch64__)
 constexpr const char *kAbi = "arm64-v8a";
@@ -234,17 +238,29 @@ public:
             LOGE("module directory unavailable");
             return;
         }
+        secureWindowHookEnabled =
+                faccessat(moduleFd, kDisableSecureWindowHook, F_OK, 0) != 0;
+        statusBarOverlayHookEnabled =
+                faccessat(moduleFd, kDisableStatusBarOverlayHook, F_OK, 0) != 0;
+        LOGI("Hook settings: secure=%d, statusbar=%d",
+             secureWindowHookEnabled, statusBarOverlayHookEnabled);
+        if (!secureWindowHookEnabled && !statusBarOverlayHookEnabled) {
+            LOGI("All system_server hooks disabled by user");
+            close(moduleFd);
+            return;
+        }
         jobject systemLoader = systemClassLoader(env);
         jobject aliuhookLoader = systemLoader == nullptr
                 ? nullptr : makeAliuHookClassLoader(env, moduleFd, systemLoader);
         if (aliuhookLoader != nullptr && initializeAliuHook(env, aliuhookLoader)) {
             jobject appLoader = makeAppClassLoader(env, aliuhookLoader);
-            jclass localHookClass = appLoader == nullptr ? nullptr : loadHookClass(env, appLoader);
+            jclass localHookClass = appLoader == nullptr || !secureWindowHookEnabled
+                    ? nullptr : loadHookClass(env, appLoader);
             if (localHookClass != nullptr) {
                 hookClass = static_cast<jclass>(env->NewGlobalRef(localHookClass));
                 LOGI("Hook runtime prepared for %s", kAbi);
             }
-            if (appLoader != nullptr) {
+            if (appLoader != nullptr && statusBarOverlayHookEnabled) {
                 appClassLoaderRef = env->NewGlobalRef(appLoader);
             }
             if (hookClass != nullptr || appClassLoaderRef != nullptr) {
@@ -255,15 +271,21 @@ public:
     }
 
     void postServerSpecialize(const zygisk::ServerSpecializeArgs *) override {
+        if (!secureWindowHookEnabled && !statusBarOverlayHookEnabled) {
+            return;
+        }
         statusHookDiagnosticFd = open("/data/system/onestep-status-hook.log",
                                       O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
         writeStatusHookDiagnostic("postServerSpecialize started");
         if (systemClassLoaderRef == nullptr) {
             LOGE("Hook runtime was not prepared");
             writeStatusHookDiagnostic("system class loader unavailable");
+            closeStatusHookDiagnostic();
             return;
         }
-        if (hookClass == nullptr) {
+        if (!secureWindowHookEnabled) {
+            LOGI("Secure-window hook disabled by user");
+        } else if (hookClass == nullptr) {
             LOGE("Secure-window hook runtime was not prepared");
         } else {
             jmethodID bootstrap = env->GetStaticMethodID(
@@ -277,9 +299,13 @@ public:
                 }
             }
         }
-        jclass statusBarOverlayHookClass = appClassLoaderRef == nullptr
+        jclass statusBarOverlayHookClass = !statusBarOverlayHookEnabled
+                || appClassLoaderRef == nullptr
                 ? nullptr : loadStatusBarOverlayHookClass(env, appClassLoaderRef);
-        if (statusBarOverlayHookClass == nullptr) {
+        if (!statusBarOverlayHookEnabled) {
+            LOGI("Status-bar overlay hook disabled by user");
+            writeStatusHookDiagnostic("status-bar hook disabled by user");
+        } else if (statusBarOverlayHookClass == nullptr) {
             LOGE("Status-bar overlay hook runtime was not prepared");
             writeStatusHookDiagnostic("status-bar hook class unavailable");
         } else {
@@ -302,18 +328,24 @@ public:
                 }
             }
         }
+        closeStatusHookDiagnostic();
+    }
+
+private:
+    static void closeStatusHookDiagnostic() {
         if (statusHookDiagnosticFd >= 0) {
             close(statusHookDiagnosticFd);
             statusHookDiagnosticFd = -1;
         }
     }
 
-private:
     zygisk::Api *api = nullptr;
     JNIEnv *env = nullptr;
     jclass hookClass = nullptr;
     jobject appClassLoaderRef = nullptr;
     jobject systemClassLoaderRef = nullptr;
+    bool secureWindowHookEnabled = true;
+    bool statusBarOverlayHookEnabled = true;
 };
 
 } // namespace
