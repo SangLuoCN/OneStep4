@@ -139,9 +139,6 @@ public class MainActivity extends Activity {
     private static final int WINDOW_SCALE_APPEAR_MS = 240;
     private static final float WINDOW_SCALE_APPEAR_START = 0.82f;
     private static final int MAIN_APP_REPLACE_FADE_OUT_MS = 160;
-    private static final long MAIN_APP_REPLACE_REVEAL_SETTLE_MS = 48L;
-    private static final long MAIN_APP_REPLACE_REVEAL_TIMEOUT_MS = 2100L;
-    private static final long MAIN_APP_REPLACE_FALLBACK_REVEAL_MS = 280L;
     private static final int CORNER_TRIGGER_DISTANCE_DEFAULT_DP = 36;
     private static final int CORNER_TRIGGER_PREVIEW_HIDE_DELAY_MS = 2000;
     private static final int EXIT_BACKGROUND_DELAY_MS = 180;
@@ -367,13 +364,6 @@ public class MainActivity extends Activity {
                     return MainActivity.this.onCrossAppLaunch(
                             sourceDisplayId, sourcePackage, intent, targetPackage);
                 }
-                @Override public boolean shouldDeferHostedAppReveal(
-                        int slot, String packageName) {
-                    return isMainAppReplacementRevealPending(slot, packageName);
-                }
-                @Override public void onHostedAppReady(int slot, String packageName) {
-                    MainActivity.this.onHostedAppReady(slot, packageName);
-                }
             };
     private OneStepSettingsStore settingsStore;
     private EmbeddedStartEpochStore embeddedStartEpochStore;
@@ -415,9 +405,6 @@ public class MainActivity extends Activity {
     private int mainSlotSwitchPendingOldSlot = -1;
     private int mainContentReplacementGeneration;
     private int mainContentReplacementPendingSlot = -1;
-    private int mainAppReplacementRevealGeneration;
-    private int mainAppReplacementRevealSlot = -1;
-    private String mainAppReplacementRevealPackage = "";
     private int pendingMainAppStartSlot = -1;
     private LauncherApp pendingMainAppStart;
     private int pendingInternalSettingsSlot = -1;
@@ -2300,6 +2287,7 @@ public class MainActivity extends Activity {
                         }
                         markAppBackgrounded(previousApp);
                         windowApps[slot] = null;
+                        clearHostedAppRevealState(slot);
                     }
                     if (previousSettings) {
                         hideInternalSettingsPage();
@@ -3118,6 +3106,10 @@ public class MainActivity extends Activity {
         embeddedSyncGenerations[slot]++;
         windowViews[slot].setLiveAppVisible(false);
         switchMainSlot(slot, true);
+        if (isPendingMainAppStartSlot(slot)) {
+            clearPendingMainAppStart(slot);
+            startAppInSlot(slot, app, false, false);
+        }
     }
 
     private boolean isPendingMainAppStartSlot(int slot) {
@@ -3134,7 +3126,7 @@ public class MainActivity extends Activity {
             replaceDesktopHomeWithApp(app);
             return;
         }
-        startAppInSlot(slot, app);
+        startAppInSlot(slot, app, false, false);
     }
 
     private void stageAppForDesktopHomePromotion(int slot, LauncherApp app) {
@@ -3237,7 +3229,7 @@ public class MainActivity extends Activity {
             previousHost.invalidateTaskResolution();
             mainSlotSwitchGeneration++;
             clearPendingMainSlotSwitch();
-            animateMainAppReplacement(slot, previousApp, previousHost, replacementApp);
+            launchMainAppReplacement(slot, previousApp, previousHost, replacementApp);
             return;
         }
 
@@ -3265,9 +3257,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void animateMainAppReplacement(int slot, LauncherApp previousApp,
-                                           EmbeddedAppHost previousHost,
-                                           LauncherApp replacementApp) {
+    private void launchMainAppReplacement(int slot, LauncherApp previousApp,
+                                          EmbeddedAppHost previousHost,
+                                          LauncherApp replacementApp) {
         OneStepWindowView windowView = windowViews[slot];
         if (windowView == null) {
             startAppInSlot(slot, replacementApp);
@@ -3276,110 +3268,51 @@ public class MainActivity extends Activity {
         final int replacementGeneration = ++mainContentReplacementGeneration;
         mainContentReplacementPendingSlot = slot;
         windowView.animate().cancel();
+        windowView.setAlpha(1f);
         windowView.setScaleX(1f);
         windowView.setScaleY(1f);
         windowView.setTranslationX(0f);
         windowView.setTranslationY(0f);
-        windowView.animate()
-                .alpha(0f)
-                .setDuration(MAIN_APP_REPLACE_FADE_OUT_MS)
-                .setInterpolator(new AccelerateDecelerateInterpolator())
-                .withEndAction(() -> {
-                    if (replacementGeneration != mainContentReplacementGeneration) {
-                        return;
-                    }
-                    if (activityDestroyed || slot != activeMainSlot
-                            || windowApps[slot] != previousApp) {
-                        mainContentReplacementPendingSlot = -1;
-                        windowView.setAlpha(1f);
-                        return;
-                    }
-                    Log.i(TAG, "Launch replacement and let Android background previous main app: "
-                            + "previous=" + previousApp.packageName + ", replacement="
-                            + replacementApp.packageName + ", slot=" + slot);
-                    embeddedSyncGenerations[slot]++;
-                    windowView.setLiveAppVisible(false);
-                    previousHost.sendHome();
-                    markAppBackgrounded(previousApp);
-                    mainAppReplacementRevealGeneration = replacementGeneration;
-                    mainAppReplacementRevealSlot = slot;
-                    mainAppReplacementRevealPackage = replacementApp.packageName;
-                    previousHost.suppressNextLaunchAnimation(replacementApp.packageName);
-                    startAppInSlot(slot, replacementApp, false, false);
-                    holdMainAppReplacementUntilReady(
-                            slot, replacementApp, replacementGeneration);
-                })
-                .start();
+        beginMainAppReplacementLaunch(slot, previousApp, previousHost,
+                replacementApp, windowView, replacementGeneration);
     }
 
-    private void holdMainAppReplacementUntilReady(int slot, LauncherApp replacementApp,
-                                                  int replacementGeneration) {
-        OneStepWindowView windowView = windowViews[slot];
-        if (windowView == null) {
-            revealMainAppReplacement(
-                    slot, replacementApp.packageName, replacementGeneration, "no window");
+    private void beginMainAppReplacementLaunch(
+            int slot, LauncherApp previousApp, EmbeddedAppHost previousHost,
+            LauncherApp replacementApp, OneStepWindowView windowView,
+            int replacementGeneration) {
+        if (replacementGeneration != mainContentReplacementGeneration) {
             return;
         }
-        windowView.animate().cancel();
-        windowView.setPivotX(windowView.getWidth() / 2f);
-        windowView.setPivotY(windowView.getHeight() / 2f);
-        windowView.setTranslationX(0f);
-        windowView.setTranslationY(0f);
-        windowView.setScaleX(WINDOW_SCALE_APPEAR_START);
-        windowView.setScaleY(WINDOW_SCALE_APPEAR_START);
-        windowView.setAlpha(0f);
-        long timeoutMs = embeddedHosts[slot] instanceof RootVirtualDisplayHost
-                ? MAIN_APP_REPLACE_REVEAL_TIMEOUT_MS
-                : MAIN_APP_REPLACE_FALLBACK_REVEAL_MS;
-        mainHandler.postDelayed(() -> revealMainAppReplacement(
-                slot, replacementApp.packageName, replacementGeneration, "timeout"), timeoutMs);
-    }
-
-    private boolean isMainAppReplacementRevealPending(int slot, String packageName) {
-        return mainAppReplacementRevealSlot == slot
-                && mainAppReplacementRevealGeneration == mainContentReplacementGeneration
-                && TextUtils.equals(mainAppReplacementRevealPackage, packageName);
-    }
-
-    private void onHostedAppReady(int slot, String packageName) {
-        if (!isMainAppReplacementRevealPending(slot, packageName)) {
-            return;
-        }
-        int replacementGeneration = mainAppReplacementRevealGeneration;
-        mainHandler.postDelayed(() -> revealMainAppReplacement(
-                slot, packageName, replacementGeneration, "task ready"),
-                MAIN_APP_REPLACE_REVEAL_SETTLE_MS);
-    }
-
-    private void revealMainAppReplacement(int slot, String packageName,
-                                          int replacementGeneration, String reason) {
-        if (replacementGeneration != mainContentReplacementGeneration
-                || !isMainAppReplacementRevealPending(slot, packageName)) {
-            return;
-        }
-        LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS ? windowApps[slot] : null;
-        OneStepWindowView windowView = slot >= 0 && slot < MAX_WINDOWS
-                ? windowViews[slot] : null;
-        if (activityDestroyed || slot != activeMainSlot || currentApp == null
-                || windowView == null
-                || !TextUtils.equals(currentApp.packageName, packageName)) {
+        if (activityDestroyed || slot != activeMainSlot
+                || embeddedHosts[slot] != previousHost
+                || windowApps[slot] != previousApp) {
             mainContentReplacementPendingSlot = -1;
-            mainAppReplacementRevealSlot = -1;
-            mainAppReplacementRevealPackage = "";
-            if (windowView != null) {
-                windowView.setAlpha(1f);
-                windowView.setScaleX(1f);
-                windowView.setScaleY(1f);
-            }
             return;
         }
-        mainContentReplacementPendingSlot = -1;
-        mainAppReplacementRevealSlot = -1;
-        mainAppReplacementRevealPackage = "";
+        embeddedSyncGenerations[slot]++;
+        backgroundAppPackages.remove(replacementApp.packageName);
+        windowApps[slot] = replacementApp;
+        // Do not cover or hide this SurfaceView. WindowManager owns the immediate target
+        // StartingWindow/task surface and swaps it with the app's first real buffer.
+        renderWindows();
+        setHostedSurfaceAlpha(slot, 1f);
         windowView.setLiveAppVisible(true);
-        Log.i(TAG, "Reveal replacement app after old content is hidden: package="
-                + packageName + ", slot=" + slot + ", reason=" + reason);
-        animateWindowAppAppear(slot, currentApp, true);
+        boolean launchStarted = previousHost.start(replacementApp);
+        if (!launchStarted) {
+            windowApps[slot] = previousApp;
+            mainContentReplacementPendingSlot = -1;
+            windowView.setLiveAppVisible(true);
+            setHostedSurfaceAlpha(slot, 1f);
+            renderWindows();
+            showEmbeddingHintIfNeeded(previousHost.getUnavailableReason());
+            return;
+        }
+        markAppBackgrounded(previousApp);
+        mainContentReplacementPendingSlot = -1;
+        Log.i(TAG, "Launch replacement with WindowManager starting surface: previous="
+                + previousApp.packageName + ", replacement="
+                + replacementApp.packageName + ", slot=" + slot);
     }
 
     private void replaceDesktopHomeWithApp(LauncherApp app) {
@@ -3428,6 +3361,7 @@ public class MainActivity extends Activity {
         OneStepWindowView windowView = windowViews[slot];
         if (previousApp == null || previousHost == null || windowView == null) {
             windowApps[slot] = null;
+            clearHostedAppRevealState(slot);
             renderWindows();
             settingsPanelController.showInWindow(windowView);
             animateInternalSettingsAppear(slot);
@@ -3462,6 +3396,7 @@ public class MainActivity extends Activity {
                     previousHost.sendHome();
                     markAppBackgrounded(previousApp);
                     windowApps[slot] = null;
+                    clearHostedAppRevealState(slot);
                     renderWindows();
                     settingsPanelController.showInWindow(windowView);
                     Log.i(TAG, "Show internal settings and let Android background previous "
@@ -3890,6 +3825,7 @@ public class MainActivity extends Activity {
                 return;
             }
             windowApps[slot] = null;
+            clearHostedAppRevealState(slot);
             backgroundAppPackages.remove(dismissedApp.packageName);
             embeddedSlotClosing[slot] = false;
             windowView.setTranslationX(0f);
@@ -4189,9 +4125,11 @@ public class MainActivity extends Activity {
         LauncherApp app = windowApps[slot];
         int generation = ++embeddedSyncGenerations[slot];
         if (app == null || embeddedSlotClosing[slot]) {
+            clearHostedAppRevealState(slot);
             windowViews[slot].setLiveAppVisible(false);
             return;
         }
+        setHostedSurfaceAlpha(slot, 1f);
         windowViews[slot].setLiveAppVisible(true);
         windowViews[slot].requestLayout();
         int startEpoch = embeddedStartEpoch;
@@ -4254,13 +4192,29 @@ public class MainActivity extends Activity {
                 + " type=" + host.getClass().getSimpleName());
 
         boolean live = (ready || canStartBeforeLayout) && host.start(currentApp);
-        windowView.setLiveAppVisible(live
-                && !isMainAppReplacementRevealPending(slot, currentApp.packageName));
+        windowView.setLiveAppVisible(live);
         if (!live) {
             String reason = ready ? host.getUnavailableReason() : "嵌入容器未完成布局";
             Log.w(TAG, "Cannot embed " + currentApp.packageName + " in slot " + slot
                     + ": " + reason);
             showEmbeddingHintIfNeeded(reason);
+        }
+    }
+
+    private void clearHostedAppRevealState(int slot) {
+        if (slot < 0 || slot >= MAX_WINDOWS) {
+            return;
+        }
+        setHostedSurfaceAlpha(slot, 0f);
+    }
+
+    private void setHostedSurfaceAlpha(int slot, float alpha) {
+        if (slot < 0 || slot >= MAX_WINDOWS) {
+            return;
+        }
+        EmbeddedAppHost host = embeddedHosts[slot];
+        if (host instanceof RootVirtualDisplayHost) {
+            ((RootVirtualDisplayHost) host).setHostedSurfaceAlpha(alpha);
         }
     }
 

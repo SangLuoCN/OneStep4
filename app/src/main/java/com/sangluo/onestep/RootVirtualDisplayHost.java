@@ -1,9 +1,6 @@
 package com.sangluo.onestep;
 
 import android.annotation.SuppressLint;
-import android.animation.Animator;
-import android.animation.AnimatorListenerAdapter;
-import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.ActivityOptions;
 import android.app.AlertDialog;
@@ -18,7 +15,6 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
-import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Outline;
@@ -62,7 +58,6 @@ import android.view.ViewPropertyAnimator;
 import android.view.ViewParent;
 import android.view.Window;
 import android.view.WindowManager;
-import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
@@ -197,8 +192,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         Intent consumeRoutedLaunchIntent(int slot, String packageName);
         boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
                                  Intent intent, String targetPackage);
-        boolean shouldDeferHostedAppReveal(int slot, String packageName);
-        void onHostedAppReady(int slot, String packageName);
     }
 
     private static final String TAG = "OneStep40";
@@ -250,6 +243,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private final SurfaceView surfaceView;
     private SurfaceControl windowAnimationLeash;
     private SurfaceControl windowAnimationSurface;
+    private float hostedSurfaceAlpha = 1f;
     private final ExecutorService rootExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService inputDispatchExecutor =
             Executors.newSingleThreadExecutor();
@@ -290,7 +284,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private boolean touchStartedOnMain;
     private boolean touchSequenceSuppressed;
     private boolean skipActivityOptionsLaunch;
-    private String launchWithoutAnimationPackage = "";
     private Boolean suCommandAvailable;
     private String launchRequestedPackage = "";
     private int launchRequestedDisplayId = -1;
@@ -313,10 +306,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private volatile int sensorPolicyGeneration;
     private volatile int sensorLandscapeRotationGeneration;
     private volatile int imePolicyConfiguredDisplayId = -1;
-    private int imePolicyLaunchGeneration;
-    private int imePolicyLaunchPendingDisplayId = -1;
-    private int imePolicyLaunchPendingStartEpoch = -1;
-    private String imePolicyLaunchPendingPackage = "";
+    private int imePolicySetupGeneration;
+    private int imePolicySetupDisplayId = -1;
     private long lastMotionUnavailableLogUptime;
     private String sensorServiceIdlePackage = "";
     private boolean sensorServiceUidOverrideConfirmed;
@@ -415,8 +406,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 return false;
             }
             transaction.reparent(surfaceControl, leash)
+                    .setAlpha(surfaceControl, 1f)
                     .setLayer(surfaceControl, 0)
                     .setLayer(leash, WINDOW_SURFACE_RESTING_LAYER_BASE - slot)
+                    .setAlpha(leash, hostedSurfaceAlpha)
                     .setVisibility(leash, true)
                     .apply();
             transaction.close();
@@ -437,6 +430,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     public void prepareWindowSurfaceAnimation(SurfaceControl.Transaction transaction, int layer) {
         transaction.setPosition(windowAnimationLeash, 0f, 0f)
                 .setScale(windowAnimationLeash, 1f, 1f)
+                .setAlpha(windowAnimationLeash, hostedSurfaceAlpha)
                 .setLayer(windowAnimationLeash, layer)
                 .setLayer(windowAnimationSurface, 0)
                 .setVisibility(windowAnimationLeash, true);
@@ -457,7 +451,33 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
         transaction.setPosition(windowAnimationLeash, 0f, 0f)
                 .setScale(windowAnimationLeash, 1f, 1f)
+                .setAlpha(windowAnimationLeash, hostedSurfaceAlpha)
                 .setLayer(windowAnimationLeash, WINDOW_SURFACE_RESTING_LAYER_BASE - slot);
+    }
+
+    public void setHostedSurfaceAlpha(float alpha) {
+        applyHostedSurfaceAlpha(alpha, false);
+    }
+
+    private void applyHostedSurfaceAlpha(float alpha, boolean forceRestingTransform) {
+        hostedSurfaceAlpha = Math.max(0f, Math.min(1f, alpha));
+        boolean hasAnimationLeash = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && windowAnimationLeash != null && windowAnimationLeash.isValid();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && (hasAnimationLeash
+                || (forceRestingTransform && ensureWindowAnimationLeash()))) {
+            surfaceView.setAlpha(1f);
+            SurfaceControl.Transaction transaction = new SurfaceControl.Transaction();
+            if (forceRestingTransform) {
+                transaction.setPosition(windowAnimationLeash, 0f, 0f)
+                        .setScale(windowAnimationLeash, 1f, 1f);
+            }
+            transaction.setAlpha(windowAnimationLeash, hostedSurfaceAlpha);
+            transaction.apply();
+            transaction.close();
+            return;
+        }
+        surfaceView.setAlpha(hostedSurfaceAlpha);
     }
 
     private void releaseStaleWindowAnimationLeash() {
@@ -477,7 +497,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     && surfaceControl.isValid() && rootSurfaceControl != null
                     ? rootSurfaceControl.buildReparentTransaction(surfaceControl) : null;
             if (transaction != null) {
-                transaction.setLayer(surfaceControl,
+                transaction.setAlpha(surfaceControl, hostedSurfaceAlpha)
+                        .setLayer(surfaceControl,
                                 WINDOW_SURFACE_RESTING_LAYER_BASE - slot)
                         .reparent(leash, null)
                         .apply();
@@ -509,11 +530,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     @Override
-    public void suppressNextLaunchAnimation(String packageName) {
-        launchWithoutAnimationPackage = packageName == null ? "" : packageName;
-    }
-
-    @Override
     public boolean start(LauncherApp app) {
         if (!isAvailable() || embeddedSlotClosing[slot]) {
             return false;
@@ -529,12 +545,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             unavailableReason = "找不到启动入口";
             return false;
         }
-        boolean suppressLaunchAnimation = TextUtils.equals(
-                launchWithoutAnimationPackage, app.packageName);
-        if (suppressLaunchAnimation) {
-            launcherIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        }
-
         if (displayId < 0) {
             int viewWidth = surfaceView.getWidth();
             int viewHeight = surfaceView.getHeight();
@@ -553,78 +563,14 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
         Intent routedLaunchIntent = callbacks.consumeRoutedLaunchIntent(
                 slot, app.packageName);
-        if (suppressLaunchAnimation && routedLaunchIntent != null) {
-            routedLaunchIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        }
         boolean reusingHostedApp = routedLaunchIntent == null
                 && displayId == launchRequestedDisplayId
                 && TextUtils.equals(launchRequestedPackage, app.packageName);
-        if (!reusingHostedApp && imePolicyLaunchPendingDisplayId == displayId
-                && imePolicyLaunchPendingStartEpoch == startEpoch
-                && TextUtils.equals(imePolicyLaunchPendingPackage, app.packageName)) {
-            return true;
-        }
         if (!reusingHostedApp && isMainDisplaySlot(slot)) {
-            final int requestGeneration = ++imePolicyLaunchGeneration;
-            final int targetDisplayId = displayId;
-            imePolicyLaunchPendingDisplayId = targetDisplayId;
-            imePolicyLaunchPendingStartEpoch = startEpoch;
-            imePolicyLaunchPendingPackage = app.packageName;
-            unavailableReason = "正在确认输入法显示策略";
-            checkDisplayImeLocalPolicy(
-                    "main display app launch " + app.packageName,
-                    () -> finishMainDisplayLaunchPolicyCheck(requestGeneration,
-                            targetDisplayId, startEpoch, app, launcherIntent,
-                            routedLaunchIntent, true),
-                    () -> finishMainDisplayLaunchPolicyCheck(requestGeneration,
-                            targetDisplayId, startEpoch, app, launcherIntent,
-                            routedLaunchIntent, false));
-            return true;
+            ensureDisplayImeLocalPolicyAsync("main display app launch " + app.packageName);
         }
         return continueHostedAppStart(app, launcherIntent, routedLaunchIntent,
                 startEpoch, reusingHostedApp);
-    }
-
-    private void finishMainDisplayLaunchPolicyCheck(int requestGeneration,
-                                                    int targetDisplayId,
-                                                    int startEpoch,
-                                                    LauncherApp app,
-                                                    Intent launcherIntent,
-                                                    Intent routedLaunchIntent,
-                                                    boolean configured) {
-        if (requestGeneration != imePolicyLaunchGeneration) {
-            return;
-        }
-        imePolicyLaunchPendingDisplayId = -1;
-        imePolicyLaunchPendingStartEpoch = -1;
-        imePolicyLaunchPendingPackage = "";
-        LauncherApp currentApp = windowApps[slot];
-        if (targetDisplayId != displayId || !hasVirtualDisplay()
-                || !shouldRunEmbeddedStart(startEpoch) || embeddedSlotClosing[slot]
-                || currentApp == null
-                || !TextUtils.equals(currentApp.packageName, app.packageName)) {
-            return;
-        }
-        if (!configured) {
-            pendingApp = null;
-            unavailableReason = "输入法显示策略设置失败";
-            windowViews[slot].setLiveAppVisible(false);
-            Log.w(TAG, "Abort main-display launch because IME policy was not confirmed: "
-                    + "slot=" + slot + ", display=" + displayId
-                    + ", package=" + app.packageName);
-            Toast.makeText(owner, "输入法显示策略设置失败，请重试",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-        boolean live = continueHostedAppStart(app, launcherIntent, routedLaunchIntent,
-                startEpoch, false);
-        windowViews[slot].setLiveAppVisible(live
-                && !callbacks.shouldDeferHostedAppReveal(slot, app.packageName));
-        if (!live) {
-            Log.w(TAG, "Cannot embed " + app.packageName + " in slot " + slot
-                    + " after IME policy confirmation: " + unavailableReason);
-            showEmbeddingHintIfNeeded(unavailableReason);
-        }
     }
 
     private boolean continueHostedAppStart(LauncherApp app, Intent launcherIntent,
@@ -637,10 +583,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return false;
         }
         syncHostedSensorIsolationAsync(app.packageName);
-        if (TextUtils.equals(launchWithoutAnimationPackage, app.packageName)) {
-            launchWithoutAnimationPackage = "";
-        }
-
         if (reusingHostedApp) {
             pendingApp = null;
             unavailableReason = "";
@@ -660,7 +602,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 && startWithActivityOptions(launcherIntent, app.packageName, startEpoch)) {
             launchRequestedPackage = app.packageName;
             launchRequestedDisplayId = displayId;
-            scheduleHostedTaskResolution("launch main before routed " + app.packageName);
             scheduleRoutedLaunch(app, routedLaunchIntent, startEpoch, displayId);
             unavailableReason = "";
             return true;
@@ -717,9 +658,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             }
             rootVirtualDisplayBridgeClient.allowNextLaunch(
                     getRootInputBridgeToken(), app.packageName);
-            if (startWithActivityOptions(routedIntent, app.packageName, startEpoch)) {
-                scheduleHostedTaskResolution("routed launch " + app.packageName);
-            }
+            boolean routed = startWithActivityOptions(
+                    routedIntent, app.packageName, startEpoch);
+            scheduleHostedTaskResolution((routed ? "routed launch "
+                    : "launcher fallback after routed launch failure ") + app.packageName);
             // The launcher task remains visible if an app-owned routing activity exits.
             unavailableReason = "";
         }, ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS);
@@ -763,7 +705,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     }
                     if (resolvedTaskId > 0) {
                         hostedTaskId = resolvedTaskId;
-                        callbacks.onHostedAppReady(slot, targetPackage);
                         return;
                     }
                     Log.w(TAG, "Restart hosted app after stale task reuse: slot=" + slot
@@ -1047,7 +988,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return;
         }
         invalidateTaskResolution();
-        invalidatePendingImePolicyLaunch();
+        invalidateDisplayImePolicySetup();
         pendingApp = null;
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
@@ -1091,7 +1032,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         final String targetPackage = TextUtils.isEmpty(packageName)
                 ? getHostedPackageName() : packageName;
         invalidateTaskResolution();
-        invalidatePendingImePolicyLaunch();
+        invalidateDisplayImePolicySetup();
         pendingApp = null;
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
@@ -1133,7 +1074,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     @Override
     public void release() {
         shutdownInputDispatch();
-        invalidatePendingImePolicyLaunch();
+        invalidateDisplayImePolicySetup();
         // The owning activity defers this call during HOME-driven instance replacement so the
         // framework cannot dispatch a pending HOME request to an already removed display.
         releaseVirtualDisplayWithRetry("host release", null);
@@ -1920,6 +1861,29 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
     }
 
+    private void ensureDisplayImeLocalPolicyAsync(String reason) {
+        final int targetDisplayId = displayId;
+        if (targetDisplayId <= DEFAULT_DISPLAY_ID || !hasVirtualDisplay()
+                || imePolicyConfiguredDisplayId == targetDisplayId
+                || imePolicySetupDisplayId == targetDisplayId) {
+            return;
+        }
+        final int generation = ++imePolicySetupGeneration;
+        imePolicySetupDisplayId = targetDisplayId;
+        checkDisplayImeLocalPolicy(reason, () -> {
+            if (generation == imePolicySetupGeneration && targetDisplayId == displayId) {
+                imePolicySetupDisplayId = -1;
+            }
+        }, () -> {
+            if (generation == imePolicySetupGeneration && targetDisplayId == displayId) {
+                imePolicySetupDisplayId = -1;
+                Log.w(TAG, "Virtual display IME policy setup failed without blocking launch: "
+                        + "slot=" + slot + ", display=" + targetDisplayId
+                        + ", reason=" + reason);
+            }
+        });
+    }
+
     void checkDisplayImeLocalPolicy(String reason, Runnable onConfirmed,
                                             Runnable onRejected) {
         final int targetDisplayId = displayId;
@@ -1935,6 +1899,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             // Before Android 10 there is no per-display IME policy. The single system IME is
             // hosted by the default display while its InputConnection can target the focused
             // app on the virtual display.
+            imePolicyConfiguredDisplayId = targetDisplayId;
             Log.i(TAG, "Virtual display IME policy: slot=" + slot
                     + ", display=" + targetDisplayId
                     + ", policy=PLATFORM_DEFAULT"
@@ -2242,7 +2207,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         Log.i(TAG, "Resolved hosted task: slot=" + slot
                                 + ", display=" + targetDisplayId
                                 + ", taskId=" + resolvedTaskId);
-                        mainHandler.post(() -> callbacks.onHostedAppReady(slot, targetPackage));
                     }
                 } finally {
                     taskResolutionInFlight = false;
@@ -2430,6 +2394,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 (actualDisplayFlags & DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN) != 0)));
         configureNativeDisplayOrientationAsync(displayId, "initialize virtual display");
         ensureRootInputBridgeStarted();
+        if (isMainDisplaySlot(slot)) {
+            ensureDisplayImeLocalPolicyAsync("initialize virtual display");
+        }
     }
 
     private void ensureTrustedDisplayRole() {
@@ -2568,7 +2535,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     private boolean releaseVirtualDisplay() {
         invalidateTaskResolution();
-        invalidatePendingImePolicyLaunch();
+        invalidateDisplayImePolicySetup();
         sensorLandscapeRotationGeneration++;
         requestedSensorLandscapeRotation = -1;
         sensorLandscapeRotationApplied = false;
@@ -2671,11 +2638,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
     }
 
-    private void invalidatePendingImePolicyLaunch() {
-        imePolicyLaunchGeneration++;
-        imePolicyLaunchPendingDisplayId = -1;
-        imePolicyLaunchPendingStartEpoch = -1;
-        imePolicyLaunchPendingPackage = "";
+    private void invalidateDisplayImePolicySetup() {
+        imePolicySetupGeneration++;
+        imePolicySetupDisplayId = -1;
     }
 
     private void attachVirtualDisplaySurface(SurfaceHolder holder) {

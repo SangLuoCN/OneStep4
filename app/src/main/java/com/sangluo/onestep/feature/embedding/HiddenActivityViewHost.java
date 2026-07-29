@@ -34,7 +34,6 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
     private View view;
     private Method startActivityMethod;
     private Method releaseMethod;
-    private String launchWithoutAnimationPackage = "";
     private String unavailableReason = "系统未暴露 ActivityView/TaskView";
 
     public HiddenActivityViewHost(Context context, BooleanSupplier startAllowed,
@@ -73,10 +72,6 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
         }
 
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        if (TextUtils.equals(launchWithoutAnimationPackage, app.packageName)) {
-            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
-            launchWithoutAnimationPackage = "";
-        }
         Object[] args = makeStartArguments(startActivityMethod.getParameterTypes(), launchIntent);
         if (args == null) {
             unavailableReason = "ActivityView 启动参数不匹配";
@@ -95,11 +90,6 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
             unavailableReason = e.getClass().getSimpleName();
         }
         return false;
-    }
-
-    @Override
-    public void suppressNextLaunchAnimation(String packageName) {
-        launchWithoutAnimationPackage = packageName == null ? "" : packageName;
     }
 
     @Override

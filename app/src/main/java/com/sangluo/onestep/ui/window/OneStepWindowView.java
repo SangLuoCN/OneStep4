@@ -3,8 +3,6 @@ package com.sangluo.onestep.ui.window;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.Drawable;
-import android.text.TextUtils;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -12,8 +10,6 @@ import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
-import android.widget.LinearLayout;
-import android.widget.TextView;
 
 import com.sangluo.onestep.R;
 import com.sangluo.onestep.model.LauncherApp;
@@ -59,11 +55,7 @@ public final class OneStepWindowView extends FrameLayout {
     private View desktopHome;
     private boolean desktopHomeShown;
     private LauncherApp boundApp;
-    private final LinearLayout appPreview;
     private final ImageView emptyMark;
-    private final ImageView appIcon;
-    private final TextView appName;
-    private final TextView packageName;
 
     public OneStepWindowView(Context context, boolean mainWindow, Drawable placeholderBorder,
                              Callbacks callbacks) {
@@ -91,46 +83,6 @@ public final class OneStepWindowView extends FrameLayout {
         desktopHomeShown = desktopHome != null;
         if (desktopHome != null) {
             placeholder.addView(desktopHome, matchFrame());
-        }
-
-        appPreview = new LinearLayout(context);
-        appPreview.setOrientation(LinearLayout.VERTICAL);
-        appPreview.setGravity(Gravity.CENTER);
-        appPreview.setPadding(dp(mainWindow ? 30 : 12), dp(mainWindow ? 24 : 12),
-                dp(mainWindow ? 30 : 12), dp(mainWindow ? 24 : 12));
-        appPreview.setBackgroundColor(mainWindow ? 0xd9060606 : 0xff111111);
-        appPreview.setVisibility(GONE);
-        placeholder.addView(appPreview, matchFrame());
-
-        appIcon = new ImageView(context);
-        appIcon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        appPreview.addView(appIcon, new LinearLayout.LayoutParams(
-                dp(mainWindow ? 86 : 46), dp(mainWindow ? 86 : 46)));
-
-        appName = new TextView(context);
-        appName.setTextColor(0xe6ffffff);
-        appName.setGravity(Gravity.CENTER);
-        appName.setSingleLine(true);
-        appName.setEllipsize(TextUtils.TruncateAt.END);
-        appName.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        setDpTextSize(appName, mainWindow ? 22 : 11);
-        LinearLayout.LayoutParams nameParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        nameParams.topMargin = dp(mainWindow ? 18 : 8);
-        appPreview.addView(appName, nameParams);
-
-        packageName = new TextView(context);
-        packageName.setTextColor(0x59ffffff);
-        packageName.setGravity(Gravity.CENTER);
-        packageName.setSingleLine(true);
-        packageName.setEllipsize(TextUtils.TruncateAt.END);
-        setDpTextSize(packageName, mainWindow ? 11 : 8);
-        LinearLayout.LayoutParams packageParams = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        packageParams.topMargin = dp(4);
-        appPreview.addView(packageName, packageParams);
-        if (!mainWindow) {
-            packageName.setVisibility(GONE);
         }
 
         emptyMark = createEmptyWindowMark(context);
@@ -294,24 +246,18 @@ public final class OneStepWindowView extends FrameLayout {
             desktopHome.setVisibility(showDesktopHome ? VISIBLE : GONE);
         }
         if (showDesktopHome) {
-            appPreview.setVisibility(GONE);
             emptyMark.setVisibility(GONE);
             setAlpha(1f);
             setLiveAppVisible(false);
             return;
         }
         if (boundApp == null) {
-            appPreview.setVisibility(GONE);
             emptyMark.setVisibility(VISIBLE);
             setAlpha(1f);
             setLiveAppVisible(false);
             return;
         }
         emptyMark.setVisibility(GONE);
-        appPreview.setVisibility(VISIBLE);
-        appIcon.setImageDrawable(boundApp.icon);
-        appName.setText(boundApp.label);
-        packageName.setText(boundApp.packageName);
         setAlpha(1f);
     }
 
@@ -401,24 +347,6 @@ public final class OneStepWindowView extends FrameLayout {
 
     private void applyMainWindowPlaceholderStyle() {
         setBackgroundColor(Color.TRANSPARENT);
-        appPreview.setPadding(dp(mainWindow ? 30 : 12), dp(mainWindow ? 24 : 12),
-                dp(mainWindow ? 30 : 12), dp(mainWindow ? 24 : 12));
-        appPreview.setBackgroundColor(mainWindow ? 0xd9060606 : 0xff111111);
-
-        LinearLayout.LayoutParams iconParams =
-                (LinearLayout.LayoutParams) appIcon.getLayoutParams();
-        iconParams.width = dp(mainWindow ? 86 : 46);
-        iconParams.height = dp(mainWindow ? 86 : 46);
-        appIcon.setLayoutParams(iconParams);
-
-        setDpTextSize(appName, mainWindow ? 22 : 11);
-        LinearLayout.LayoutParams nameParams =
-                (LinearLayout.LayoutParams) appName.getLayoutParams();
-        nameParams.topMargin = dp(mainWindow ? 18 : 8);
-        appName.setLayoutParams(nameParams);
-
-        setDpTextSize(packageName, mainWindow ? 11 : 8);
-        packageName.setVisibility(mainWindow ? VISIBLE : GONE);
     }
 
     private ImageView createEmptyWindowMark(Context context) {
@@ -438,7 +366,4 @@ public final class OneStepWindowView extends FrameLayout {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private static void setDpTextSize(TextView view, float value) {
-        view.setTextSize(TypedValue.COMPLEX_UNIT_DIP, value);
-    }
 }
