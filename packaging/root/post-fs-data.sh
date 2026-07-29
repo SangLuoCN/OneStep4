@@ -8,6 +8,19 @@ LOG_FILE="$MODDIR/statusbar-overlay.log"
 ZYGISK_DIR="$MODDIR/zygisk"
 DISABLE_STATUS_BAR_HOOK="$MODDIR/hook-config/disable-status-bar-overlay"
 
+lsposed_active() {
+  for module_prop in /data/adb/modules/*/module.prop; do
+    [ -f "$module_prop" ] || continue
+    module_dir="${module_prop%/*}"
+    [ ! -e "$module_dir/disable" ] || continue
+    [ ! -e "$module_dir/remove" ] || continue
+    if grep -Eiq '^(id|name)=.*(lsposed|lspd|vector)' "$module_prop"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 write_log() {
   message="$1"
   echo "$(date '+%Y-%m-%d %H:%M:%S') $message" >>"$LOG_FILE"
@@ -15,6 +28,9 @@ write_log() {
 }
 
 zygisk_payload_active() {
+  if lsposed_active; then
+    return 0
+  fi
   [ -f "$ZYGISK_DIR/arm64-v8a.so" ] \
     && [ -f "$ZYGISK_DIR/armeabi-v7a.so" ]
 }

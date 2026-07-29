@@ -97,7 +97,7 @@ public final class OneStepStatusBarOverlayHook {
             return;
         }
         try {
-            XposedBridge.disableHiddenApiRestrictions();
+            HookBridgeCompat.disableHiddenApiRestrictions();
             Class<?> supervisorClass = resolved.supervisorClass;
             Class<?> applicationThreadProxyClass = resolved.applicationThreadProxyClass;
             int activityHooks = installActivityStartHooks(supervisorClass);
@@ -209,7 +209,7 @@ public final class OneStepStatusBarOverlayHook {
             try {
                 method.setAccessible(true);
                 XposedBridge.hookMethod(method, callback);
-                XposedBridge.deoptimizeMethod(method);
+                HookBridgeCompat.deoptimizeMethod(method);
                 installedHooks++;
             } catch (Throwable t) {
                 Log.w(TAG, "could not hook " + owner.getName() + "#" + methodName,
@@ -270,7 +270,7 @@ public final class OneStepStatusBarOverlayHook {
             try {
                 method.setAccessible(true);
                 XposedBridge.hookMethod(method, callback);
-                XposedBridge.deoptimizeMethod(method);
+                HookBridgeCompat.deoptimizeMethod(method);
                 installedHooks++;
             } catch (Throwable t) {
                 Log.w(TAG, "could not hook IApplicationThread.Proxy#bindApplication",
@@ -324,7 +324,7 @@ public final class OneStepStatusBarOverlayHook {
             try {
                 method.setAccessible(true);
                 XposedBridge.hookMethod(method, callback);
-                XposedBridge.deoptimizeMethod(method);
+                HookBridgeCompat.deoptimizeMethod(method);
                 installedHooks++;
             } catch (Throwable t) {
                 Log.w(TAG, "could not hook " + owner.getName() + "#" + methodName,
@@ -672,7 +672,7 @@ public final class OneStepStatusBarOverlayHook {
             }
             try {
                 method.setAccessible(true);
-                XposedBridge.deoptimizeMethod(method);
+                HookBridgeCompat.deoptimizeMethod(method);
             } catch (Throwable t) {
                 Log.w(TAG, "could not deoptimize " + owner.getName() + "#"
                         + method.getName(), unwrap(t));

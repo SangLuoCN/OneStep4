@@ -12,6 +12,19 @@ GLOBAL_ZYGISK_TOGGLE="/data/adb/post-fs-data.d/onestep40-zygisk-toggle.sh"
 HOOK_CONFIG_DIR="$MODPATH/hook-config"
 PREVIOUS_HOOK_CONFIG_DIR="/data/adb/modules/onestep40_privapp/hook-config"
 
+lsposed_active() {
+  for module_prop in /data/adb/modules/*/module.prop; do
+    [ -f "$module_prop" ] || continue
+    module_dir="${module_prop%/*}"
+    [ ! -e "$module_dir/disable" ] || continue
+    [ ! -e "$module_dir/remove" ] || continue
+    if grep -Eiq '^(id|name)=.*(lsposed|lspd|vector)' "$module_prop"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 mkdir -p "$HOOK_CONFIG_DIR"
 for hook_marker in disable-secure-window disable-status-bar-overlay; do
   if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/$hook_marker" ]; then
@@ -21,7 +34,11 @@ done
 set_perm_recursive "$HOOK_CONFIG_DIR" 0 0 0700 0600
 
 ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"
-if ! echo "$ZYGISK_STATE" | grep -q "value=1"; then
+if lsposed_active; then
+  rm -rf "$MODPATH/zygisk"
+  ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
+  ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”作用域"
+elif ! echo "$ZYGISK_STATE" | grep -q "value=1"; then
   rm -rf "$MODPATH/zygisk"
   ui_print "- Zygisk 未启用：OneStep 普通页面仍可正常使用"
   ui_print "! FLAG_SECURE 页面将由系统显示为黑屏；启用 Zygisk 后可正常显示"

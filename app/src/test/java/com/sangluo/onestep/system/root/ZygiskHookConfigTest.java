@@ -11,32 +11,41 @@ public class ZygiskHookConfigTest {
     @Test
     public void parseReadsIndependentHookAndRuntimeStates() {
         ZygiskHookConfig.State state = ZygiskHookConfig.parse(
-                "secure=0\nstatusbar=1\nmodule=1\nzygisk=0\n");
+                "secure=0\nstatusbar=1\nmodule=1\nzygisk=0\n"
+                        + "lsposed=1\nlsposed_backend=1\nstandalone_backend=0\n");
 
         assertNotNull(state);
         assertFalse(state.secureWindowEnabled);
         assertTrue(state.statusBarOverlayEnabled);
         assertTrue(state.moduleInstalled);
         assertFalse(state.zygiskPayloadActive);
+        assertTrue(state.lsposedInstalled);
+        assertTrue(state.lsposedBackendActive);
+        assertFalse(state.standaloneBackendActive);
     }
 
     @Test
     public void parseAcceptsReorderedOutputAndIgnoresUnrelatedLines() {
         ZygiskHookConfig.State state = ZygiskHookConfig.parse(
-                "diagnostic=value\nzygisk=1\nmodule=1\nstatusbar=0\nsecure=1\n");
+                "diagnostic=value\nzygisk=1\nmodule=1\nstatusbar=0\nsecure=1\n"
+                        + "standalone_backend=1\nlsposed_backend=0\nlsposed=0\n");
 
         assertNotNull(state);
         assertTrue(state.secureWindowEnabled);
         assertFalse(state.statusBarOverlayEnabled);
         assertTrue(state.moduleInstalled);
         assertTrue(state.zygiskPayloadActive);
+        assertFalse(state.lsposedInstalled);
+        assertFalse(state.lsposedBackendActive);
+        assertTrue(state.standaloneBackendActive);
     }
 
     @Test
     public void parseRejectsMissingOrInvalidFields() {
         assertNull(ZygiskHookConfig.parse("secure=1\nstatusbar=1\nmodule=1\n"));
         assertNull(ZygiskHookConfig.parse(
-                "secure=enabled\nstatusbar=1\nmodule=1\nzygisk=1\n"));
+                "secure=enabled\nstatusbar=1\nmodule=1\nzygisk=1\n"
+                        + "lsposed=0\nlsposed_backend=0\nstandalone_backend=1\n"));
     }
 
     @Test
@@ -47,6 +56,9 @@ public class ZygiskHookConfigTest {
         assertTrue(command.contains("/data/adb/modules/onestep4_ksu_privapp"));
         assertTrue(command.contains("zygisk/arm64-v8a.so"));
         assertTrue(command.contains("zygisk/armeabi-v7a.so"));
+        assertTrue(command.contains("onestep-lsposed-backend-active"));
+        assertTrue(command.contains("onestep-standalone-backend-active"));
+        assertTrue(command.contains("(lsposed|lspd|vector)"));
     }
 
     @Test

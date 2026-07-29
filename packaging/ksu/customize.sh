@@ -34,6 +34,19 @@ ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 HOOK_CONFIG_DIR="$MODPATH/hook-config"
 PREVIOUS_HOOK_CONFIG_DIR="/data/adb/modules/onestep4_ksu_privapp/hook-config"
 
+lsposed_active() {
+  for module_prop in /data/adb/modules/*/module.prop; do
+    [ -f "$module_prop" ] || continue
+    module_dir="${module_prop%/*}"
+    [ ! -e "$module_dir/disable" ] || continue
+    [ ! -e "$module_dir/remove" ] || continue
+    if grep -Eiq '^(id|name)=.*(lsposed|lspd|vector)' "$module_prop"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 mkdir -p "$HOOK_CONFIG_DIR"
 for hook_marker in disable-secure-window disable-status-bar-overlay; do
   if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/$hook_marker" ]; then
@@ -61,7 +74,10 @@ set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" 0 0 0644
 set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
 
-if [ -d /data/adb/modules/zygisksu ] \
+if lsposed_active; then
+  ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
+  ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”作用域"
+elif [ -d /data/adb/modules/zygisksu ] \
     && [ -f /data/adb/modules/zygisksu/module.prop ] \
     && grep -q '^id=zygisksu$' /data/adb/modules/zygisksu/module.prop \
     && [ ! -e /data/adb/modules/zygisksu/disable ] \

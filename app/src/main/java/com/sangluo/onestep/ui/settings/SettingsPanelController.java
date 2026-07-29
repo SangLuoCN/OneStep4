@@ -162,6 +162,9 @@ public final class SettingsPanelController {
     private boolean statusBarOverlayHookEnabled = true;
     private boolean zygiskModuleInstalled;
     private boolean zygiskPayloadActive;
+    private boolean lsposedInstalled;
+    private boolean lsposedBackendActive;
+    private boolean standaloneBackendActive;
     private boolean hookSettingsLoaded;
     private boolean hookSettingsSaving;
     private boolean updatingHookSwitches;
@@ -1263,6 +1266,9 @@ public final class SettingsPanelController {
         statusBarOverlayHookEnabled = state.statusBarOverlayEnabled;
         zygiskModuleInstalled = state.moduleInstalled;
         zygiskPayloadActive = state.zygiskPayloadActive;
+        lsposedInstalled = state.lsposedInstalled;
+        lsposedBackendActive = state.lsposedBackendActive;
+        standaloneBackendActive = state.standaloneBackendActive;
     }
 
     private void refreshZygiskHookSettingsViews() {
@@ -1277,9 +1283,15 @@ public final class SettingsPanelController {
                 zygiskHookStatusValueView.setText("读取中");
             } else if (!zygiskModuleInstalled) {
                 zygiskHookStatusValueView.setText("模块不可用");
+            } else if (lsposedBackendActive) {
+                zygiskHookStatusValueView.setText("LSPosed/Vector 已启用");
+            } else if (lsposedInstalled) {
+                zygiskHookStatusValueView.setText("LSPosed/Vector 待配置");
+            } else if (standaloneBackendActive) {
+                zygiskHookStatusValueView.setText("已启用");
             } else {
                 zygiskHookStatusValueView.setText(
-                        zygiskPayloadActive ? "已启用" : "未启用");
+                        zygiskPayloadActive ? "待生效" : "未启用");
             }
         }
         if (secureWindowHookValueView != null) {

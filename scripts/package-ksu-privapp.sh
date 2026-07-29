@@ -79,6 +79,7 @@ mkdir -p "$WORK_DIR/zygisk-runtime/armeabi-v7a"
 
 cp "$ROOT_DIR/packaging/ksu/customize.sh" "$WORK_DIR/customize.sh"
 cp "$ROOT_DIR/packaging/ksu/post-fs-data.sh" "$WORK_DIR/post-fs-data.sh"
+cp "$ROOT_DIR/packaging/ksu/uninstall.sh" "$WORK_DIR/uninstall.sh"
 cp "$ROOT_DIR/packaging/magisk/service.sh" "$WORK_DIR/boot-completed.sh"
 cp "$ROOT_DIR/packaging/root/action.sh" "$WORK_DIR/action.sh"
 cp "$ROOT_DIR/packaging/root/post-fs-data.sh" \
@@ -116,6 +117,7 @@ fi
 
 chmod 0755 "$WORK_DIR/customize.sh"
 chmod 0755 "$WORK_DIR/post-fs-data.sh"
+chmod 0755 "$WORK_DIR/uninstall.sh"
 chmod 0755 "$WORK_DIR/boot-completed.sh"
 chmod 0755 "$WORK_DIR/action.sh"
 chmod 0755 "$WORK_DIR/statusbar-post-fs-data.sh"
@@ -147,6 +149,7 @@ unzip -qq "$OUT_ZIP" \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
     "post-fs-data.sh" \
+    "uninstall.sh" \
     "action.sh" \
     "statusbar-post-fs-data.sh" \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk" \
@@ -161,6 +164,7 @@ for required_entry in \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
     "post-fs-data.sh" \
+    "uninstall.sh" \
     "action.sh" \
     "statusbar-post-fs-data.sh" \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk"; do

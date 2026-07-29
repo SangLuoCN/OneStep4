@@ -4,6 +4,21 @@ MODULE_ID="onestep40_privapp"
 MODULE_DIR="/data/adb/modules/$MODULE_ID"
 UPDATE_DIR="/data/adb/modules_update/$MODULE_ID"
 GLOBAL_SCRIPT="/data/adb/post-fs-data.d/onestep40-zygisk-toggle.sh"
+LSPOSED_ACTIVE_MARKER="/data/system/onestep-lsposed-backend-active"
+STANDALONE_ACTIVE_MARKER="/data/system/onestep-standalone-backend-active"
+
+lsposed_active() {
+  for module_prop in /data/adb/modules/*/module.prop; do
+    [ -f "$module_prop" ] || continue
+    module_dir="${module_prop%/*}"
+    [ ! -e "$module_dir/disable" ] || continue
+    [ ! -e "$module_dir/remove" ] || continue
+    if grep -Eiq '^(id|name)=.*(lsposed|lspd|vector)' "$module_prop"; then
+      return 0
+    fi
+  done
+  return 1
+}
 
 if [ ! -d "$MODULE_DIR" ] && [ -d "$UPDATE_DIR" ]; then
   MODULE_DIR="$UPDATE_DIR"
@@ -11,6 +26,7 @@ fi
 
 if [ ! -d "$MODULE_DIR" ] || [ -f "$MODULE_DIR/remove" ]; then
   rm -rf "$MODULE_DIR/zygisk" 2>/dev/null
+  rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER"
   rm -f "$GLOBAL_SCRIPT"
   exit 0
 fi
@@ -19,6 +35,26 @@ PAYLOAD_DIR="$MODULE_DIR/zygisk-payload"
 ARM64_PAYLOAD="$PAYLOAD_DIR/arm64-v8a.so"
 ARM32_PAYLOAD="$PAYLOAD_DIR/armeabi-v7a.so"
 ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"
+
+rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER"
+if [ -e "$MODULE_DIR/hook-config/disable-secure-window" ]; then
+  resetprop -n onestep.hook.secure 0
+else
+  resetprop -n onestep.hook.secure 1
+fi
+if [ -e "$MODULE_DIR/hook-config/disable-status-bar-overlay" ]; then
+  resetprop -n onestep.hook.statusbar 0
+else
+  resetprop -n onestep.hook.statusbar 1
+fi
+
+if lsposed_active; then
+  resetprop -n onestep.hook.backend lsposed
+  rm -rf "$MODULE_DIR/zygisk"
+  exit 0
+fi
+
+resetprop -n onestep.hook.backend standalone
 
 if ! echo "$ZYGISK_STATE" | grep -q "value=1"; then
   # A top-level zygisk directory makes Magisk ignore the whole module when Zygisk is off.

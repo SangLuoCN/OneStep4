@@ -125,7 +125,7 @@ public final class OneStepSecureWindowHook {
             return;
         }
         try {
-            XposedBridge.disableHiddenApiRestrictions();
+            HookBridgeCompat.disableHiddenApiRestrictions();
         } catch (Throwable t) {
             Log.w(TAG, "hidden API relaxation unavailable", t);
         }
@@ -183,7 +183,7 @@ public final class OneStepSecureWindowHook {
                     continue;
                 }
                 method.setAccessible(true);
-                XposedBridge.deoptimizeMethod(method);
+                HookBridgeCompat.deoptimizeMethod(method);
             }
         } catch (Throwable t) {
             Log.w(TAG, "could not deoptimize " + className + "#" + methodName, t);

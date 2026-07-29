@@ -5,6 +5,43 @@ ZYGISK_NEXT_DIR="/data/adb/modules/zygisksu"
 PAYLOAD_DIR="$MODDIR/zygisk-payload"
 ARM64_PAYLOAD="$PAYLOAD_DIR/arm64-v8a.so"
 ARM32_PAYLOAD="$PAYLOAD_DIR/armeabi-v7a.so"
+LSPOSED_ACTIVE_MARKER="/data/system/onestep-lsposed-backend-active"
+STANDALONE_ACTIVE_MARKER="/data/system/onestep-standalone-backend-active"
+
+lsposed_active() {
+  for module_prop in /data/adb/modules/*/module.prop; do
+    [ -f "$module_prop" ] || continue
+    module_dir="${module_prop%/*}"
+    [ ! -e "$module_dir/disable" ] || continue
+    [ ! -e "$module_dir/remove" ] || continue
+    if grep -Eiq '^(id|name)=.*(lsposed|lspd|vector)' "$module_prop"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+set_hook_property() {
+  property_name="$1"
+  property_value="$2"
+  if command -v resetprop >/dev/null 2>&1; then
+    resetprop -n "$property_name" "$property_value"
+  elif [ -x /data/adb/ksu/bin/resetprop ]; then
+    /data/adb/ksu/bin/resetprop -n "$property_name" "$property_value"
+  fi
+}
+
+rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER"
+if [ -e "$MODDIR/hook-config/disable-secure-window" ]; then
+  set_hook_property onestep.hook.secure 0
+else
+  set_hook_property onestep.hook.secure 1
+fi
+if [ -e "$MODDIR/hook-config/disable-status-bar-overlay" ]; then
+  set_hook_property onestep.hook.statusbar 0
+else
+  set_hook_property onestep.hook.statusbar 1
+fi
 
 zygisk_next_active() {
   [ -d "$ZYGISK_NEXT_DIR" ] \
@@ -13,6 +50,14 @@ zygisk_next_active() {
     && [ ! -e "$ZYGISK_NEXT_DIR/disable" ] \
     && [ ! -e "$ZYGISK_NEXT_DIR/remove" ]
 }
+
+if lsposed_active; then
+  set_hook_property onestep.hook.backend lsposed
+  rm -rf "$MODDIR/zygisk"
+  exit 0
+fi
+
+set_hook_property onestep.hook.backend standalone
 
 if ! zygisk_next_active \
     || [ ! -f "$ARM64_PAYLOAD" ] \

@@ -3,6 +3,7 @@
 .kotlin/
 /build/
 /app/build/
+/xposed-api-stubs/build/
 /.externalNativeBuild/
 /.cxx/
 /captures/

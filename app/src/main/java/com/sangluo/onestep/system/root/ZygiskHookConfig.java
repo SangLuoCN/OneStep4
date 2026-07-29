@@ -12,6 +12,10 @@ public final class ZygiskHookConfig {
             "/data/adb/modules/onestep40_privapp";
     private static final String KSU_MODULE_DIR =
             "/data/adb/modules/onestep4_ksu_privapp";
+    private static final String LSPOSED_ACTIVE_MARKER =
+            "/data/system/onestep-lsposed-backend-active";
+    private static final String STANDALONE_ACTIVE_MARKER =
+            "/data/system/onestep-standalone-backend-active";
 
     private ZygiskHookConfig() {
     }
@@ -29,7 +33,13 @@ public final class ZygiskHookConfig {
                 + "if [ -n \"$onestep_module\" ] "
                 + "&& [ -f \"$onestep_module/zygisk/arm64-v8a.so\" ] "
                 + "&& [ -f \"$onestep_module/zygisk/armeabi-v7a.so\" ]; then "
-                + "echo zygisk=1; else echo zygisk=0; fi";
+                + "echo zygisk=1; else echo zygisk=0; fi; "
+                + lsposedDiscoveryCommand()
+                + "echo lsposed=$onestep_lsposed; "
+                + "if [ -f " + quote(LSPOSED_ACTIVE_MARKER) + " ]; then "
+                + "echo lsposed_backend=1; else echo lsposed_backend=0; fi; "
+                + "if [ -f " + quote(STANDALONE_ACTIVE_MARKER) + " ]; then "
+                + "echo standalone_backend=1; else echo standalone_backend=0; fi";
     }
 
     public static String writeCommand(boolean secureWindowEnabled,
@@ -59,14 +69,20 @@ public final class ZygiskHookConfig {
         if (!isBinary(values.get("secure"))
                 || !isBinary(values.get("statusbar"))
                 || !isBinary(values.get("module"))
-                || !isBinary(values.get("zygisk"))) {
+                || !isBinary(values.get("zygisk"))
+                || !isBinary(values.get("lsposed"))
+                || !isBinary(values.get("lsposed_backend"))
+                || !isBinary(values.get("standalone_backend"))) {
             return null;
         }
         return new State(
                 "1".equals(values.get("secure")),
                 "1".equals(values.get("statusbar")),
                 "1".equals(values.get("module")),
-                "1".equals(values.get("zygisk")));
+                "1".equals(values.get("zygisk")),
+                "1".equals(values.get("lsposed")),
+                "1".equals(values.get("lsposed_backend")),
+                "1".equals(values.get("standalone_backend")));
     }
 
     private static String updateMarkerCommand(String marker, boolean enabled) {
@@ -87,6 +103,17 @@ public final class ZygiskHookConfig {
                 + "onestep_module=\"$onestep_candidate\"; break; fi; done; ";
     }
 
+    private static String lsposedDiscoveryCommand() {
+        return "onestep_lsposed=0; "
+                + "for onestep_lsp_prop in /data/adb/modules/*/module.prop; do "
+                + "[ -f \"$onestep_lsp_prop\" ] || continue; "
+                + "onestep_lsp_dir=\"${onestep_lsp_prop%/*}\"; "
+                + "[ ! -e \"$onestep_lsp_dir/disable\" ] || continue; "
+                + "[ ! -e \"$onestep_lsp_dir/remove\" ] || continue; "
+                + "if grep -Eiq '^(id|name)=.*(lsposed|lspd|vector)' "
+                + "\"$onestep_lsp_prop\"; then onestep_lsposed=1; break; fi; done; ";
+    }
+
     private static boolean isBinary(String value) {
         return "0".equals(value) || "1".equals(value);
     }
@@ -100,13 +127,21 @@ public final class ZygiskHookConfig {
         public final boolean statusBarOverlayEnabled;
         public final boolean moduleInstalled;
         public final boolean zygiskPayloadActive;
+        public final boolean lsposedInstalled;
+        public final boolean lsposedBackendActive;
+        public final boolean standaloneBackendActive;
 
         State(boolean secureWindowEnabled, boolean statusBarOverlayEnabled,
-              boolean moduleInstalled, boolean zygiskPayloadActive) {
+              boolean moduleInstalled, boolean zygiskPayloadActive,
+              boolean lsposedInstalled, boolean lsposedBackendActive,
+              boolean standaloneBackendActive) {
             this.secureWindowEnabled = secureWindowEnabled;
             this.statusBarOverlayEnabled = statusBarOverlayEnabled;
             this.moduleInstalled = moduleInstalled;
             this.zygiskPayloadActive = zygiskPayloadActive;
+            this.lsposedInstalled = lsposedInstalled;
+            this.lsposedBackendActive = lsposedBackendActive;
+            this.standaloneBackendActive = standaloneBackendActive;
         }
     }
 }

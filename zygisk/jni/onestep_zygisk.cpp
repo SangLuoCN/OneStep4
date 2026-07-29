@@ -1,9 +1,14 @@
 #include <android/log.h>
+#include <ctype.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <jni.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 #include <unistd.h>
 
 #include "zygisk.hpp"
@@ -32,6 +37,9 @@ constexpr const char *kDisableSecureWindowHook =
         "hook-config/disable-secure-window";
 constexpr const char *kDisableStatusBarOverlayHook =
         "hook-config/disable-status-bar-overlay";
+constexpr const char *kModulesDirectory = "/data/adb/modules";
+constexpr const char *kStandaloneBackendMarker =
+        "/data/system/onestep-standalone-backend-active";
 
 #if defined(__aarch64__)
 constexpr const char *kAbi = "arm64-v8a";
@@ -53,6 +61,93 @@ bool clearException(JNIEnv *env, const char *stage) {
         fsync(statusHookDiagnosticFd);
     }
     return true;
+}
+
+bool containsIgnoreCase(const char *text, const char *needle) {
+    if (text == nullptr || needle == nullptr || *needle == '\0') {
+        return false;
+    }
+    size_t needleLength = strlen(needle);
+    for (const char *start = text; *start != '\0'; ++start) {
+        size_t index = 0;
+        while (index < needleLength && start[index] != '\0'
+                && tolower(static_cast<unsigned char>(start[index]))
+                == tolower(static_cast<unsigned char>(needle[index]))) {
+            ++index;
+        }
+        if (index == needleLength) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool isLsposedModuleProperty(const char *line) {
+    if (line == nullptr
+            || (strncmp(line, "id=", 3) != 0 && strncmp(line, "name=", 5) != 0)) {
+        return false;
+    }
+    return containsIgnoreCase(line, "lsposed")
+            || containsIgnoreCase(line, "lspd")
+            || containsIgnoreCase(line, "vector");
+}
+
+bool activeLsposedModuleInstalled() {
+    char selectedBackend[PROP_VALUE_MAX]{};
+    if (__system_property_get("onestep.hook.backend", selectedBackend) > 0
+            && strcmp(selectedBackend, "lsposed") == 0) {
+        return true;
+    }
+    DIR *modules = opendir(kModulesDirectory);
+    if (modules == nullptr) {
+        return false;
+    }
+    bool found = false;
+    dirent *entry = nullptr;
+    while (!found && (entry = readdir(modules)) != nullptr) {
+        if (entry->d_name[0] == '.') {
+            continue;
+        }
+        char moduleDirectory[PATH_MAX];
+        snprintf(moduleDirectory, sizeof(moduleDirectory), "%s/%s",
+                 kModulesDirectory, entry->d_name);
+        char markerPath[PATH_MAX];
+        snprintf(markerPath, sizeof(markerPath), "%s/disable", moduleDirectory);
+        if (access(markerPath, F_OK) == 0) {
+            continue;
+        }
+        snprintf(markerPath, sizeof(markerPath), "%s/remove", moduleDirectory);
+        if (access(markerPath, F_OK) == 0) {
+            continue;
+        }
+        char propertyPath[PATH_MAX];
+        snprintf(propertyPath, sizeof(propertyPath), "%s/module.prop", moduleDirectory);
+        FILE *properties = fopen(propertyPath, "r");
+        if (properties == nullptr) {
+            continue;
+        }
+        char line[512];
+        while (fgets(line, sizeof(line), properties) != nullptr) {
+            if (isLsposedModuleProperty(line)) {
+                found = true;
+                break;
+            }
+        }
+        fclose(properties);
+    }
+    closedir(modules);
+    return found;
+}
+
+void markStandaloneBackendActive() {
+    int fd = open(kStandaloneBackendMarker,
+                  O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        LOGE("could not create standalone backend marker");
+        return;
+    }
+    dprintf(fd, "standalone\n");
+    close(fd);
 }
 
 void *readModuleFile(int moduleFd, const char *path, size_t *sizeOut) {
@@ -249,6 +344,12 @@ public:
             close(moduleFd);
             return;
         }
+        if (activeLsposedModuleInstalled()) {
+            lsposedBackendSelected = true;
+            LOGI("Active LSPosed module detected; skip standalone Aliuhook/LSPlant");
+            close(moduleFd);
+            return;
+        }
         jobject systemLoader = systemClassLoader(env);
         jobject aliuhookLoader = systemLoader == nullptr
                 ? nullptr : makeAliuHookClassLoader(env, moduleFd, systemLoader);
@@ -271,9 +372,14 @@ public:
     }
 
     void postServerSpecialize(const zygisk::ServerSpecializeArgs *) override {
+        if (lsposedBackendSelected) {
+            LOGI("LSPosed backend selected for system_server");
+            return;
+        }
         if (!secureWindowHookEnabled && !statusBarOverlayHookEnabled) {
             return;
         }
+        markStandaloneBackendActive();
         statusHookDiagnosticFd = open("/data/system/onestep-status-hook.log",
                                       O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
         writeStatusHookDiagnostic("postServerSpecialize started");
@@ -346,6 +452,7 @@ private:
     jobject systemClassLoaderRef = nullptr;
     bool secureWindowHookEnabled = true;
     bool statusBarOverlayHookEnabled = true;
+    bool lsposedBackendSelected = false;
 };
 
 } // namespace
