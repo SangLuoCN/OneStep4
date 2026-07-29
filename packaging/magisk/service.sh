@@ -160,6 +160,11 @@ restore_for_user() {
 }
 
 write_log "Waiting for Android boot completion"
+if [ -x "$MODDIR/statusbar-post-fs-data.sh" ]; then
+  write_log "Generating status-bar idmap after module mounts are available"
+  "$MODDIR/statusbar-post-fs-data.sh"
+fi
+
 boot_wait=0
 while [ "$(getprop sys.boot_completed)" != "1" ] && [ "$boot_wait" -lt 180 ]; do
   sleep 2

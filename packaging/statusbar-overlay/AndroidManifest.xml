@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.sangluo.onestep.statusbaroverlay">
+
+    <uses-sdk
+        android:minSdkVersion="24"
+        android:targetSdkVersion="28" />
+
+    <overlay
+        android:isStatic="false"
+        android:priority="999"
+        android:targetPackage="android" />
+
+    <application android:hasCode="false" />
+</manifest>

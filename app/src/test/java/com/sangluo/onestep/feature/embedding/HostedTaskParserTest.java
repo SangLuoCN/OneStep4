@@ -19,6 +19,15 @@ public class HostedTaskParserTest {
     }
 
     @Test
+    public void fallsBackToNonVisiblePackageTaskOnTargetDisplay() {
+        String stackList = "RootTask id=8 displayId=12 userId=0\n"
+                + "  taskId=41 visible=false topActivity=com.example.player/.Main\n";
+
+        assertEquals(41, HostedTaskParser.findHostedTaskId(
+                stackList, 12, "com.example.player"));
+    }
+
+    @Test
     public void rejectsOtherDisplaysAndPackages() {
         assertEquals(-1, HostedTaskParser.findHostedTaskId(
                 STACK_LIST, 0, "com.example.player"));

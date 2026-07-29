@@ -1,6 +1,6 @@
 package com.sangluo.onestep.feature.embedding;
 
-/** Parses `am stack list` output to locate the visible task hosted on a display. */
+/** Parses `am stack list` output to locate an app task hosted on a display. */
 public final class HostedTaskParser {
     private HostedTaskParser() {
     }
@@ -11,6 +11,7 @@ public final class HostedTaskParser {
             return -1;
         }
         int rootDisplayId = -1;
+        int fallbackTaskId = -1;
         String[] lines = stackList.split("\\n");
         for (String rawLine : lines) {
             String line = rawLine.trim();
@@ -20,12 +21,17 @@ public final class HostedTaskParser {
             }
             if (rootDisplayId == targetDisplayId
                     && line.startsWith("taskId=")
-                    && line.contains("visible=true")
                     && line.contains(packageName + "/")) {
-                return parseIntAfter(line, "taskId=");
+                int taskId = parseIntAfter(line, "taskId=");
+                if (line.contains("visible=true")) {
+                    return taskId;
+                }
+                if (fallbackTaskId <= 0) {
+                    fallbackTaskId = taskId;
+                }
             }
         }
-        return -1;
+        return fallbackTaskId;
     }
 
     static int parseIntAfter(String text, String marker) {

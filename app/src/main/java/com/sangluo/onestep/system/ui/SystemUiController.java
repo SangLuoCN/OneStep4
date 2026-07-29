@@ -15,16 +15,11 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 
-import java.lang.reflect.Method;
 import java.util.function.BooleanSupplier;
 
 /** Applies system bars and owns the tiny default-display key-focus anchor. */
 public final class SystemUiController implements AutoCloseable {
     private static final String TAG = "OneStep40";
-    private static final int STATUS_BAR_DISABLE_NONE = 0x00000000;
-    private static final int STATUS_BAR_DISABLE_EXPAND = 0x00010000;
-    private static final int STATUS_BAR_DISABLE2_NOTIFICATION_SHADE = 1 << 2;
-
     private final Activity activity;
     private final Handler handler;
     private final BooleanSupplier hideStatusBar;
@@ -82,7 +77,6 @@ public final class SystemUiController implements AutoCloseable {
     @Override
     public void close() {
         dismissDefaultDisplayFocusWindow();
-        setStatusBarExpansionDisabled(false);
     }
 
     private void applyHostWindowFocus() {
@@ -250,7 +244,6 @@ public final class SystemUiController implements AutoCloseable {
                     View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         }
         decorView.setOnSystemUiVisibilityChangeListener(null);
-        setStatusBarExpansionDisabled(false);
     }
 
     private void hideStatusBar() {
@@ -283,7 +276,6 @@ public final class SystemUiController implements AutoCloseable {
                 decorView.postDelayed(this::apply, 16);
             }
         });
-        setStatusBarExpansionDisabled(false);
     }
 
     private void applyDisplayCutoutMode(Window window) {
@@ -295,22 +287,4 @@ public final class SystemUiController implements AutoCloseable {
         }
     }
 
-    @SuppressLint("WrongConstant")
-    private void setStatusBarExpansionDisabled(boolean disabled) {
-        try {
-            Object statusBarManager = activity.getSystemService("statusbar");
-            if (statusBarManager == null) {
-                return;
-            }
-            Method disable = statusBarManager.getClass().getMethod("disable", int.class);
-            disable.invoke(statusBarManager,
-                    disabled ? STATUS_BAR_DISABLE_EXPAND : STATUS_BAR_DISABLE_NONE);
-            Method disable2 = statusBarManager.getClass().getMethod("disable2", int.class);
-            disable2.invoke(statusBarManager,
-                    disabled ? STATUS_BAR_DISABLE2_NOTIFICATION_SHADE : STATUS_BAR_DISABLE_NONE);
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            Log.w(TAG, "Status bar expansion control unavailable: "
-                    + e.getClass().getSimpleName());
-        }
-    }
 }

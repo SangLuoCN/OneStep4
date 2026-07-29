@@ -938,40 +938,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (viewWidth == lastViewWidth && viewHeight == lastViewHeight) {
             return;
         }
-
-        VirtualDisplaySpec spec = makeVirtualDisplaySpec();
-        SurfaceHolder holder = surfaceView.getHolder();
-        try {
-            if (matchesCurrentVirtualDisplaySpec(spec)) {
-                lastViewWidth = viewWidth;
-                lastViewHeight = viewHeight;
-                return;
-            }
-            holder.setFixedSize(spec.width, spec.height);
-            Log.i(TAG, "Resize virtual display for slot " + slot
-                    + ": old=" + displayWidth + "x" + displayHeight
-                    + "@" + displayDensityDpi
-                    + ", new=" + spec.width + "x" + spec.height
-                    + "@" + spec.densityDpi
-                    + ", view=" + viewWidth + "x" + viewHeight);
-            if (!resizeHostedDisplay(spec)) {
-                throw new IllegalStateException("virtual display resize rejected");
-            }
-            lastViewWidth = viewWidth;
-            lastViewHeight = viewHeight;
-            displayWidth = spec.width;
-            displayHeight = spec.height;
-            displayDensityDpi = spec.densityDpi;
-            return;
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Resize virtual display failed for slot " + slot + ": "
-                    + e.getClass().getSimpleName());
-        }
-
-        // A failed vendor resize must not turn into a release/create cycle. The existing
-        // full-resolution display remains usable and can be retried on a later real change.
-        lastViewWidth = viewWidth;
-        lastViewHeight = viewHeight;
+        keepVirtualDisplaySurfaceSize(surfaceView.getHolder(), viewWidth, viewHeight);
     }
 
     @Override
@@ -1031,6 +998,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     public void closeApp(String packageName, Runnable onClosed) {
         final String targetPackage = TextUtils.isEmpty(packageName)
                 ? getHostedPackageName() : packageName;
+        final int targetTaskId = hostedTaskId;
         invalidateTaskResolution();
         invalidateDisplayImePolicySetup();
         pendingApp = null;
@@ -1039,6 +1007,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         try {
             rootExecutor.execute(() -> {
                 if (!TextUtils.isEmpty(targetPackage)) {
+                    removeDismissedHostedTask(targetPackage, targetTaskId);
                     ShellCommandResult result = runPrivilegedCommand(
                             "am force-stop --user current " + shellQuote(targetPackage),
                             "force-stop dismissed app " + targetPackage, true);
@@ -1068,6 +1037,19 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     onClosed.run();
                 }
             });
+        }
+    }
+
+    private void removeDismissedHostedTask(String packageName, int taskId) {
+        if (taskId <= 0) {
+            Log.w(TAG, "No resolved task ID while dismissing app: " + packageName);
+            return;
+        }
+        boolean removed = startRootInputBridgeIfNeeded(false)
+                && rootInputBridgeClient.removeTask(getRootInputBridgeToken(), taskId);
+        if (!removed) {
+            Log.e(TAG, "Remove dismissed app task failed: package=" + packageName
+                    + ", taskId=" + taskId);
         }
     }
 
@@ -1125,7 +1107,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 return;
             }
             if (viewWidth != lastViewWidth || viewHeight != lastViewHeight) {
-                resizeVirtualDisplay(holder, viewWidth, viewHeight);
+                keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
             }
         }
         if (appToStart != null && displayId >= 0) {
@@ -1727,23 +1709,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             }
             SystemClock.sleep(Math.min(16L, remainingMs));
         } while (true);
-    }
-
-    private boolean resizeHostedDisplay(VirtualDisplaySpec spec) {
-        if (spec == null) {
-            return false;
-        }
-        if (rootManagedVirtualDisplay) {
-            return rootVirtualDisplayBridgeClient.resize(
-                    getRootInputBridgeToken(), slot,
-                    spec.width, spec.height, spec.densityDpi);
-        }
-        VirtualDisplay directDisplay = virtualDisplay;
-        if (directDisplay == null) {
-            return false;
-        }
-        directDisplay.resize(spec.width, spec.height, spec.densityDpi);
-        return true;
     }
 
     private boolean setHostedDisplaySurface(Surface surface) {
@@ -2363,6 +2328,17 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         displayId = hostedDisplay.getDisplayId();
         surfaceDetached = false;
         unavailableReason = "";
+        VirtualDisplaySystemDecorController.Result decorResult =
+                VirtualDisplaySystemDecorController.disable(owner, displayId);
+        int priority = decorResult.isConfirmedDisabled() ? Log.INFO : Log.WARN;
+        Log.println(priority, TAG, "Virtual display system decorations: slot=" + slot
+                + ", display=" + displayId
+                + ", requested=" + decorResult.requested
+                + ", actual=" + decorResult.actualValue()
+                + (decorResult.failure.isEmpty()
+                ? "" : ", failure=" + decorResult.failure)
+                + ", backend=" + (rootManagedVirtualDisplay
+                ? "app-fallback" : "app"));
         int actualDisplayFlags = getDisplayFlagsForDiagnostics(hostedDisplay);
         if (rootManagedVirtualDisplay
                 && (actualDisplayFlags < 0
@@ -2423,50 +2399,28 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 + ", exitCode=" + result.exitCode);
     }
 
-    private void resizeVirtualDisplay(SurfaceHolder holder, int viewWidth, int viewHeight) {
+    private void keepVirtualDisplaySurfaceSize(SurfaceHolder holder,
+                                               int viewWidth, int viewHeight) {
         if (!hasVirtualDisplay() || displayId < 0) {
             createVirtualDisplay(holder, viewWidth, viewHeight);
             return;
         }
-        VirtualDisplaySpec spec = makeVirtualDisplaySpec();
-        try {
-            if (matchesCurrentVirtualDisplaySpec(spec)) {
-                lastViewWidth = viewWidth;
-                lastViewHeight = viewHeight;
-                return;
-            }
-            holder.setFixedSize(spec.width, spec.height);
-            Log.i(TAG, "Resize virtual display for slot " + slot
-                    + ": old=" + displayWidth + "x" + displayHeight
-                    + "@" + displayDensityDpi
-                    + ", new=" + spec.width + "x" + spec.height
-                    + "@" + spec.densityDpi
-                    + ", view=" + viewWidth + "x" + viewHeight);
-            if (!resizeHostedDisplay(spec)) {
-                throw new IllegalStateException("virtual display resize rejected");
-            }
-            lastViewWidth = viewWidth;
-            lastViewHeight = viewHeight;
-            displayWidth = spec.width;
-            displayHeight = spec.height;
-            displayDensityDpi = spec.densityDpi;
-            return;
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Resize virtual display failed for slot " + slot + ": "
-                    + e.getClass().getSimpleName());
+        Rect surfaceFrame = holder.getSurfaceFrame();
+        if (surfaceFrame == null
+                || surfaceFrame.width() != displayWidth
+                || surfaceFrame.height() != displayHeight) {
+            holder.setFixedSize(displayWidth, displayHeight);
         }
         lastViewWidth = viewWidth;
         lastViewHeight = viewHeight;
     }
 
-    private boolean matchesCurrentVirtualDisplaySpec(VirtualDisplaySpec spec) {
-        return spec != null
-                && displayWidth == spec.width
-                && displayHeight == spec.height
-                && displayDensityDpi == spec.densityDpi;
-    }
-
     private VirtualDisplaySpec makeVirtualDisplaySpec() {
+        // A display resize is an app configuration change. Keep the creation spec so video
+        // surfaces survive main/side/fullscreen container transitions.
+        if (displayWidth > 0 && displayHeight > 0 && displayDensityDpi > 0) {
+            return new VirtualDisplaySpec(displayWidth, displayHeight, displayDensityDpi);
+        }
         Rect referenceRect = getReferenceRenderRect();
         // Every slot represents the same phone screen. Deriving the mode from each slot's
         // rounded view size made main/side swaps oscillate by a few pixels and relaunch apps.

@@ -13,10 +13,21 @@
 
 namespace {
 
+int statusHookDiagnosticFd = -1;
+
+void writeStatusHookDiagnostic(const char *message) {
+    if (statusHookDiagnosticFd >= 0) {
+        dprintf(statusHookDiagnosticFd, "%s\n", message);
+        fsync(statusHookDiagnosticFd);
+    }
+}
+
 constexpr const char *kAliuHookDex = "zygisk-runtime/aliuhook.dex";
 constexpr const char *kOneStepApk = "/system/priv-app/OneStep4/OneStep4.apk";
 constexpr const char *kHookClass =
         "com.sangluo.onestep.hook.OneStepSecureWindowHook";
+constexpr const char *kStatusBarOverlayHookClass =
+        "com.sangluo.onestep.hook.OneStepStatusBarOverlayHook";
 
 #if defined(__aarch64__)
 constexpr const char *kAbi = "arm64-v8a";
@@ -33,6 +44,10 @@ bool clearException(JNIEnv *env, const char *stage) {
     env->ExceptionDescribe();
     env->ExceptionClear();
     LOGE("JNI failure at %s", stage);
+    if (statusHookDiagnosticFd >= 0) {
+        dprintf(statusHookDiagnosticFd, "JNI failure at %s\n", stage);
+        fsync(statusHookDiagnosticFd);
+    }
     return true;
 }
 
@@ -184,6 +199,24 @@ jclass loadHookClass(JNIEnv *env, jobject appLoader) {
     return hookClass;
 }
 
+jclass loadStatusBarOverlayHookClass(JNIEnv *env, jobject appLoader) {
+    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
+    jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
+            classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (loadClass == nullptr
+            || clearException(env, "ClassLoader.loadClass method for status-bar overlay")) {
+        return nullptr;
+    }
+    jstring className = env->NewStringUTF(kStatusBarOverlayHookClass);
+    auto overlayHookClass = static_cast<jclass>(
+            env->CallObjectMethod(appLoader, loadClass, className));
+    if (overlayHookClass == nullptr
+            || clearException(env, "load OneStep status-bar overlay hook class")) {
+        return nullptr;
+    }
+    return overlayHookClass;
+}
+
 class OneStepZygiskModule : public zygisk::ModuleBase {
 public:
     void onLoad(zygisk::Api *loadedApi, JNIEnv *loadedEnv) override {
@@ -209,26 +242,69 @@ public:
             jclass localHookClass = appLoader == nullptr ? nullptr : loadHookClass(env, appLoader);
             if (localHookClass != nullptr) {
                 hookClass = static_cast<jclass>(env->NewGlobalRef(localHookClass));
-                systemClassLoaderRef = env->NewGlobalRef(systemLoader);
                 LOGI("Hook runtime prepared for %s", kAbi);
+            }
+            if (appLoader != nullptr) {
+                appClassLoaderRef = env->NewGlobalRef(appLoader);
+            }
+            if (hookClass != nullptr || appClassLoaderRef != nullptr) {
+                systemClassLoaderRef = env->NewGlobalRef(systemLoader);
             }
         }
         close(moduleFd);
     }
 
     void postServerSpecialize(const zygisk::ServerSpecializeArgs *) override {
-        if (hookClass == nullptr || systemClassLoaderRef == nullptr) {
+        statusHookDiagnosticFd = open("/data/system/onestep-status-hook.log",
+                                      O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+        writeStatusHookDiagnostic("postServerSpecialize started");
+        if (systemClassLoaderRef == nullptr) {
             LOGE("Hook runtime was not prepared");
+            writeStatusHookDiagnostic("system class loader unavailable");
             return;
         }
-        jmethodID bootstrap = env->GetStaticMethodID(
-                hookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
-        if (bootstrap == nullptr || clearException(env, "find hook bootstrap")) {
-            return;
+        if (hookClass == nullptr) {
+            LOGE("Secure-window hook runtime was not prepared");
+        } else {
+            jmethodID bootstrap = env->GetStaticMethodID(
+                    hookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
+            if (bootstrap == nullptr || clearException(env, "find hook bootstrap")) {
+                LOGE("Secure-window hook bootstrap was unavailable");
+            } else {
+                env->CallStaticVoidMethod(hookClass, bootstrap, systemClassLoaderRef);
+                if (!clearException(env, "run hook bootstrap")) {
+                    LOGI("Hook bootstrap started");
+                }
+            }
         }
-        env->CallStaticVoidMethod(hookClass, bootstrap, systemClassLoaderRef);
-        if (!clearException(env, "run hook bootstrap")) {
-            LOGI("Hook bootstrap started");
+        jclass statusBarOverlayHookClass = appClassLoaderRef == nullptr
+                ? nullptr : loadStatusBarOverlayHookClass(env, appClassLoaderRef);
+        if (statusBarOverlayHookClass == nullptr) {
+            LOGE("Status-bar overlay hook runtime was not prepared");
+            writeStatusHookDiagnostic("status-bar hook class unavailable");
+        } else {
+            writeStatusHookDiagnostic("status-bar hook class loaded");
+            jmethodID overlayBootstrap = env->GetStaticMethodID(
+                    statusBarOverlayHookClass,
+                    "bootstrap",
+                    "(Ljava/lang/ClassLoader;)V");
+            if (overlayBootstrap == nullptr
+                    || clearException(env, "find status-bar overlay hook bootstrap")) {
+                LOGE("Status-bar overlay hook bootstrap was unavailable");
+                writeStatusHookDiagnostic("status-bar bootstrap method unavailable");
+            } else {
+                writeStatusHookDiagnostic("calling status-bar bootstrap");
+                env->CallStaticVoidMethod(
+                        statusBarOverlayHookClass, overlayBootstrap, systemClassLoaderRef);
+                if (!clearException(env, "run status-bar overlay hook bootstrap")) {
+                    LOGI("Status-bar overlay hook bootstrap started");
+                    writeStatusHookDiagnostic("status-bar bootstrap returned");
+                }
+            }
+        }
+        if (statusHookDiagnosticFd >= 0) {
+            close(statusHookDiagnosticFd);
+            statusHookDiagnosticFd = -1;
         }
     }
 
@@ -236,6 +312,7 @@ private:
     zygisk::Api *api = nullptr;
     JNIEnv *env = nullptr;
     jclass hookClass = nullptr;
+    jobject appClassLoaderRef = nullptr;
     jobject systemClassLoaderRef = nullptr;
 };
 

@@ -304,6 +304,11 @@ public final class MediaPlaybackPanel implements AutoCloseable {
         }
     }
 
+    public void refreshAppIcons() {
+        updateMediaSourceAppIcon(getCurrentMediaPackageName());
+        updatePlaylistPanel();
+    }
+
     private void ensureMediaNotificationAccess() {
         ComponentName componentName = MediaNotificationListenerService.getComponentName(activity);
         if (isNotificationListenerEnabled(componentName)) {

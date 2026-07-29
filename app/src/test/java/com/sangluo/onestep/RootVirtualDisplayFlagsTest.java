@@ -9,12 +9,14 @@ import org.junit.Test;
 
 public class RootVirtualDisplayFlagsTest {
     private static final int VIRTUAL_DISPLAY_FLAG_CAN_SHOW_WITH_INSECURE_KEYGUARD = 1 << 5;
+    private static final int VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS = 1 << 9;
     private static final int VIRTUAL_DISPLAY_FLAG_TRUSTED = 1 << 10;
 
     @Test
     public void publicCandidateRemainsPublicTrustedAndOwnContentOnly() {
         int requested = DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC
                 | DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS
                 | DisplayManager.VIRTUAL_DISPLAY_FLAG_SECURE;
 
         int actual = RootVirtualDisplayFlags.forRootBridge(requested);
@@ -23,6 +25,7 @@ public class RootVirtualDisplayFlagsTest {
         assertEquals(0, actual & DisplayManager.VIRTUAL_DISPLAY_FLAG_SECURE);
         assertNotEquals(0, actual & DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
         assertEquals(0, actual & VIRTUAL_DISPLAY_FLAG_CAN_SHOW_WITH_INSECURE_KEYGUARD);
+        assertEquals(0, actual & VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
         assertNotEquals(0, actual & VIRTUAL_DISPLAY_FLAG_TRUSTED);
     }
 
@@ -36,5 +39,15 @@ public class RootVirtualDisplayFlagsTest {
         assertEquals(0, actual & DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
         assertEquals(0, actual & DisplayManager.VIRTUAL_DISPLAY_FLAG_SECURE);
         assertNotEquals(0, actual & VIRTUAL_DISPLAY_FLAG_TRUSTED);
+    }
+
+    @Test
+    public void privateCandidateCannotRequestSystemDecorations() {
+        int requested = DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS;
+
+        int actual = RootVirtualDisplayFlags.forRootBridge(requested);
+
+        assertEquals(0, actual & VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
     }
 }

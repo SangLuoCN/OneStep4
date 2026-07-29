@@ -6,11 +6,14 @@ import android.app.Activity;
 import android.app.ActivityOptions;
 import android.app.WallpaperManager;
 import android.content.ActivityNotFoundException;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
@@ -114,6 +117,12 @@ import static com.sangluo.onestep.data.settings.OneStepSettings.sanitizeTopNavVe
 
 public class MainActivity extends Activity {
     private static final String TAG = "OneStep40";
+    private static final String ACTION_OPLUS_SKIN_CHANGED =
+            "oplus.intent.action.SKIN_CHANGED";
+    private static final String ACTION_SMARTISAN_ICONS_CHANGED =
+            "com.smartisanos.launcher.update_icon";
+    private static final String ACTION_OVERLAY_CHANGED =
+            "android.intent.action.OVERLAY_CHANGED";
     static final String EXTRA_SHOW_DESKTOP_HOME =
             "com.sangluo.onestep.extra.SHOW_DESKTOP_HOME";
     static final String EXTRA_DEFAULT_DISPLAY_RELAY_ATTEMPTED =
@@ -141,7 +150,7 @@ public class MainActivity extends Activity {
     private static final int MAIN_APP_REPLACE_FADE_OUT_MS = 160;
     private static final int CORNER_TRIGGER_DISTANCE_DEFAULT_DP = 36;
     private static final int CORNER_TRIGGER_PREVIEW_HIDE_DELAY_MS = 2000;
-    private static final int EXIT_BACKGROUND_DELAY_MS = 180;
+    private static final int EXIT_FULLSCREEN_LAYOUT_DELAY_MS = 180;
     private static final int EMBEDDED_LAYOUT_REFRESH_DELAY_MS = 320;
     private static final int VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX = 1080;
     private static final long POST_ANIMATION_NON_CRITICAL_WORK_DELAY_MS = 64L;
@@ -192,7 +201,18 @@ public class MainActivity extends Activity {
     private final ExecutorService wallpaperExecutor =
             Executors.newSingleThreadExecutor();
     private final ExecutorService pipDockExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService launcherIconExecutor = Executors.newSingleThreadExecutor();
     private final Object rootInputBridgeStartLock = new Object();
+    private boolean launcherIconReceiverRegistered;
+    private boolean launcherIconRefreshInFlight;
+    private boolean launcherIconRefreshPending;
+    private boolean completedFirstResume;
+    private final BroadcastReceiver launcherIconChangeReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            requestLauncherIconRefresh(intent == null ? "theme broadcast" : intent.getAction());
+        }
+    };
     private final Runnable refreshAllEmbeddedSlotLayoutsRunnable =
             this::refreshAllEmbeddedSlotLayouts;
     private final Runnable syncSideInputProtectionRunnable =
@@ -484,6 +504,7 @@ public class MainActivity extends Activity {
         launcherAppRepository = new LauncherAppRepository(this);
         launcherApps = launcherAppRepository.loadLauncherApps();
         setContentView(createDesktop());
+        registerLauncherIconChangeReceiver();
         sideInputShieldController = new SideWindowInputShieldController(
                 this, MAX_WINDOWS, new SideWindowInputShieldController.Callbacks() {
             @Override
@@ -528,6 +549,10 @@ public class MainActivity extends Activity {
         }
         boolean returningToForeground = !activityResumed;
         activityResumed = true;
+        if (returningToForeground && completedFirstResume) {
+            requestLauncherIconRefresh("returned to foreground");
+        }
+        completedFirstResume = true;
         suppressEmbeddedStarts = false;
         if (returningToForeground && systemUiController != null) {
             systemUiController.invalidateAppliedState();
@@ -537,6 +562,132 @@ public class MainActivity extends Activity {
         resumeMediaMonitoring();
         startPipMonitoring();
         scheduleSideInputProtectionSync();
+    }
+
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (!nonDefaultDisplayHomeRelay) {
+            requestLauncherIconRefresh("configuration changed");
+        }
+    }
+
+    private void registerLauncherIconChangeReceiver() {
+        if (launcherIconReceiverRegistered) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_CONFIGURATION_CHANGED);
+        filter.addAction(ACTION_OVERLAY_CHANGED);
+        filter.addAction(ACTION_OPLUS_SKIN_CHANGED);
+        filter.addAction(ACTION_SMARTISAN_ICONS_CHANGED);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(launcherIconChangeReceiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                registerReceiver(launcherIconChangeReceiver, filter);
+            }
+            launcherIconReceiverRegistered = true;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Unable to register theme icon receiver", e);
+        }
+    }
+
+    private void unregisterLauncherIconChangeReceiver() {
+        if (!launcherIconReceiverRegistered) {
+            return;
+        }
+        try {
+            unregisterReceiver(launcherIconChangeReceiver);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Unable to unregister theme icon receiver", e);
+        }
+        launcherIconReceiverRegistered = false;
+    }
+
+    private void requestLauncherIconRefresh(String reason) {
+        if (activityDestroyed || nonDefaultDisplayHomeRelay || launcherAppRepository == null) {
+            return;
+        }
+        if (launcherIconRefreshInFlight) {
+            launcherIconRefreshPending = true;
+            return;
+        }
+        launcherIconRefreshInFlight = true;
+        try {
+            launcherIconExecutor.execute(() -> {
+                List<LauncherApp> refreshedApps = null;
+                RuntimeException loadError = null;
+                try {
+                    refreshedApps = launcherAppRepository.refreshLauncherApps();
+                } catch (RuntimeException e) {
+                    loadError = e;
+                }
+                List<LauncherApp> result = refreshedApps;
+                RuntimeException error = loadError;
+                mainHandler.post(() -> finishLauncherIconRefresh(reason, result, error));
+            });
+        } catch (RuntimeException e) {
+            launcherIconRefreshInFlight = false;
+            Log.w(TAG, "Unable to schedule themed icon refresh", e);
+        }
+    }
+
+    private void finishLauncherIconRefresh(
+            String reason, List<LauncherApp> refreshedApps, RuntimeException error) {
+        launcherIconRefreshInFlight = false;
+        if (!activityDestroyed && error == null && refreshedApps != null) {
+            applyRefreshedLauncherApps(refreshedApps);
+            Log.i(TAG, "Reloaded system themed icons: reason=" + reason
+                    + ", count=" + refreshedApps.size());
+        } else if (error != null) {
+            Log.w(TAG, "Reloading system themed icons failed: reason=" + reason, error);
+        }
+        if (launcherIconRefreshPending && !activityDestroyed) {
+            launcherIconRefreshPending = false;
+            requestLauncherIconRefresh("coalesced theme change");
+        }
+    }
+
+    private void applyRefreshedLauncherApps(List<LauncherApp> refreshedApps) {
+        boolean structureChanged = launcherApps.size() != refreshedApps.size();
+        if (!structureChanged) {
+            for (int i = 0; i < launcherApps.size(); i++) {
+                LauncherApp oldApp = launcherApps.get(i);
+                LauncherApp newApp = refreshedApps.get(i);
+                if (!TextUtils.equals(oldApp.packageName, newApp.packageName)
+                        || !TextUtils.equals(oldApp.label, newApp.label)) {
+                    structureChanged = true;
+                    break;
+                }
+            }
+        }
+
+        launcherApps = refreshedApps;
+        Map<String, LauncherApp> refreshedByPackage = new HashMap<>();
+        for (LauncherApp app : refreshedApps) {
+            refreshedByPackage.put(app.packageName, app);
+        }
+        for (int slot = 0; slot < windowApps.length; slot++) {
+            LauncherApp current = windowApps[slot];
+            if (current != null && refreshedByPackage.containsKey(current.packageName)) {
+                windowApps[slot] = refreshedByPackage.get(current.packageName);
+            }
+        }
+
+        if (structureChanged) {
+            rebuildTopChromeContent();
+        } else {
+            for (AppShortcutView shortcut : shortcutViews) {
+                LauncherApp app = refreshedByPackage.get(shortcut.getPackageNameValue());
+                if (app != null) {
+                    shortcut.bind(app);
+                }
+            }
+        }
+        if (topPanelController != null) {
+            topPanelController.refreshAppIcons();
+        }
     }
 
     @Override
@@ -815,6 +966,7 @@ public class MainActivity extends Activity {
             defaultDisplayInstance.clear();
         }
         if (nonDefaultDisplayHomeRelay) {
+            launcherIconExecutor.shutdownNow();
             mediaRootExecutor.shutdownNow();
             visualEffectExecutor.shutdownNow();
             wallpaperExecutor.shutdownNow();
@@ -824,6 +976,7 @@ public class MainActivity extends Activity {
             return;
         }
         restoreDefaultDisplayFocus("OneStep destroyed");
+        unregisterLauncherIconChangeReceiver();
         cancelWindowSurfaceAnimation();
         if (hostedDisplayRotationController != null) {
             hostedDisplayRotationController.close();
@@ -856,6 +1009,7 @@ public class MainActivity extends Activity {
             topPanelController = null;
         }
         mediaRootExecutor.shutdownNow();
+        launcherIconExecutor.shutdownNow();
         visualEffectExecutor.shutdownNow();
         wallpaperExecutor.shutdownNow();
         pipDockExecutor.shutdown();
@@ -1560,8 +1714,9 @@ public class MainActivity extends Activity {
         exitOneStepPending = true;
         requestPipUndock();
         applyStatusBarForCurrentMode();
-        backgroundOpenedApps();
-        workspace.postDelayed(this::completeExitOneStepMode, EXIT_BACKGROUND_DELAY_MS);
+        suspendEmbeddedStartsForFullscreen();
+        workspace.postDelayed(this::completeExitOneStepMode,
+                EXIT_FULLSCREEN_LAYOUT_DELAY_MS);
     }
 
     private void completeExitOneStepMode() {
@@ -1781,7 +1936,7 @@ public class MainActivity extends Activity {
             AppShortcutView shortcut = new AppShortcutView(this, false, iconSizeDp, 0);
             shortcut.setStatusIndicatorEnabled(true);
             shortcut.bind(app);
-            shortcut.setOnClickListener(v -> addOrFocusApp(app));
+            shortcut.setOnClickListener(v -> addOrFocusLatestApp(app.packageName));
             int cellWidthDp = getTopAppStripCellWidthDp(iconSizeDp);
             LinearLayout.LayoutParams shortcutLp = new LinearLayout.LayoutParams(dp(cellWidthDp),
                     ViewGroup.LayoutParams.MATCH_PARENT);
@@ -1912,7 +2067,7 @@ public class MainActivity extends Activity {
                 AppShortcutView shortcut = new AppShortcutView(this, true,
                         getDesktopGridIconSizeDp(), getDesktopGridTextSizeDp());
                 shortcut.bind(app);
-                shortcut.setOnClickListener(v -> addOrFocusApp(app));
+                shortcut.setOnClickListener(v -> addOrFocusLatestApp(app.packageName));
                 cell.addView(shortcut, matchFrame());
                 shortcutViews.add(shortcut);
             }
@@ -2636,7 +2791,7 @@ public class MainActivity extends Activity {
                 LauncherApp app = launcherApps.get(appIndex);
                 AppShortcutView shortcut = new AppShortcutView(this, showLabel, iconSizeDp, textSizeDp);
                 shortcut.bind(app);
-                shortcut.setOnClickListener(v -> addOrFocusApp(app));
+                shortcut.setOnClickListener(v -> addOrFocusLatestApp(app.packageName));
                 cell.addView(shortcut, matchFrame());
                 shortcutViews.add(shortcut);
             }
@@ -3602,15 +3757,13 @@ public class MainActivity extends Activity {
     }
 
     private void backgroundOpenedApps() {
-        if (suppressEmbeddedStarts) {
-            Log.i(TAG, "Skip duplicate backgroundOpenedApps during exit");
-            return;
+        if (!suppressEmbeddedStarts) {
+            suppressEmbeddedStarts = true;
+            embeddedStartEpoch++;
+            embeddedStartEpochStore.persist(embeddedStartEpoch);
         }
         mainSlotSwitchGeneration++;
         clearPendingMainSlotSwitch();
-        suppressEmbeddedStarts = true;
-        embeddedStartEpoch++;
-        embeddedStartEpochStore.persist(embeddedStartEpoch);
         for (int slot = 0; slot < MAX_WINDOWS; slot++) {
             if (windowApps[slot] == null || embeddedHosts[slot] == null) {
                 continue;
@@ -3624,6 +3777,15 @@ public class MainActivity extends Activity {
             embeddedSyncGenerations[slot]++;
             embeddedHosts[slot].sendHome();
         }
+    }
+
+    private void suspendEmbeddedStartsForFullscreen() {
+        if (suppressEmbeddedStarts) {
+            return;
+        }
+        suppressEmbeddedStarts = true;
+        embeddedStartEpoch++;
+        embeddedStartEpochStore.persist(embeddedStartEpoch);
     }
 
     private boolean shouldRunEmbeddedStart(int startEpoch) {
@@ -3660,16 +3822,23 @@ public class MainActivity extends Activity {
 
     private LauncherApp createLauncherAppForPackage(String packageName) {
         try {
-            if (getPackageManager().getLaunchIntentForPackage(packageName) == null) {
-                return null;
-            }
-            ApplicationInfo info = getPackageManager().getApplicationInfo(packageName, 0);
-            return new LauncherApp(
-                    String.valueOf(getPackageManager().getApplicationLabel(info)),
-                    packageName,
-                    getPackageManager().getApplicationIcon(info));
-        } catch (PackageManager.NameNotFoundException | RuntimeException e) {
+            return launcherAppRepository == null
+                    ? null : launcherAppRepository.loadLauncherApp(packageName);
+        } catch (RuntimeException e) {
             return null;
+        }
+    }
+
+    private void addOrFocusLatestApp(String packageName) {
+        for (LauncherApp app : launcherApps) {
+            if (TextUtils.equals(app.packageName, packageName)) {
+                addOrFocusApp(app);
+                return;
+            }
+        }
+        LauncherApp app = createLauncherAppForPackage(packageName);
+        if (app != null) {
+            addOrFocusApp(app);
         }
     }
 
@@ -3703,9 +3872,6 @@ public class MainActivity extends Activity {
         LauncherApp dismissedApp = windowApps[slot];
         EmbeddedAppHost dismissedHost = embeddedHosts[slot];
         long dismissStartedUptime = SystemClock.uptimeMillis();
-        if (dismissedHost != null) {
-            dismissedHost.invalidateTaskResolution();
-        }
         OneStepWindowView windowView = windowViews[slot];
         int direction = getSideDismissDirection();
         windowView.animate().cancel();

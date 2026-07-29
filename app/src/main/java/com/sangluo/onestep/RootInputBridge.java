@@ -34,7 +34,7 @@ public final class RootInputBridge {
     private static final int ARG_ALLOWED_UID = 0;
     private static final int ARG_BRIDGE_TOKEN = 1;
     private static final String SOCKET_NAME_PREFIX = "onestep_input_bridge_";
-    public static final String HELLO_RESPONSE_PREFIX = "onestep-input-bridge-v20";
+    public static final String HELLO_RESPONSE_PREFIX = "onestep-input-bridge-v21";
     private static final int ROOT_UID = 0;
     private static final int SHELL_UID = 2000;
     private static final int WINDOWING_MODE_PINNED = 2;
@@ -53,6 +53,7 @@ public final class RootInputBridge {
     private final Method injectInputEventMethod;
     private Object activityTaskManagerService;
     private Method focusTopTaskMethod;
+    private Method removeTaskMethod;
     private Method getRootTaskInfoMethod;
     private Method setDisplayIdMethod;
     private Object windowManagerService;
@@ -301,6 +302,8 @@ public final class RootInputBridge {
                 injectMotion(parts);
             } else if ("focusDisplay".equals(parts[0]) && parts.length == 2) {
                 return focusDisplay(parts);
+            } else if ("removeTask".equals(parts[0]) && parts.length == 2) {
+                return removeTask(parts);
             } else if ("key".equals(parts[0]) && parts.length == 3) {
                 injectKey(parts);
             } else if ("imePolicy".equals(parts[0]) && parts.length == 3) {
@@ -461,6 +464,25 @@ public final class RootInputBridge {
         return "focusDisplay " + displayId + " " + success;
     }
 
+    private String removeTask(String[] parts) {
+        int taskId = Integer.parseInt(parts[1]);
+        boolean success = false;
+        String failure = "";
+        try {
+            Object result = getRemoveTaskMethod().invoke(
+                    getActivityTaskManagerService(), taskId);
+            success = Boolean.TRUE.equals(result);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            throwIfSystemServiceDead(e);
+            failure = describeThrowable(e);
+        }
+        int priority = success ? Log.INFO : Log.WARN;
+        Log.println(priority, TAG, "Removed task=" + taskId
+                + " success=" + success
+                + (failure.isEmpty() ? "" : " failure=" + failure));
+        return "removeTask " + taskId + " " + success;
+    }
+
     private Object getActivityTaskManagerService() throws ReflectiveOperationException {
         if (activityTaskManagerService == null) {
             Class<?> activityTaskManagerClass = Class.forName("android.app.ActivityTaskManager");
@@ -478,6 +500,15 @@ public final class RootInputBridge {
             focusTopTaskMethod.setAccessible(true);
         }
         return focusTopTaskMethod;
+    }
+
+    private Method getRemoveTaskMethod() throws ReflectiveOperationException {
+        if (removeTaskMethod == null) {
+            removeTaskMethod = getActivityTaskManagerService().getClass()
+                    .getMethod("removeTask", int.class);
+            removeTaskMethod.setAccessible(true);
+        }
+        return removeTaskMethod;
     }
 
     private String getPipStateResponse() {

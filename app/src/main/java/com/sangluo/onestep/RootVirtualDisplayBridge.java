@@ -49,6 +49,7 @@ public final class RootVirtualDisplayBridge extends Binder {
 
     private final int allowedUid;
     private final String bridgeToken;
+    private final Context context;
     private final DisplayManager displayManager;
     private final Map<Integer, DisplayRecord> displays = new HashMap<>();
     private final Object launchRoutingLock = new Object();
@@ -64,6 +65,7 @@ public final class RootVirtualDisplayBridge extends Binder {
     private RootVirtualDisplayBridge(Context context, int allowedUid, String bridgeToken) {
         this.allowedUid = allowedUid;
         this.bridgeToken = bridgeToken;
+        this.context = context;
         displayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
         attachInterface(null, DESCRIPTOR);
     }
@@ -217,6 +219,17 @@ public final class RootVirtualDisplayBridge extends Binder {
                     }
                 }
             }
+        }
+        if (displayId > Display.DEFAULT_DISPLAY) {
+            VirtualDisplaySystemDecorController.Result decorResult =
+                    VirtualDisplaySystemDecorController.disable(context, displayId);
+            int priority = decorResult.isConfirmedDisabled() ? Log.INFO : Log.WARN;
+            Log.println(priority, TAG, "system decorations policy"
+                    + " display=" + displayId
+                    + " requested=" + decorResult.requested
+                    + " actual=" + decorResult.actualValue()
+                    + (decorResult.failure.isEmpty()
+                    ? "" : " failure=" + decorResult.failure));
         }
         if (displayId <= Display.DEFAULT_DISPLAY) {
             if (surface != null) {

@@ -7,6 +7,7 @@ WORK_DIR="$(mktemp -d "$ROOT_DIR/build/magisk-privapp.XXXXXX")"
 APK_PATH="$ROOT_DIR/app/build/outputs/apk/debug/app-debug.apk"
 ZYGISK_LIB_DIR="$ROOT_DIR/zygisk/build/libs"
 ZYGISK_RUNTIME_DIR="$ROOT_DIR/app/build/zygisk-hook-runtime"
+STATUS_BAR_OVERLAY="$ROOT_DIR/app/build/statusbar-overlay/OneStepStatusBarZeroOverlay.apk"
 APP_GRADLE="$ROOT_DIR/app/build.gradle.kts"
 APP_VERSION_NAME="$(awk -F'"' '/^[[:space:]]*versionName[[:space:]]*=/ { print $2; exit }' "$APP_GRADLE")"
 APP_VERSION_CODE="$(awk -F'=' '/^[[:space:]]*versionCode[[:space:]]*=/ { gsub(/[[:space:]]/, "", $2); print $2; exit }' "$APP_GRADLE")"
@@ -43,6 +44,7 @@ echo "强制重新编译最新 APK..."
     :app:assembleDebug :app:prepareZygiskHookRuntime
 
 "$ROOT_DIR/scripts/build-zygisk-hook.sh"
+"$ROOT_DIR/scripts/build-statusbar-overlay.sh"
 
 if [[ ! -f "$APK_PATH" ]]; then
     echo "APK 构建完成后不存在：$APK_PATH" >&2
@@ -57,7 +59,8 @@ for required_file in \
     "$ZYGISK_RUNTIME_DIR/jni/arm64-v8a/libc++_shared.so" \
     "$ZYGISK_RUNTIME_DIR/jni/armeabi-v7a/libaliuhook.so" \
     "$ZYGISK_RUNTIME_DIR/jni/armeabi-v7a/liblsplant.so" \
-    "$ZYGISK_RUNTIME_DIR/jni/armeabi-v7a/libc++_shared.so"; do
+    "$ZYGISK_RUNTIME_DIR/jni/armeabi-v7a/libc++_shared.so" \
+    "$STATUS_BAR_OVERLAY"; do
     if [[ ! -f "$required_file" ]]; then
         echo "Zygisk Hook 构建产物不存在：$required_file" >&2
         exit 1
@@ -70,6 +73,7 @@ OUT_ZIP="$OUT_DIR/OneStep4-$APP_VERSION_NAME-magisk-$(date +%Y%m%d-%H%M%S).zip"
 mkdir -p "$WORK_DIR/META-INF/com/google/android"
 mkdir -p "$WORK_DIR/system/priv-app/$SYSTEM_APP_DIR"
 mkdir -p "$WORK_DIR/system/etc/permissions"
+mkdir -p "$WORK_DIR/system/etc/onestep"
 mkdir -p "$WORK_DIR/zygisk-payload"
 mkdir -p "$WORK_DIR/zygisk-runtime/arm64-v8a"
 mkdir -p "$WORK_DIR/zygisk-runtime/armeabi-v7a"
@@ -82,8 +86,12 @@ cp "$ROOT_DIR/packaging/magisk/customize.sh" "$WORK_DIR/customize.sh"
 cp "$ROOT_DIR/packaging/magisk/service.sh" "$WORK_DIR/service.sh"
 cp "$ROOT_DIR/packaging/magisk/zygisk-toggle.sh" "$WORK_DIR/zygisk-toggle.sh"
 cp "$ROOT_DIR/packaging/magisk/uninstall.sh" "$WORK_DIR/uninstall.sh"
+cp "$ROOT_DIR/packaging/root/post-fs-data.sh" \
+    "$WORK_DIR/statusbar-post-fs-data.sh"
 cp "$ROOT_DIR/packaging/magisk/sepolicy.rule" "$WORK_DIR/sepolicy.rule"
 cp "$APK_PATH" "$WORK_DIR/system/priv-app/$SYSTEM_APP_DIR/OneStep4.apk"
+cp "$STATUS_BAR_OVERLAY" \
+    "$WORK_DIR/system/etc/onestep/OneStepStatusBarZeroOverlay.apk"
 cp "$ZYGISK_LIB_DIR/arm64-v8a/libonestep_zygisk.so" \
     "$WORK_DIR/zygisk-payload/arm64-v8a.so"
 cp "$ZYGISK_LIB_DIR/armeabi-v7a/libonestep_zygisk.so" \
@@ -118,9 +126,11 @@ chmod 0755 "$WORK_DIR/customize.sh"
 chmod 0755 "$WORK_DIR/service.sh"
 chmod 0755 "$WORK_DIR/zygisk-toggle.sh"
 chmod 0755 "$WORK_DIR/uninstall.sh"
+chmod 0755 "$WORK_DIR/statusbar-post-fs-data.sh"
 chmod 0644 "$WORK_DIR/sepolicy.rule"
 chmod 0644 "$WORK_DIR/system/priv-app/$SYSTEM_APP_DIR/OneStep4.apk"
 chmod 0644 "$WORK_DIR/system/etc/permissions/privapp-permissions-onestep.xml"
+chmod 0644 "$WORK_DIR/system/etc/onestep/OneStepStatusBarZeroOverlay.apk"
 chmod 0644 "$WORK_DIR/module.prop"
 chmod 0755 "$WORK_DIR/zygisk-payload"
 chmod 0644 "$WORK_DIR/zygisk-payload/arm64-v8a.so" \
@@ -146,6 +156,8 @@ unzip -qq "$OUT_ZIP" \
     "zygisk-runtime/aliuhook.dex" \
     "zygisk-toggle.sh" \
     "uninstall.sh" \
+    "statusbar-post-fs-data.sh" \
+    "system/etc/onestep/OneStepStatusBarZeroOverlay.apk" \
     -d "$VERIFY_DIR"
 PACKAGED_APK_SHA256="$(sha256_file "$VERIFY_DIR/$APK_ENTRY")"
 if [[ "$PACKAGED_APK_SHA256" != "$APK_SHA256" ]]; then
@@ -157,7 +169,9 @@ for required_entry in \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
     "zygisk-toggle.sh" \
-    "uninstall.sh"; do
+    "uninstall.sh" \
+    "statusbar-post-fs-data.sh" \
+    "system/etc/onestep/OneStepStatusBarZeroOverlay.apk"; do
     if [[ ! -s "$VERIFY_DIR/$required_entry" ]]; then
         echo "Magisk ZIP 内缺少 Zygisk Hook：$required_entry" >&2
         exit 1

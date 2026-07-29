@@ -765,6 +765,11 @@ public final class TopPanelController implements AutoCloseable {
         updateTopStatusComponentViews();
     }
 
+    public void refreshAppIcons() {
+        mediaPlaybackPanel.refreshAppIcons();
+        refreshTopStatusComponents();
+    }
+
     private MediaNotificationListenerService.TopComponentNotificationSnapshot
     findTopComponentSnapshot(
             List<MediaNotificationListenerService.TopComponentNotificationSnapshot> snapshots,

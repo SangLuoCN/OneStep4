@@ -40,6 +40,12 @@ fi
 if [ -f "$MODPATH/service.sh" ]; then
   set_perm "$MODPATH/service.sh" 0 0 0755
 fi
+if [ -f "$MODPATH/statusbar-post-fs-data.sh" ]; then
+  set_perm "$MODPATH/statusbar-post-fs-data.sh" 0 0 0755
+fi
+if [ -f "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" ]; then
+  set_perm "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" 0 0 0644
+fi
 
 if pm path "$PACKAGE_NAME" >/dev/null 2>&1; then
   if cmd role get-role-holders --user 0 "$VIRTUAL_DISPLAY_ROLE" 2>/dev/null \

@@ -46,6 +46,8 @@ touch "${APK_PATH%/*}"
 set_perm "$APK_PATH" 0 0 0644
 set_perm "$MODPATH/boot-completed.sh" 0 0 0755
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
+set_perm "$MODPATH/statusbar-post-fs-data.sh" 0 0 0755
+set_perm "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" 0 0 0644
 set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
 
 if [ -d /data/adb/modules/zygisksu ] \

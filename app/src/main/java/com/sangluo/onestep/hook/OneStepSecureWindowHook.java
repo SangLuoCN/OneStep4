@@ -25,6 +25,8 @@ public final class OneStepSecureWindowHook {
     private static final Object STATE_LOCK = new Object();
     private static final Set<Object> protectedHostSurfaces = Collections.newSetFromMap(
             new IdentityHashMap<>());
+    private static final Set<Object> decorSuppressedDisplays = Collections.newSetFromMap(
+            new IdentityHashMap<>());
 
     private static volatile boolean installed;
     private static boolean hostProtectionActive;
@@ -52,7 +54,7 @@ public final class OneStepSecureWindowHook {
             try {
                 ResolvedWindowManagerClasses resolved = resolveWindowManagerClasses(classLoader);
                 installHooks(resolved.windowState, resolved.rootWindowContainer,
-                        resolved.classLoader);
+                        resolved.displayContent, resolved.classLoader);
                 return;
             } catch (ClassNotFoundException | NoSuchMethodException e) {
                 lastFailure = e;
@@ -84,9 +86,17 @@ public final class OneStepSecureWindowHook {
                         "com.android.server.wm.WindowState", false, candidate);
                 Class<?> rootWindowContainer = Class.forName(
                         "com.android.server.wm.RootWindowContainer", false, candidate);
+                Class<?> displayContent = null;
+                try {
+                    // This hook is optional. Do not make an existing secure-window hook
+                    // installation depend on a vendor-specific DisplayContent class shape.
+                    displayContent = Class.forName(
+                            "com.android.server.wm.DisplayContent", false, candidate);
+                } catch (ClassNotFoundException ignored) {
+                }
                 Log.i(TAG, "resolved WindowManager classes with " + candidate);
                 return new ResolvedWindowManagerClasses(
-                        candidate, windowState, rootWindowContainer);
+                        candidate, windowState, rootWindowContainer, displayContent);
             } catch (ClassNotFoundException e) {
                 lastFailure = e;
             }
@@ -108,17 +118,20 @@ public final class OneStepSecureWindowHook {
         final ClassLoader classLoader;
         final Class<?> windowState;
         final Class<?> rootWindowContainer;
+        final Class<?> displayContent;
 
         ResolvedWindowManagerClasses(ClassLoader classLoader, Class<?> windowState,
-                                     Class<?> rootWindowContainer) {
+                                     Class<?> rootWindowContainer, Class<?> displayContent) {
             this.classLoader = classLoader;
             this.windowState = windowState;
             this.rootWindowContainer = rootWindowContainer;
+            this.displayContent = displayContent;
         }
     }
 
     private static synchronized void installHooks(Class<?> windowStateClass,
                                                   Class<?> rootWindowContainerClass,
+                                                  Class<?> displayContentClass,
                                                   ClassLoader classLoader)
             throws NoSuchMethodException {
         if (installed) {
@@ -129,6 +142,8 @@ public final class OneStepSecureWindowHook {
         } catch (Throwable t) {
             Log.w(TAG, "hidden API relaxation unavailable", t);
         }
+
+        installSystemDecorHooks(displayContentClass);
 
         Method isSecureLocked = windowStateClass.getDeclaredMethod("isSecureLocked");
         isSecureLocked.setAccessible(true);
@@ -169,9 +184,68 @@ public final class OneStepSecureWindowHook {
                 "com.android.server.wm.WindowStateAnimator", "createSurfaceLocked");
         deoptimizeCallers(classLoader,
                 "com.android.server.wm.RootWindowContainer", "refreshSecureSurfaceState");
+        deoptimizeCallers(classLoader,
+                "com.android.server.wm.WindowManagerService", "shouldShowSystemDecors");
+        deoptimizeCallers(classLoader,
+                "com.android.server.wm.DisplayContent", "isHomeSupported");
+        deoptimizeCallers(classLoader,
+                "com.android.server.wm.DisplayContent", "shouldWaitForSystemDecorWindowsOnBoot");
+        deoptimizeCallers(classLoader,
+                "com.android.server.wm.DisplayContent", "configureDisplayPolicy");
 
         installed = true;
         Log.i(TAG, "installed for displays named " + DISPLAY_NAME_PREFIX + "*");
+    }
+
+    private static void installSystemDecorHooks(Class<?> displayContentClass) {
+        if (displayContentClass == null) {
+            Log.w(TAG, "DisplayContent unavailable; system-decoration hook skipped");
+            return;
+        }
+        final Method[] displayContentMethods;
+        try {
+            displayContentMethods = displayContentClass.getDeclaredMethods();
+        } catch (Throwable t) {
+            Log.e(TAG, "DisplayContent methods unavailable; system-decoration hook skipped", t);
+            return;
+        }
+        int installedHooks = 0;
+        for (String methodName : new String[]{
+                "supportsSystemDecorations", "isSystemDecorationsSupported"}) {
+            for (Method method : displayContentMethods) {
+                if (!methodName.equals(method.getName())
+                        || method.getParameterCount() != 0
+                        || method.getReturnType() != boolean.class) {
+                    continue;
+                }
+                try {
+                    method.setAccessible(true);
+                    XposedBridge.hookMethod(method, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (!isOneStepDisplayContent(param.thisObject)) {
+                                return;
+                            }
+                            param.setResult(false);
+                            synchronized (STATE_LOCK) {
+                                if (decorSuppressedDisplays.add(param.thisObject)) {
+                                    Log.i(TAG, "suppressed system decorations for "
+                                            + getDisplayName(param.thisObject));
+                                }
+                            }
+                        }
+                    });
+                    installedHooks++;
+                } catch (Throwable t) {
+                    Log.e(TAG, "could not hook DisplayContent#" + methodName, t);
+                }
+            }
+        }
+        if (installedHooks == 0) {
+            Log.w(TAG, "DisplayContent system-decoration method unavailable");
+        } else {
+            Log.i(TAG, "installed " + installedHooks + " system-decoration hook(s)");
+        }
     }
 
     private static void deoptimizeCallers(ClassLoader classLoader, String className,
@@ -281,11 +355,30 @@ public final class OneStepSecureWindowHook {
     private static boolean isOneStepDisplayWindow(Object windowState) {
         try {
             Object displayContent = invokeNoArgs(windowState, "getDisplayContent");
-            Object displayInfo = invokeNoArgs(displayContent, "getDisplayInfo");
-            Object name = readField(displayInfo, "name");
-            return name instanceof String && ((String) name).startsWith(DISPLAY_NAME_PREFIX);
+            return isOneStepDisplayContent(displayContent);
         } catch (Throwable t) {
             return false;
+        }
+    }
+
+    private static boolean isOneStepDisplayContent(Object displayContent) {
+        String name = getDisplayName(displayContent);
+        return name != null && name.startsWith(DISPLAY_NAME_PREFIX);
+    }
+
+    private static String getDisplayName(Object displayContent) {
+        try {
+            Object displayInfo = invokeNoArgs(displayContent, "getDisplayInfo");
+            Object name = readField(displayInfo, "name");
+            return name instanceof String ? (String) name : null;
+        } catch (Throwable firstFailure) {
+            try {
+                Object displayInfo = readField(displayContent, "mDisplayInfo");
+                Object name = readField(displayInfo, "name");
+                return name instanceof String ? (String) name : null;
+            } catch (Throwable ignored) {
+                return null;
+            }
         }
     }
 
