@@ -8,7 +8,8 @@ if [ "$BOOTMODE" != "true" ]; then
   abort "! KernelSU modules must be installed from KernelSU Manager"
 fi
 
-ui_print "- FLAG_SECURE 兼容功能需要安装并启用 ZygiskNext"
+ui_print "- OneStep 普通页面无需 ZygiskNext 即可使用"
+ui_print "- 可选：安装并启用 ZygiskNext 后支持 FLAG_SECURE 页面正常显示"
 
 ksu_version_code="${KSU_VER_CODE:-0}"
 case "$ksu_version_code" in
@@ -29,15 +30,37 @@ REPLACE="
 "
 
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
+ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 
 if [ ! -f "$APK_PATH" ]; then
   abort "! OneStep4 APK is missing from the module"
 fi
+if [ ! -f "$ZYGISK_PAYLOAD_DIR/arm64-v8a.so" ] \
+    || [ ! -f "$ZYGISK_PAYLOAD_DIR/armeabi-v7a.so" ]; then
+  abort "! OneStep4 optional Zygisk payload is incomplete"
+fi
 
+rm -rf "$MODPATH/zygisk"
 touch "$APK_PATH"
 touch "${APK_PATH%/*}"
 set_perm "$APK_PATH" 0 0 0644
 set_perm "$MODPATH/boot-completed.sh" 0 0 0755
+set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
+set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
+
+if [ -d /data/adb/modules/zygisksu ] \
+    && [ -f /data/adb/modules/zygisksu/module.prop ] \
+    && grep -q '^id=zygisksu$' /data/adb/modules/zygisksu/module.prop \
+    && [ ! -e /data/adb/modules/zygisksu/disable ] \
+    && [ ! -e /data/adb/modules/zygisksu/remove ]; then
+  mkdir -p "$MODPATH/zygisk"
+  cp -f "$ZYGISK_PAYLOAD_DIR/arm64-v8a.so" "$MODPATH/zygisk/arm64-v8a.so"
+  cp -f "$ZYGISK_PAYLOAD_DIR/armeabi-v7a.so" "$MODPATH/zygisk/armeabi-v7a.so"
+  set_perm_recursive "$MODPATH/zygisk" 0 0 0755 0644
+  ui_print "- ZygiskNext 已检测到：重启后启用 FLAG_SECURE 显示增强"
+else
+  ui_print "- ZygiskNext 未启用：以普通页面兼容模式运行"
+fi
 
 ui_print "- KernelSU: ${KSU_VER:-unknown} (${KSU_VER_CODE:-unknown})"
 ui_print "- OneStep4 will be restored for the active Android user after reboot"

@@ -7,11 +7,29 @@ REPLACE="
 /system/priv-app/OneStep4_v6
 "
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
+ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
+GLOBAL_ZYGISK_TOGGLE="/data/adb/post-fs-data.d/onestep40-zygisk-toggle.sh"
 
 ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"
 if ! echo "$ZYGISK_STATE" | grep -q "value=1"; then
-  ui_print "! 请在 Magisk 设置中启用 Zygisk，否则 FLAG_SECURE 页面仍会显示黑屏"
+  rm -rf "$MODPATH/zygisk"
+  ui_print "- Zygisk 未启用：OneStep 普通页面仍可正常使用"
+  ui_print "! FLAG_SECURE 页面将由系统显示为黑屏；启用 Zygisk 后可正常显示"
+else
+  mkdir -p "$MODPATH/zygisk"
+  cp -f "$ZYGISK_PAYLOAD_DIR/arm64-v8a.so" "$MODPATH/zygisk/arm64-v8a.so"
+  cp -f "$ZYGISK_PAYLOAD_DIR/armeabi-v7a.so" "$MODPATH/zygisk/armeabi-v7a.so"
+  set_perm_recursive "$MODPATH/zygisk" 0 0 0755 0644
+  ui_print "- Zygisk 已启用：FLAG_SECURE 虚拟屏显示增强可用"
 fi
+
+mkdir -p /data/adb/post-fs-data.d
+cp -f "$MODPATH/zygisk-toggle.sh" "$GLOBAL_ZYGISK_TOGGLE"
+chown 0:0 "$GLOBAL_ZYGISK_TOGGLE"
+chmod 0755 "$GLOBAL_ZYGISK_TOGGLE"
+set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
+set_perm "$MODPATH/zygisk-toggle.sh" 0 0 0755
+set_perm "$MODPATH/uninstall.sh" 0 0 0755
 
 if [ -f "$APK_PATH" ]; then
   touch "$APK_PATH"
