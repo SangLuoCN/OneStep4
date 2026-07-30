@@ -91,8 +91,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
 import static com.sangluo.onestep.data.settings.OneStepSettings.CORNER_TRIGGER_SENSITIVITY_DEFAULT;
@@ -400,6 +402,16 @@ public class MainActivity extends Activity {
                     return MainActivity.this.onCrossAppLaunch(
                             sourceDisplayId, sourcePackage, intent, targetPackage);
                 }
+                @Override public void onSystemTaskEvent(
+                        int event, int displayId, int taskId, String packageName) {
+                    MainActivity.this.onSystemTaskEvent(
+                            event, displayId, taskId, packageName);
+                }
+                @Override public void onHostedAppExitedAfterBack(
+                        int slot, LauncherApp app, Runnable afterDesktopTakeover) {
+                    MainActivity.this.onHostedAppExitedAfterBack(
+                            slot, app, afterDesktopTakeover);
+                }
             };
     private OneStepSettingsStore settingsStore;
     private EmbeddedStartEpochStore embeddedStartEpochStore;
@@ -441,6 +453,7 @@ public class MainActivity extends Activity {
     private int mainSlotSwitchPendingOldSlot = -1;
     private int mainContentReplacementGeneration;
     private int mainContentReplacementPendingSlot = -1;
+    private int desktopTakeoverGeneration;
     private int pendingMainAppStartSlot = -1;
     private LauncherApp pendingMainAppStart;
     private int pendingInternalSettingsSlot = -1;
@@ -965,35 +978,81 @@ public class MainActivity extends Activity {
         }
     }
 
-    static boolean dispatchSecondaryHome(int displayId) {
-        MainActivity activity = defaultDisplayInstance.get();
-        if (displayId <= Display.DEFAULT_DISPLAY || activity == null
-                || activity.activityDestroyed || activity.nonDefaultDisplayHomeRelay) {
-            return false;
+    private void onSystemTaskEvent(
+            int event, int displayId, int taskId, String packageName) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            handleSystemTaskEvent(event, displayId, taskId, packageName);
+            return;
         }
-        activity.mainHandler.post(() -> activity.handleSecondaryHome(displayId));
-        return true;
+        CountDownLatch handled = new CountDownLatch(1);
+        mainHandler.post(() -> {
+            try {
+                handleSystemTaskEvent(event, displayId, taskId, packageName);
+            } finally {
+                handled.countDown();
+            }
+        });
+        try {
+            handled.await(120L, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
-    private void handleSecondaryHome(int displayId) {
-        if (activityDestroyed) {
+    private void handleSystemTaskEvent(
+            int event, int displayId, int taskId, String packageName) {
+        if (activityDestroyed || displayId <= Display.DEFAULT_DISPLAY) {
             return;
         }
-        RootVirtualDisplayHost sourceHost = findRootVirtualDisplayHost(displayId);
-        if (sourceHost == null) {
-            Log.w(TAG, "Ignore secondary HOME from unknown display " + displayId);
+        RootVirtualDisplayHost rootHost = findRootVirtualDisplayHost(displayId);
+        if (rootHost == null || rootHost.getSlot() != activeMainSlot) {
             return;
         }
-        int sourceSlot = sourceHost.getSlot();
-        if (sourceSlot != activeMainSlot) {
-            Log.w(TAG, "Ignore secondary HOME from non-main slot: display=" + displayId
-                    + ", slot=" + sourceSlot + ", mainSlot=" + activeMainSlot);
+        LauncherApp currentApp = windowApps[activeMainSlot];
+        if (currentApp == null || currentApp.isHomeEntry()) {
             return;
         }
-        Log.i(TAG, "Show built-in app list for secondary HOME: display=" + displayId
-                + ", slot=" + sourceSlot);
-        suppressEmbeddedStarts = false;
-        requestDesktopHomeInMain();
+        boolean hostedTaskRemovalStarted = event
+                == RootVirtualDisplayBridge.TASK_EVENT_REMOVAL_STARTED
+                && TextUtils.equals(currentApp.packageName, packageName);
+        boolean systemDesktopMovedToFront = event
+                == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
+                && isBuiltInDesktopPackage(packageName);
+        if (systemDesktopMovedToFront && rootHost.isHostedSurfaceRevealPending(currentApp)) {
+            Log.i(TAG, "Keep secondary desktop concealed while hosted app is launching: slot="
+                    + activeMainSlot + ", app=" + currentApp.packageName);
+            return;
+        }
+        if (hostedTaskRemovalStarted) {
+            Log.i(TAG, "Take over desktop when hosted task removal starts: slot="
+                    + activeMainSlot + ", task=" + taskId
+                    + ", app=" + currentApp.packageName);
+            onHostedAppExitedAfterBack(activeMainSlot, currentApp, null);
+            return;
+        }
+        if (systemDesktopMovedToFront) {
+            Log.i(TAG, "Conceal secondary desktop after it moved to front: slot="
+                    + activeMainSlot + ", app=" + currentApp.packageName);
+            rootHost.concealHostedSurfaceForDesktopTakeover(currentApp);
+            onHostedAppExitedAfterBack(activeMainSlot, currentApp, null);
+        }
+    }
+
+    private boolean isBuiltInDesktopPackage(String packageName) {
+        if (TextUtils.isEmpty(packageName)) {
+            return false;
+        }
+        if (builtInDesktopApp != null
+                && TextUtils.equals(builtInDesktopApp.packageName, packageName)) {
+            return true;
+        }
+        for (LauncherApp desktopApp : builtInDesktopApps) {
+            if (desktopApp != null
+                    && TextUtils.equals(desktopApp.packageName, packageName)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private boolean shouldHideStatusBarForOneStep() {
@@ -2586,24 +2645,28 @@ public class MainActivity extends Activity {
         suppressEmbeddedStarts = false;
         int desktopSlot = findSlotByComponent(desktopApp.componentName);
         if (desktopSlot < 0) {
-            desktopSlot = findSlot(desktopApp.packageName);
-        }
-        if (desktopSlot < 0) {
             addOrFocusApp(desktopApp);
             return;
         }
 
         windowApps[desktopSlot] = desktopApp;
         windowViews[desktopSlot].hideDesktopHome();
+        boolean moveExistingDesktop = desktopSlot != activeMainSlot
+                && !embeddedSlotClosing[desktopSlot];
+        if (moveExistingDesktop) {
+            renderWindows();
+            switchMainSlot(desktopSlot, true);
+            return;
+        }
+
         EmbeddedAppHost host = embeddedHosts[desktopSlot];
         boolean live = host != null && host.restart(desktopApp);
-        windowViews[desktopSlot].setLiveAppVisible(live);
+        boolean revealPending = host instanceof RootVirtualDisplayHost
+                && ((RootVirtualDisplayHost) host).isHostedSurfaceRevealPending(desktopApp);
+        windowViews[desktopSlot].setLiveAppVisible(live && !revealPending);
         renderWindows();
         if (!live && host != null) {
             showEmbeddingHintIfNeeded(host.getUnavailableReason());
-        }
-        if (desktopSlot != activeMainSlot && !embeddedSlotClosing[desktopSlot]) {
-            switchMainSlot(desktopSlot, true);
         }
     }
 
@@ -4023,6 +4086,243 @@ public class MainActivity extends Activity {
         return true;
     }
 
+    private void onHostedAppExitedAfterBack(
+            int slot, LauncherApp exitedApp, Runnable afterDesktopTakeover) {
+        if (activityDestroyed || exitedApp == null || exitedApp.isHomeEntry()
+                || slot < 0 || slot >= MAX_WINDOWS || slot != activeMainSlot
+                || embeddedSlotClosing[slot]) {
+            return;
+        }
+        LauncherApp currentApp = windowApps[slot];
+        if (currentApp == null
+                || !exitedApp.componentName.equals(currentApp.componentName)) {
+            return;
+        }
+        LauncherApp primaryDesktop = resolveBuiltInDesktopApp();
+        int existingPrimaryDesktopSlot = primaryDesktop == null
+                ? -1 : findSlotByComponent(primaryDesktop.componentName);
+        final int takeoverGeneration = ++desktopTakeoverGeneration;
+        desktopHomeRequestPending = false;
+        suppressEmbeddedStarts = false;
+
+        if (existingPrimaryDesktopSlot >= 0
+                && existingPrimaryDesktopSlot != slot
+                && !embeddedSlotClosing[existingPrimaryDesktopSlot]) {
+            EmbeddedAppHost desktopHost = embeddedHosts[existingPrimaryDesktopSlot];
+            if (desktopHost instanceof RootVirtualDisplayHost) {
+                RootVirtualDisplayHost rootDesktopHost =
+                        (RootVirtualDisplayHost) desktopHost;
+                if (rootDesktopHost.hasResolvedHostedTask(primaryDesktop)) {
+                    promoteExistingPrimaryDesktopAfterExit(
+                            takeoverGeneration, slot, exitedApp, primaryDesktop,
+                            existingPrimaryDesktopSlot, afterDesktopTakeover);
+                } else {
+                    final int desktopSlot = existingPrimaryDesktopSlot;
+                    rootDesktopHost.validateHostedTaskVisible(primaryDesktop,
+                            visible -> finishPrimaryDesktopValidationAfterExit(
+                                    takeoverGeneration, slot, exitedApp, primaryDesktop,
+                                    desktopSlot, afterDesktopTakeover, visible));
+                }
+            } else {
+                promoteExistingPrimaryDesktopAfterExit(
+                        takeoverGeneration, slot, exitedApp, primaryDesktop,
+                        existingPrimaryDesktopSlot, afterDesktopTakeover);
+            }
+            return;
+        }
+        startPrimaryDesktopAfterExit(
+                takeoverGeneration, slot, exitedApp, primaryDesktop,
+                afterDesktopTakeover);
+    }
+
+    private void finishPrimaryDesktopValidationAfterExit(
+            int generation, int exitedSlot, LauncherApp exitedApp,
+            LauncherApp primaryDesktop, int desktopSlot,
+            Runnable afterDesktopTakeover, boolean visible) {
+        if (!isCurrentDesktopTakeover(generation, exitedSlot, exitedApp)) {
+            return;
+        }
+        if (visible) {
+            promoteExistingPrimaryDesktopAfterExit(
+                    generation, exitedSlot, exitedApp, primaryDesktop,
+                    desktopSlot, afterDesktopTakeover);
+            return;
+        }
+        Log.w(TAG, "Discard stale built-in desktop slot before app exit takeover: slot="
+                + desktopSlot + ", component="
+                + primaryDesktop.componentName.flattenToShortString());
+        clearStalePrimaryDesktopSlot(desktopSlot, primaryDesktop);
+        startPrimaryDesktopAfterExit(
+                generation, exitedSlot, exitedApp, primaryDesktop,
+                afterDesktopTakeover);
+    }
+
+    private void promoteExistingPrimaryDesktopAfterExit(
+            int generation, int exitedSlot, LauncherApp exitedApp,
+            LauncherApp primaryDesktop, int desktopSlot,
+            Runnable afterDesktopTakeover) {
+        if (!isCurrentDesktopTakeover(generation, exitedSlot, exitedApp)
+                || desktopSlot < 0 || desktopSlot >= MAX_WINDOWS
+                || embeddedSlotClosing[desktopSlot]) {
+            return;
+        }
+        LauncherApp desktopApp = windowApps[desktopSlot];
+        if (desktopApp == null
+                || !primaryDesktop.componentName.equals(desktopApp.componentName)) {
+            startPrimaryDesktopAfterExit(
+                    generation, exitedSlot, exitedApp, primaryDesktop,
+                    afterDesktopTakeover);
+            return;
+        }
+        Log.i(TAG, "Move verified built-in desktop main interface to main slot after app "
+                + "exited: desktopSlot=" + desktopSlot
+                + ", exitedSlot=" + exitedSlot + ", app=" + exitedApp.packageName);
+        switchMainSlot(desktopSlot, true);
+        mainHandler.post(() -> finishExitedSlotCleanupAfterDesktopPromotion(
+                generation, exitedSlot, exitedApp, primaryDesktop, desktopSlot,
+                afterDesktopTakeover, 0));
+    }
+
+    private void startPrimaryDesktopAfterExit(
+            int generation, int slot, LauncherApp exitedApp,
+            LauncherApp primaryDesktop, Runnable afterDesktopTakeover) {
+        if (!isCurrentDesktopTakeover(generation, slot, exitedApp)) {
+            return;
+        }
+        clearExitedHostedAppSlot(slot, exitedApp);
+        if (primaryDesktop != null) {
+            Log.i(TAG, "Start built-in desktop main interface in exited main slot: slot=" + slot
+                    + ", app=" + exitedApp.packageName
+                    + ", desktop=" + primaryDesktop.componentName.flattenToShortString());
+            startAppInSlot(slot, primaryDesktop, false, true);
+            if (afterDesktopTakeover != null) {
+                EmbeddedAppHost host = embeddedHosts[slot];
+                if (host instanceof RootVirtualDisplayHost) {
+                    ((RootVirtualDisplayHost) host).runAfterHostedTaskVisible(
+                            primaryDesktop, afterDesktopTakeover);
+                } else {
+                    mainHandler.post(afterDesktopTakeover);
+                }
+            }
+            return;
+        }
+
+        Log.w(TAG, "No system desktop main activity is available after app exited; use OneStep "
+                + "desktop fallback");
+        requestDesktopHomeInMain();
+        if (afterDesktopTakeover != null) {
+            mainHandler.post(afterDesktopTakeover);
+        }
+    }
+
+    private boolean isCurrentDesktopTakeover(
+            int generation, int slot, LauncherApp exitedApp) {
+        if (generation != desktopTakeoverGeneration || activityDestroyed
+                || slot < 0 || slot >= MAX_WINDOWS || slot != activeMainSlot
+                || embeddedSlotClosing[slot]) {
+            return false;
+        }
+        LauncherApp currentApp = windowApps[slot];
+        return currentApp != null && exitedApp != null
+                && exitedApp.componentName.equals(currentApp.componentName);
+    }
+
+    private void clearStalePrimaryDesktopSlot(int slot, LauncherApp primaryDesktop) {
+        if (slot < 0 || slot >= MAX_WINDOWS || primaryDesktop == null) {
+            return;
+        }
+        LauncherApp currentApp = windowApps[slot];
+        if (currentApp == null
+                || !primaryDesktop.componentName.equals(currentApp.componentName)) {
+            return;
+        }
+        EmbeddedAppHost host = embeddedHosts[slot];
+        if (host instanceof RootVirtualDisplayHost) {
+            ((RootVirtualDisplayHost) host).concealHostedSurfaceForDesktopTakeover(currentApp);
+        }
+        embeddedSyncGenerations[slot]++;
+        windowApps[slot] = null;
+        clearHostedAppRevealState(slot);
+        windowViews[slot].setLiveAppVisible(false);
+        renderWindows();
+    }
+
+    private void finishExitedSlotCleanupAfterDesktopPromotion(
+            int generation, int exitedSlot, LauncherApp exitedApp, LauncherApp primaryDesktop,
+            int desktopSlot, Runnable afterDesktopTakeover, int attempt) {
+        if (generation != desktopTakeoverGeneration || activityDestroyed
+                || exitedSlot < 0 || exitedSlot >= MAX_WINDOWS
+                || desktopSlot < 0 || desktopSlot >= MAX_WINDOWS) {
+            return;
+        }
+        LauncherApp currentExitedSlotApp = windowApps[exitedSlot];
+        if (currentExitedSlotApp == null
+                || !exitedApp.componentName.equals(currentExitedSlotApp.componentName)) {
+            return;
+        }
+        if (activeMainSlot == desktopSlot && !isWindowAnimationRunning()) {
+            clearExitedHostedAppSlot(exitedSlot, exitedApp);
+            if (afterDesktopTakeover != null) {
+                afterDesktopTakeover.run();
+            }
+            return;
+        }
+        LauncherApp desktopApp = windowApps[desktopSlot];
+        if (primaryDesktop == null || desktopApp == null
+                || !primaryDesktop.componentName.equals(desktopApp.componentName)
+                || embeddedSlotClosing[desktopSlot]) {
+            Log.w(TAG, "Verified primary desktop slot disappeared during promotion: slot="
+                    + desktopSlot);
+            startPrimaryDesktopAfterExit(
+                    generation, exitedSlot, exitedApp,
+                    primaryDesktop, afterDesktopTakeover);
+            return;
+        }
+
+        boolean animationRunning = isWindowAnimationRunning();
+        if (!animationRunning && activeMainSlot != desktopSlot) {
+            boolean staleCompletedSwitchPending = mainSlotSwitchPendingSlot == activeMainSlot
+                    && mainSlotSwitchPendingOldSlot != activeMainSlot;
+            if (staleCompletedSwitchPending) {
+                Log.w(TAG, "Clear completed main-slot focus pending before desktop promotion: "
+                        + "pending=" + mainSlotSwitchPendingSlot
+                        + ", old=" + mainSlotSwitchPendingOldSlot
+                        + ", desktop=" + desktopSlot);
+                clearPendingMainSlotSwitch();
+            }
+            if (mainSlotSwitchPendingSlot < 0 && mainContentReplacementPendingSlot < 0) {
+                Log.i(TAG, "Retry verified primary desktop promotion: desktopSlot="
+                        + desktopSlot + ", exitedSlot=" + exitedSlot
+                        + ", attempt=" + attempt);
+                switchMainSlot(desktopSlot, true);
+            }
+        }
+        mainHandler.postDelayed(() -> finishExitedSlotCleanupAfterDesktopPromotion(
+                generation, exitedSlot, exitedApp, primaryDesktop, desktopSlot,
+                afterDesktopTakeover, attempt + 1), 32L);
+    }
+
+    private void clearExitedHostedAppSlot(int slot, LauncherApp exitedApp) {
+        if (slot < 0 || slot >= MAX_WINDOWS || exitedApp == null) {
+            return;
+        }
+        LauncherApp currentApp = windowApps[slot];
+        if (currentApp == null
+                || !exitedApp.componentName.equals(currentApp.componentName)) {
+            return;
+        }
+        embeddedSyncGenerations[slot]++;
+        EmbeddedAppHost host = embeddedHosts[slot];
+        if (host instanceof RootVirtualDisplayHost) {
+            ((RootVirtualDisplayHost) host).concealHostedSurfaceForDesktopTakeover(exitedApp);
+        }
+        windowApps[slot] = null;
+        clearHostedAppRevealState(slot);
+        backgroundAppPackages.remove(exitedApp.packageName);
+        windowViews[slot].setLiveAppVisible(false);
+        renderWindows();
+    }
+
     private void backgroundOpenedApps() {
         if (!suppressEmbeddedStarts) {
             suppressEmbeddedStarts = true;
@@ -4507,6 +4807,14 @@ public class MainActivity extends Activity {
         }
         sideSlotOrder.set(sideIndex, oldMainSlot);
         activeMainSlot = newMainSlot;
+        EmbeddedAppHost oldHost = embeddedHosts[oldMainSlot];
+        if (oldHost instanceof RootVirtualDisplayHost) {
+            ((RootVirtualDisplayHost) oldHost).syncLaunchRoutingSource();
+        }
+        EmbeddedAppHost newHost = embeddedHosts[newMainSlot];
+        if (newHost instanceof RootVirtualDisplayHost) {
+            ((RootVirtualDisplayHost) newHost).syncLaunchRoutingSource();
+        }
         mainOnLeft = !mainOnLeft;
         updateTopNavigationControls();
         applyWindowLayout(animate, () -> {
@@ -4562,8 +4870,16 @@ public class MainActivity extends Activity {
             windowViews[slot].setLiveAppVisible(false);
             return;
         }
-        setHostedSurfaceAlpha(slot, 1f);
-        windowViews[slot].setLiveAppVisible(true);
+        EmbeddedAppHost host = embeddedHosts[slot];
+        boolean resolvedRootTask = host instanceof RootVirtualDisplayHost
+                && ((RootVirtualDisplayHost) host).hasResolvedHostedTask(app);
+        if (host instanceof RootVirtualDisplayHost && !resolvedRootTask) {
+            clearHostedAppRevealState(slot);
+            windowViews[slot].setLiveAppVisible(false);
+        } else {
+            setHostedSurfaceAlpha(slot, 1f);
+            windowViews[slot].setLiveAppVisible(true);
+        }
         windowViews[slot].requestLayout();
         int startEpoch = embeddedStartEpoch;
         windowViews[slot].post(() -> startEmbeddedSlotWhenReady(slot, generation, startEpoch, app,
@@ -4625,7 +4941,9 @@ public class MainActivity extends Activity {
                 + " type=" + host.getClass().getSimpleName());
 
         boolean live = (ready || canStartBeforeLayout) && host.start(currentApp);
-        windowView.setLiveAppVisible(live);
+        boolean revealPending = host instanceof RootVirtualDisplayHost
+                && ((RootVirtualDisplayHost) host).isHostedSurfaceRevealPending(currentApp);
+        windowView.setLiveAppVisible(live && !revealPending);
         if (!live) {
             String reason = ready ? host.getUnavailableReason() : "嵌入容器未完成布局";
             Log.w(TAG, "Cannot embed " + currentApp.packageName + " in slot " + slot

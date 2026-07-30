@@ -86,21 +86,11 @@
         </activity>
 
         <activity
-            android:name=".SecondaryHomeActivity"
-            android:canDisplayOnRemoteDevices="true"
+            android:name=".DisplayAccessActivity"
             android:excludeFromRecents="true"
             android:exported="true"
-            android:launchMode="singleTask"
-            android:resizeableActivity="true"
-            android:screenOrientation="nosensor"
-            android:taskAffinity="com.sangluo.onestep.secondaryhome"
-            android:theme="@style/Theme.OneStep40.SecondaryHome">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.SECONDARY_HOME" />
-                <category android:name="android.intent.category.DEFAULT" />
-            </intent-filter>
-        </activity>
+            android:noHistory="true"
+            android:theme="@android:style/Theme.NoDisplay" />
 
         <service
             android:name=".MediaNotificationListenerService"

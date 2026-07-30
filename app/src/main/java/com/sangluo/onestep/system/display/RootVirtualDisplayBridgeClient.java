@@ -21,6 +21,7 @@ public final class RootVirtualDisplayBridgeClient {
     private final IBinder launchCallbackBinder = new LaunchCallbackBinder();
     private IBinder service;
     private volatile CrossAppLaunchListener crossAppLaunchListener;
+    private volatile TaskEventListener taskEventListener;
     private boolean launchCallbackRegistered;
 
     public CreateResult create(String bridgeToken, int slot, String name,
@@ -83,9 +84,11 @@ public final class RootVirtualDisplayBridgeClient {
                 });
     }
 
-    public boolean registerCrossAppLaunchCallback(String bridgeToken,
-                                                  CrossAppLaunchListener listener) {
+    public boolean registerCrossAppLaunchCallback(
+            String bridgeToken, CrossAppLaunchListener listener,
+            TaskEventListener eventListener) {
         crossAppLaunchListener = listener;
+        taskEventListener = eventListener;
         if (launchCallbackRegistered && service != null && service.isBinderAlive()) {
             return true;
         }
@@ -213,6 +216,10 @@ public final class RootVirtualDisplayBridgeClient {
                                  Intent intent, String targetPackage);
     }
 
+    public interface TaskEventListener {
+        void onTaskEvent(int event, int displayId, int taskId, String packageName);
+    }
+
     private final class LaunchCallbackBinder extends Binder {
         LaunchCallbackBinder() {
             attachInterface(null, RootVirtualDisplayBridge.LAUNCH_CALLBACK_DESCRIPTOR);
@@ -225,10 +232,27 @@ public final class RootVirtualDisplayBridgeClient {
                 reply.writeString(RootVirtualDisplayBridge.LAUNCH_CALLBACK_DESCRIPTOR);
                 return true;
             }
+            data.enforceInterface(RootVirtualDisplayBridge.LAUNCH_CALLBACK_DESCRIPTOR);
+            if (code == RootVirtualDisplayBridge.TASK_EVENT_CALLBACK_TRANSACTION) {
+                int event = data.readInt();
+                int displayId = data.readInt();
+                int taskId = data.readInt();
+                String packageName = data.readString();
+                TaskEventListener listener = taskEventListener;
+                try {
+                    if (listener != null) {
+                        listener.onTaskEvent(event, displayId, taskId, packageName);
+                    }
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "Task-event callback handler failed: "
+                            + e.getClass().getSimpleName());
+                }
+                reply.writeNoException();
+                return true;
+            }
             if (code != RootVirtualDisplayBridge.LAUNCH_CALLBACK_TRANSACTION) {
                 return super.onTransact(code, data, reply, flags);
             }
-            data.enforceInterface(RootVirtualDisplayBridge.LAUNCH_CALLBACK_DESCRIPTOR);
             int sourceDisplayId = data.readInt();
             String sourcePackage = data.readString();
             Intent intent = data.readInt() == 0

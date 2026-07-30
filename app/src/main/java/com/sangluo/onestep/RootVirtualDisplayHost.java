@@ -80,6 +80,7 @@ import com.sangluo.onestep.feature.embedding.DeviceOrientationMapper;
 import com.sangluo.onestep.feature.embedding.DismissedAppClosePolicy;
 import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
+import com.sangluo.onestep.feature.embedding.HostedBackExitPolicy;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
@@ -194,6 +195,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         Intent consumeRoutedLaunchIntent(int slot, String packageName);
         boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
                                  Intent intent, String targetPackage);
+        void onSystemTaskEvent(int event, int displayId, int taskId, String packageName);
+        void onHostedAppExitedAfterBack(
+                int slot, LauncherApp app, Runnable afterDesktopTakeover);
     }
 
     private static final String TAG = "OneStep40";
@@ -227,7 +231,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final String VIRTUAL_DISPLAY_ROLE =
             "android.app.role.COMPANION_DEVICE_APP_STREAMING";
     private static final int[] HOSTED_TASK_RESOLUTION_DELAYS_MS = {80, 240, 700, 1500};
+    private static final int[] BACK_EXIT_CHECK_DELAYS_MS = {60, 180, 450};
     private static final long ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS = 240L;
+    private static final long HOSTED_SURFACE_REVEAL_AFTER_VISIBLE_MS = 96L;
     private final MainActivity owner;
     private final Callbacks callbacks;
     private final PackageManager packageManager;
@@ -266,6 +272,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private LauncherApp pendingApp;
     private volatile int displayId = -1;
     private volatile int hostedTaskId = -1;
+    private boolean hostedSurfaceRevealPending;
+    private ComponentName hostedSurfaceRevealComponent;
+    private int hostedSurfaceRevealDisplayId = -1;
+    private int hostedSurfaceRevealGeneration;
+    private Runnable hostedSurfaceRevealedCallback;
+    private ComponentName hostedSurfaceRevealCallbackComponent;
     private int displayWidth;
     private int displayHeight;
     private int displayDensityDpi;
@@ -294,6 +306,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private int hostedTaskValidationGeneration;
     private boolean hostedTaskValidationInFlight;
     private int routedLaunchGeneration;
+    private int backExitCheckGeneration;
+    private int systemResumeExitCheckGeneration;
     private boolean surfaceDetached;
     private int displayReleaseGeneration;
     private boolean virtualDisplayCreationInProgress;
@@ -584,6 +598,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 && !forceLaunch
                 && displayId == launchRequestedDisplayId
                 && TextUtils.equals(launchRequestedPackage, app.packageName);
+        if (!reusingHostedApp || hostedTaskId <= 0) {
+            beginHostedSurfaceReveal(app);
+        }
         if (!reusingHostedApp && isMainDisplaySlot(slot)) {
             ensureDisplayImeLocalPolicyAsync("main display app launch " + app.packageName);
         }
@@ -725,9 +742,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         "cmd activity stack list", "validate reused hosted app", false);
                 int resolvedTaskId = stackList.exitCode == 0
                         && !TextUtils.isEmpty(stackList.output)
-                        ? HostedTaskParser.findHostedTaskId(
-                        stackList.output, targetDisplayId, targetPackage)
-                        : -1;
+                        ? findVisibleHostedTaskId(
+                        stackList.output, targetDisplayId, app) : -1;
                 boolean scanSucceeded = stackList.exitCode == 0
                         && !TextUtils.isEmpty(stackList.output);
                 mainHandler.post(() -> {
@@ -748,6 +764,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     }
                     if (resolvedTaskId > 0) {
                         hostedTaskId = resolvedTaskId;
+                        scheduleHostedSurfaceReveal(app, targetDisplayId);
                         return;
                     }
                     Log.w(TAG, "Restart hosted app after stale task reuse: slot=" + slot
@@ -757,7 +774,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     launchRequestedPackage = "";
                     launchRequestedDisplayId = -1;
                     boolean live = start(app);
-                    windowViews[slot].setLiveAppVisible(live);
+                    windowViews[slot].setLiveAppVisible(
+                            live && !isHostedSurfaceRevealPending(app));
                     if (!live) {
                         unavailableReason = "应用任务已结束，重新启动失败";
                     }
@@ -989,7 +1007,239 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (displayId <= DEFAULT_DISPLAY_ID) {
             return;
         }
+        LauncherApp app = slot >= 0 && slot < MAX_WINDOWS ? windowApps[slot] : null;
+        int targetDisplayId = displayId;
+        int targetTaskId = hostedTaskId;
+        int generation = ++backExitCheckGeneration;
+        if (app != null && !app.isHomeEntry() && isMainDisplaySlot(slot)) {
+            if (rootAvailable) {
+                inspectTaskBeforeBack(app, targetDisplayId, targetTaskId, generation);
+                return;
+            }
+            injectBackAndScheduleExitCheck(
+                    app, targetDisplayId, targetTaskId, generation);
+            return;
+        }
         injectKeyDirectAsync(KeyEvent.KEYCODE_BACK, "back display " + displayId);
+    }
+
+    private void inspectTaskBeforeBack(LauncherApp app, int targetDisplayId,
+                                       int targetTaskId, int generation) {
+        try {
+            rootExecutor.execute(() -> {
+                int resolvedTaskId = targetTaskId;
+                if (resolvedTaskId <= 0) {
+                    ShellCommandResult stackList = runPrivilegedCommand(
+                            "cmd activity stack list",
+                            "resolve task before back", false);
+                    if (stackList.exitCode == 0 && !TextUtils.isEmpty(stackList.output)) {
+                        resolvedTaskId = HostedTaskParser.findHostedTaskId(
+                                stackList.output, targetDisplayId, app.packageName);
+                    }
+                }
+                ShellCommandResult activities = runPrivilegedCommand(
+                        "dumpsys activity activities", "inspect task before back", false);
+                int activityCount = activities.exitCode == 0
+                        && !TextUtils.isEmpty(activities.output) && resolvedTaskId > 0
+                        ? HostedTaskParser.findTaskActivityCount(
+                        activities.output, resolvedTaskId) : -1;
+                int inspectedTaskId = resolvedTaskId;
+                mainHandler.post(() -> finishTaskInspectionBeforeBack(
+                        app, targetDisplayId, inspectedTaskId, generation, activityCount));
+            });
+        } catch (RuntimeException e) {
+            injectBackAndScheduleExitCheck(app, targetDisplayId, targetTaskId, generation);
+        }
+    }
+
+    private void finishTaskInspectionBeforeBack(LauncherApp app, int targetDisplayId,
+                                                int targetTaskId, int generation,
+                                                int activityCount) {
+        if (!isCurrentBackExitCheck(app, targetDisplayId, generation)) {
+            return;
+        }
+        if (activityCount == 1) {
+            hostedTaskId = -1;
+            launchRequestedPackage = "";
+            launchRequestedDisplayId = -1;
+            callbacks.onHostedAppExitedAfterBack(slot, app,
+                    () -> removeLastHostedTaskAfterDesktopTakeover(
+                            app, targetDisplayId, targetTaskId));
+            return;
+        }
+        if (activityCount == 0) {
+            hostedTaskId = -1;
+            launchRequestedPackage = "";
+            launchRequestedDisplayId = -1;
+            callbacks.onHostedAppExitedAfterBack(slot, app, null);
+            return;
+        }
+        injectBackAndScheduleExitCheck(app, targetDisplayId, targetTaskId, generation);
+    }
+
+    private void removeLastHostedTaskAfterDesktopTakeover(
+            LauncherApp app, int targetDisplayId, int targetTaskId) {
+        try {
+            rootExecutor.execute(() -> {
+                boolean removed = startRootInputBridgeIfNeeded(false)
+                        && rootInputBridgeClient.removeTask(
+                        getRootInputBridgeToken(), targetTaskId);
+                if (removed) {
+                    Log.i(TAG, "Removed last hosted app task after desktop takeover: package="
+                            + app.packageName + ", taskId=" + targetTaskId);
+                    return;
+                }
+                Log.w(TAG, "Remove last hosted app task failed; fall back to Back: package="
+                        + app.packageName + ", taskId=" + targetTaskId);
+                sendKeyThroughDirectBridge(targetDisplayId, KeyEvent.KEYCODE_BACK);
+            });
+        } catch (RuntimeException e) {
+            sendKeyThroughDirectBridge(targetDisplayId, KeyEvent.KEYCODE_BACK);
+        }
+    }
+
+    private void injectBackAndScheduleExitCheck(LauncherApp app, int targetDisplayId,
+                                                int targetTaskId, int generation) {
+        injectKeyDirectAsync(KeyEvent.KEYCODE_BACK, "back display " + targetDisplayId);
+        scheduleBackExitCheck(app, targetDisplayId, targetTaskId,
+                generation, 0, 0);
+    }
+
+    private void scheduleBackExitCheck(LauncherApp app, int targetDisplayId,
+                                       int targetTaskId, int generation, int attempt,
+                                       int consecutiveMissingScans) {
+        if (attempt < 0 || attempt >= BACK_EXIT_CHECK_DELAYS_MS.length) {
+            return;
+        }
+        mainHandler.postDelayed(() -> runBackExitCheck(
+                        app, targetDisplayId, targetTaskId, generation, attempt,
+                        consecutiveMissingScans),
+                BACK_EXIT_CHECK_DELAYS_MS[attempt]);
+    }
+
+    private void runBackExitCheck(LauncherApp app, int targetDisplayId,
+                                  int targetTaskId, int generation, int attempt,
+                                  int consecutiveMissingScans) {
+        if (!isCurrentBackExitCheck(app, targetDisplayId, generation)) {
+            return;
+        }
+        try {
+            rootExecutor.execute(() -> {
+                ShellCommandResult stackList = runPrivilegedCommand(
+                        "cmd activity stack list", "check app after back", false);
+                boolean scanSucceeded = stackList.exitCode == 0
+                        && !TextUtils.isEmpty(stackList.output);
+                boolean taskPresent = scanSucceeded && (targetTaskId > 0
+                        ? HostedTaskParser.containsTaskOnDisplay(
+                        stackList.output, targetDisplayId, targetTaskId)
+                        : HostedTaskParser.findHostedTaskId(
+                        stackList.output, targetDisplayId, app.packageName) > 0);
+                mainHandler.post(() -> finishBackExitCheck(
+                        app, targetDisplayId, targetTaskId, generation, attempt,
+                        consecutiveMissingScans, scanSucceeded, taskPresent));
+            });
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Queue app exit check after back failed for slot " + slot + ": "
+                    + e.getClass().getSimpleName());
+        }
+    }
+
+    private void finishBackExitCheck(LauncherApp app, int targetDisplayId,
+                                     int targetTaskId, int generation, int attempt,
+                                     int consecutiveMissingScans,
+                                     boolean scanSucceeded, boolean taskPresent) {
+        if (!isCurrentBackExitCheck(app, targetDisplayId, generation)) {
+            return;
+        }
+        boolean canRetry = attempt + 1 < BACK_EXIT_CHECK_DELAYS_MS.length;
+        HostedBackExitPolicy.Action action = HostedBackExitPolicy.afterScan(
+                scanSucceeded, taskPresent, consecutiveMissingScans, canRetry);
+        if (action == HostedBackExitPolicy.Action.KEEP_APP) {
+            return;
+        }
+        if (action == HostedBackExitPolicy.Action.SHOW_DESKTOP) {
+            hostedTaskId = -1;
+            launchRequestedPackage = "";
+            launchRequestedDisplayId = -1;
+            callbacks.onHostedAppExitedAfterBack(slot, app, null);
+            return;
+        }
+        int nextMissingScans = scanSucceeded && !taskPresent
+                ? consecutiveMissingScans + 1 : 0;
+        scheduleBackExitCheck(app, targetDisplayId, targetTaskId, generation,
+                attempt + 1, nextMissingScans);
+    }
+
+    private boolean isCurrentBackExitCheck(LauncherApp expectedApp,
+                                           int targetDisplayId, int generation) {
+        if (generation != backExitCheckGeneration || targetDisplayId != displayId
+                || slot < 0 || slot >= MAX_WINDOWS || !isMainDisplaySlot(slot)
+                || embeddedSlotClosing[slot]) {
+            return false;
+        }
+        LauncherApp currentApp = windowApps[slot];
+        return currentApp != null
+                && expectedApp.componentName.equals(currentApp.componentName);
+    }
+
+    void onSystemActivityResuming(String resumedPackage) {
+        if (TextUtils.isEmpty(resumedPackage) || displayId <= DEFAULT_DISPLAY_ID
+                || !isMainDisplaySlot(slot) || embeddedSlotClosing[slot]) {
+            return;
+        }
+        LauncherApp app = slot >= 0 && slot < MAX_WINDOWS ? windowApps[slot] : null;
+        if (app == null || app.isHomeEntry()
+                || TextUtils.equals(app.packageName, resumedPackage)
+                || isHostedSurfaceRevealPending(app)) {
+            return;
+        }
+        int targetDisplayId = displayId;
+        int targetTaskId = hostedTaskId;
+        int generation = ++systemResumeExitCheckGeneration;
+        try {
+            rootExecutor.execute(() -> {
+                ShellCommandResult stackList = runPrivilegedCommand(
+                        "cmd activity stack list",
+                        "check hosted task on activity resume", false);
+                boolean scanSucceeded = stackList.exitCode == 0
+                        && !TextUtils.isEmpty(stackList.output);
+                boolean taskPresent = scanSucceeded && (targetTaskId > 0
+                        ? HostedTaskParser.containsTaskOnDisplay(
+                        stackList.output, targetDisplayId, targetTaskId)
+                        : HostedTaskParser.findHostedTaskId(
+                        stackList.output, targetDisplayId, app.packageName) > 0);
+                mainHandler.post(() -> {
+                    if (generation != systemResumeExitCheckGeneration
+                            || !isCurrentSystemResumeExitCheck(
+                            app, targetDisplayId)) {
+                        return;
+                    }
+                    if (scanSucceeded && !taskPresent) {
+                        Log.i(TAG, "Hosted task disappeared while system resumed "
+                                + resumedPackage + ": slot=" + slot
+                                + ", display=" + targetDisplayId
+                                + ", app=" + app.packageName);
+                        hostedTaskId = -1;
+                        launchRequestedPackage = "";
+                        launchRequestedDisplayId = -1;
+                        callbacks.onHostedAppExitedAfterBack(slot, app, null);
+                    }
+                });
+            });
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Queue hosted task check on activity resume failed for slot " + slot);
+        }
+    }
+
+    private boolean isCurrentSystemResumeExitCheck(
+            LauncherApp expectedApp, int targetDisplayId) {
+        if (targetDisplayId != displayId || !isMainDisplaySlot(slot)
+                || embeddedSlotClosing[slot]) {
+            return false;
+        }
+        LauncherApp currentApp = windowApps[slot];
+        return currentApp != null
+                && expectedApp.componentName.equals(currentApp.componentName);
     }
 
     @Override
@@ -1002,39 +1252,106 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         pendingApp = null;
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
-        if (!startSecondaryHomeForBackground()) {
-            injectKeyDirectAsync(KeyEvent.KEYCODE_HOME, "home display " + displayId);
-        }
-    }
-
-    private boolean startSecondaryHomeForBackground() {
-        int targetDisplayId = displayId;
-        Intent intent = new Intent(owner, SecondaryHomeActivity.class)
-                .setAction(Intent.ACTION_MAIN)
-                .putExtra(SecondaryHomeActivity.EXTRA_BACKGROUND_ONLY, true)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        try {
-            ActivityOptions options = ActivityOptions.makeBasic();
-            options.setLaunchDisplayId(targetDisplayId);
-            owner.startActivity(intent, options.toBundle());
-            Log.i(TAG, "Moved hosted app behind secondary HOME: slot=" + slot
-                    + ", display=" + targetDisplayId);
-            return true;
-        } catch (ActivityNotFoundException | SecurityException e) {
-            Log.w(TAG, "Start secondary HOME failed for slot " + slot + ", display="
-                    + targetDisplayId + ": " + e.getClass().getSimpleName());
-            return false;
-        }
+        injectKeyDirectAsync(KeyEvent.KEYCODE_HOME, "home display " + displayId);
     }
 
     @Override
     public void invalidateTaskResolution() {
+        backExitCheckGeneration++;
         taskResolutionToken++;
         taskResolutionInFlight = false;
         hostedTaskId = -1;
         hostedTaskValidationGeneration++;
         hostedTaskValidationInFlight = false;
         routedLaunchGeneration++;
+    }
+
+    boolean hasResolvedHostedTask(LauncherApp app) {
+        return app != null && hostedTaskId > 0
+                && displayId > DEFAULT_DISPLAY_ID
+                && displayId == launchRequestedDisplayId
+                && TextUtils.equals(app.packageName, launchRequestedPackage);
+    }
+
+    void validateHostedTaskVisible(LauncherApp app,
+                                   java.util.function.Consumer<Boolean> callback) {
+        if (app == null || callback == null || displayId <= DEFAULT_DISPLAY_ID) {
+            if (callback != null) {
+                mainHandler.post(() -> callback.accept(false));
+            }
+            return;
+        }
+        final int targetDisplayId = displayId;
+        final ComponentName targetComponent = app.componentName;
+        try {
+            rootExecutor.execute(() -> {
+                ShellCommandResult stackList = runPrivilegedCommand(
+                        "cmd activity stack list", "validate hosted task visibility", false);
+                int resolvedTaskId = stackList.exitCode == 0
+                        && !TextUtils.isEmpty(stackList.output)
+                        ? findVisibleHostedTaskId(stackList.output, targetDisplayId, app) : -1;
+                mainHandler.post(() -> {
+                    LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS
+                            ? windowApps[slot] : null;
+                    boolean current = targetDisplayId == displayId && currentApp != null
+                            && targetComponent.equals(currentApp.componentName)
+                            && !embeddedSlotClosing[slot];
+                    if (current && resolvedTaskId > 0) {
+                        hostedTaskId = resolvedTaskId;
+                        launchRequestedPackage = app.packageName;
+                        launchRequestedDisplayId = targetDisplayId;
+                    } else if (current) {
+                        hostedTaskId = -1;
+                    }
+                    callback.accept(current && resolvedTaskId > 0);
+                });
+            });
+        } catch (RuntimeException e) {
+            mainHandler.post(() -> callback.accept(false));
+        }
+    }
+
+    void runAfterHostedTaskVisible(LauncherApp app, Runnable callback) {
+        if (callback == null) {
+            return;
+        }
+        if (hasResolvedHostedTask(app) && !isHostedSurfaceRevealPending(app)) {
+            callback.run();
+            return;
+        }
+        if (isHostedSurfaceRevealPending(app)) {
+            hostedSurfaceRevealedCallback = callback;
+            hostedSurfaceRevealCallbackComponent = app.componentName;
+            return;
+        }
+        LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS ? windowApps[slot] : null;
+        if (currentApp != null && app != null
+                && app.componentName.equals(currentApp.componentName)) {
+            hostedSurfaceRevealedCallback = callback;
+            hostedSurfaceRevealCallbackComponent = app.componentName;
+        }
+    }
+
+    boolean isHostedSurfaceRevealPending(LauncherApp app) {
+        return app != null && hostedSurfaceRevealPending
+                && displayId == hostedSurfaceRevealDisplayId
+                && app.componentName.equals(hostedSurfaceRevealComponent);
+    }
+
+    void concealHostedSurfaceForDesktopTakeover(LauncherApp app) {
+        LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS ? windowApps[slot] : null;
+        if (app == null || currentApp == null
+                || !app.componentName.equals(currentApp.componentName)) {
+            return;
+        }
+        systemResumeExitCheckGeneration++;
+        invalidateTaskResolution();
+        pendingApp = null;
+        launchRequestedPackage = "";
+        launchRequestedDisplayId = -1;
+        cancelHostedSurfaceReveal();
+        applyHostedSurfaceAlpha(0f, false);
+        windowViews[slot].setLiveAppVisible(false);
     }
 
     @Override
@@ -1049,6 +1366,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         pendingApp = null;
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
+        cancelHostedSurfaceReveal();
         try {
             rootExecutor.execute(() -> {
                 if (!TextUtils.isEmpty(targetPackage)) {
@@ -2206,7 +2524,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     private void resolveHostedTask(String reason, int token) {
         final int targetDisplayId = displayId;
-        final String targetPackage = getHostedPackageName();
+        final LauncherApp targetApp = slot >= 0 && slot < MAX_WINDOWS
+                ? windowApps[slot] : null;
         if (!canResolveHostedTask() || hostedTaskId > 0 || taskResolutionInFlight) {
             return;
         }
@@ -2226,13 +2545,15 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         Log.w(TAG, "Hosted task scan empty after " + reason);
                         return;
                     }
-                    int resolvedTaskId = HostedTaskParser.findHostedTaskId(
-                            stackList.output, targetDisplayId, targetPackage);
+                    int resolvedTaskId = findVisibleHostedTaskId(
+                            stackList.output, targetDisplayId, targetApp);
                     if (resolvedTaskId > 0) {
                         hostedTaskId = resolvedTaskId;
                         Log.i(TAG, "Resolved hosted task: slot=" + slot
                                 + ", display=" + targetDisplayId
                                 + ", taskId=" + resolvedTaskId);
+                        mainHandler.post(() -> scheduleHostedSurfaceReveal(
+                                targetApp, targetDisplayId));
                     }
                 } finally {
                     taskResolutionInFlight = false;
@@ -2241,6 +2562,89 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         } catch (RuntimeException e) {
             taskResolutionInFlight = false;
         }
+    }
+
+    private int findHostedTaskId(String stackList, int targetDisplayId, LauncherApp app) {
+        if (app == null) {
+            return -1;
+        }
+        if (app.isHomeEntry()) {
+            return HostedTaskParser.findHostedTaskIdForComponent(
+                    stackList, targetDisplayId, app.packageName,
+                    app.componentName.getClassName());
+        }
+        return HostedTaskParser.findHostedTaskId(
+                stackList, targetDisplayId, app.packageName);
+    }
+
+    private int findVisibleHostedTaskId(
+            String stackList, int targetDisplayId, LauncherApp app) {
+        if (app == null) {
+            return -1;
+        }
+        if (app.isHomeEntry()) {
+            return HostedTaskParser.findVisibleHostedTaskIdForComponent(
+                    stackList, targetDisplayId, app.packageName,
+                    app.componentName.getClassName());
+        }
+        return HostedTaskParser.findVisibleHostedTaskId(
+                stackList, targetDisplayId, app.packageName);
+    }
+
+    private void beginHostedSurfaceReveal(LauncherApp app) {
+        if (hostedSurfaceRevealCallbackComponent != null
+                && !app.componentName.equals(hostedSurfaceRevealCallbackComponent)) {
+            hostedSurfaceRevealedCallback = null;
+            hostedSurfaceRevealCallbackComponent = null;
+        }
+        hostedSurfaceRevealPending = true;
+        hostedSurfaceRevealComponent = app.componentName;
+        hostedSurfaceRevealDisplayId = displayId;
+        hostedSurfaceRevealGeneration++;
+        applyHostedSurfaceAlpha(0f, false);
+        windowViews[slot].setLiveAppVisible(false);
+    }
+
+    private void scheduleHostedSurfaceReveal(LauncherApp app, int targetDisplayId) {
+        final int generation = hostedSurfaceRevealGeneration;
+        mainHandler.postDelayed(() -> {
+            if (generation == hostedSurfaceRevealGeneration) {
+                revealHostedSurfaceIfCurrent(app, targetDisplayId);
+            }
+        }, HOSTED_SURFACE_REVEAL_AFTER_VISIBLE_MS);
+    }
+
+    private void revealHostedSurfaceIfCurrent(LauncherApp app, int targetDisplayId) {
+        if (app == null || !isHostedSurfaceRevealPending(app)
+                || targetDisplayId != displayId || hostedTaskId <= 0
+                || embeddedSlotClosing[slot]) {
+            return;
+        }
+        LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS ? windowApps[slot] : null;
+        if (currentApp == null || !app.componentName.equals(currentApp.componentName)) {
+            return;
+        }
+        Runnable onRevealed = app.componentName.equals(hostedSurfaceRevealCallbackComponent)
+                ? hostedSurfaceRevealedCallback : null;
+        hostedSurfaceRevealPending = false;
+        hostedSurfaceRevealComponent = null;
+        hostedSurfaceRevealDisplayId = -1;
+        hostedSurfaceRevealedCallback = null;
+        hostedSurfaceRevealCallbackComponent = null;
+        applyHostedSurfaceAlpha(1f, false);
+        windowViews[slot].setLiveAppVisible(true);
+        if (onRevealed != null) {
+            onRevealed.run();
+        }
+    }
+
+    private void cancelHostedSurfaceReveal() {
+        hostedSurfaceRevealGeneration++;
+        hostedSurfaceRevealPending = false;
+        hostedSurfaceRevealComponent = null;
+        hostedSurfaceRevealDisplayId = -1;
+        hostedSurfaceRevealedCallback = null;
+        hostedSurfaceRevealCallbackComponent = null;
     }
 
     private void createVirtualDisplay(SurfaceHolder holder, int viewWidth, int viewHeight) {
@@ -2587,6 +2991,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         focusRequestGeneration++;
         destroyHostedInputFocusGuard();
         pendingApp = null;
+        cancelHostedSurfaceReveal();
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
         rootInputBridgeClient.close();
@@ -2923,12 +3328,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     private void registerCrossAppLaunchRouting(String bridgeToken) {
         if (!rootVirtualDisplayBridgeClient.registerCrossAppLaunchCallback(
-                bridgeToken, callbacks::onCrossAppLaunch)) {
+                bridgeToken, callbacks::onCrossAppLaunch,
+                callbacks::onSystemTaskEvent)) {
             Log.w(TAG, "Cross-app launch routing callback unavailable for slot " + slot);
         }
     }
 
-    private void syncLaunchRoutingSource() {
+    void syncLaunchRoutingSource() {
         boolean active = slot == callbacks.activeMainSlot()
                 && displayId > DEFAULT_DISPLAY_ID
                 && slot >= 0 && slot < MAX_WINDOWS

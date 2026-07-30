@@ -10,7 +10,6 @@ import android.util.AttributeSet;
 import android.view.KeyEvent;
 import android.view.View;
 
-import com.sangluo.onestep.SecondaryHomeActivity;
 import com.sangluo.onestep.model.LauncherApp;
 
 import java.lang.reflect.Constructor;
@@ -98,23 +97,7 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
 
     @Override
     public void sendHome() {
-        if (!isAvailable()) {
-            return;
-        }
-        Intent intent = new Intent(context, SecondaryHomeActivity.class)
-                .setAction(Intent.ACTION_MAIN)
-                .putExtra(SecondaryHomeActivity.EXTRA_BACKGROUND_ONLY, true)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        Object[] args = makeStartArguments(startActivityMethod.getParameterTypes(), intent);
-        if (args == null) {
-            sendKey(KeyEvent.KEYCODE_HOME);
-            return;
-        }
-        try {
-            startActivityMethod.invoke(activityView, args);
-        } catch (IllegalAccessException | InvocationTargetException | RuntimeException e) {
-            sendKey(KeyEvent.KEYCODE_HOME);
-        }
+        sendKey(KeyEvent.KEYCODE_HOME);
     }
 
     @Override

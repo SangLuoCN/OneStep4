@@ -31,6 +31,10 @@ public final class RootVirtualDisplayBridge extends Binder {
     public static final String LAUNCH_CALLBACK_DESCRIPTOR =
             "com.sangluo.onestep.ICrossAppLaunchCallback";
     public static final int LAUNCH_CALLBACK_TRANSACTION = IBinder.FIRST_CALL_TRANSACTION;
+    public static final int TASK_EVENT_CALLBACK_TRANSACTION =
+            IBinder.FIRST_CALL_TRANSACTION + 1;
+    public static final int TASK_EVENT_MOVED_TO_FRONT = 1;
+    public static final int TASK_EVENT_REMOVAL_STARTED = 2;
     public static final String SERVICE_NAME_PREFIX = "onestep_display_";
     public static final int TRANSACTION_CREATE = IBinder.FIRST_CALL_TRANSACTION;
     public static final int TRANSACTION_RESIZE = IBinder.FIRST_CALL_TRANSACTION + 1;
@@ -63,6 +67,8 @@ public final class RootVirtualDisplayBridge extends Binder {
     private long lastInputUptime;
     @SuppressWarnings("FieldCanBeLocal")
     private RootCrossAppLaunchController launchController;
+    @SuppressWarnings("FieldCanBeLocal")
+    private RootTaskStackObserver taskStackObserver;
 
     private RootVirtualDisplayBridge(Context context, int allowedUid, String bridgeToken) {
         this.allowedUid = allowedUid;
@@ -100,6 +106,11 @@ public final class RootVirtualDisplayBridge extends Binder {
             bridge.launchController = RootCrossAppLaunchController.install(bridge);
         } catch (ReflectiveOperationException | RuntimeException e) {
             Log.e(TAG, "cross-app launch controller unavailable", e);
+        }
+        try {
+            bridge.taskStackObserver = RootTaskStackObserver.install(bridge);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            Log.e(TAG, "task stack observer unavailable", e);
         }
         return bridge;
     }
@@ -295,8 +306,7 @@ public final class RootVirtualDisplayBridge extends Binder {
                     "--user", "0",
                     "--display", String.valueOf(displayId),
                     "-a", "android.intent.action.MAIN",
-                    "-n", "com.sangluo.onestep/.SecondaryHomeActivity",
-                    "--ez", SecondaryHomeActivity.EXTRA_BACKGROUND_ONLY, "true",
+                    "-n", "com.sangluo.onestep/.DisplayAccessActivity",
                     "-f", String.valueOf(0x10010000))
                     .redirectErrorStream(true)
                     .start();
@@ -497,6 +507,31 @@ public final class RootVirtualDisplayBridge extends Binder {
         return routed;
     }
 
+    void notifyTaskEvent(int event, int displayId, int taskId, String packageName) {
+        if (displayId <= Display.DEFAULT_DISPLAY || !ownsDisplay(displayId)) {
+            return;
+        }
+        LaunchCallbackRecord callback;
+        synchronized (launchRoutingLock) {
+            callback = launchCallback;
+        }
+        if (callback != null) {
+            callback.notifyTaskEvent(event, displayId, taskId, packageName);
+        }
+    }
+
+    private boolean ownsDisplay(int displayId) {
+        synchronized (displays) {
+            for (DisplayRecord record : displays.values()) {
+                Display display = record.display.getDisplay();
+                if (display != null && display.getDisplayId() == displayId) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private void clearLaunchCallbackLocked() {
         if (launchCallback != null) {
             launchCallback.unlinkToDeath();
@@ -575,6 +610,32 @@ public final class RootVirtualDisplayBridge extends Binder {
                     }
                 }
                 return false;
+            } finally {
+                reply.recycle();
+                data.recycle();
+            }
+        }
+
+        void notifyTaskEvent(int event, int displayId, int taskId, String packageName) {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(LAUNCH_CALLBACK_DESCRIPTOR);
+                data.writeInt(event);
+                data.writeInt(displayId);
+                data.writeInt(taskId);
+                data.writeString(packageName);
+                callback.transact(TASK_EVENT_CALLBACK_TRANSACTION,
+                        data, reply, 0);
+                reply.readException();
+            } catch (RemoteException | RuntimeException e) {
+                Log.w(TAG, "activity-resuming callback failed: "
+                        + e.getClass().getSimpleName());
+                synchronized (launchRoutingLock) {
+                    if (launchCallback == this) {
+                        clearLaunchCallbackLocked();
+                    }
+                }
             } finally {
                 reply.recycle();
                 data.recycle();
