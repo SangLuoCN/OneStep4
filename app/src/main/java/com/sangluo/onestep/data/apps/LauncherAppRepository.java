@@ -38,6 +38,33 @@ public final class LauncherAppRepository {
         return loadLauncherApps(true);
     }
 
+    public List<LauncherApp> loadHomeApps() {
+        List<ResolveInfo> resolveInfos = queryHomeActivities();
+        Collections.sort(resolveInfos, new ResolveInfo.DisplayNameComparator(packageManager));
+        List<LauncherApp> apps = new ArrayList<>();
+        for (ResolveInfo resolveInfo : resolveInfos) {
+            if (!isSelectableHomeActivity(resolveInfo)) {
+                continue;
+            }
+            apps.add(createHomeApp(resolveInfo));
+        }
+        return apps;
+    }
+
+    public LauncherApp loadHomeApp(ComponentName componentName) {
+        if (componentName == null
+                || TextUtils.equals(componentName.getPackageName(), context.getPackageName())) {
+            return null;
+        }
+        for (ResolveInfo resolveInfo : queryHomeActivities()) {
+            if (isSelectableHomeActivity(resolveInfo)
+                    && componentName.equals(componentNameOf(resolveInfo))) {
+                return createHomeApp(resolveInfo);
+            }
+        }
+        return null;
+    }
+
     public LauncherApp loadLauncherApp(String packageName) {
         Intent launchIntent = packageManager.getLaunchIntentForPackage(packageName);
         ComponentName preferredComponent = launchIntent == null
@@ -86,6 +113,21 @@ public final class LauncherAppRepository {
         return packageManager.queryIntentActivities(mainIntent, 0);
     }
 
+    private List<ResolveInfo> queryHomeActivities() {
+        Intent homeIntent = new Intent(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_HOME);
+        return packageManager.queryIntentActivities(
+                homeIntent, PackageManager.MATCH_DEFAULT_ONLY);
+    }
+
+    private boolean isSelectableHomeActivity(ResolveInfo resolveInfo) {
+        return resolveInfo != null
+                && resolveInfo.activityInfo != null
+                && resolveInfo.priority >= 0
+                && !TextUtils.equals(resolveInfo.activityInfo.packageName,
+                context.getPackageName());
+    }
+
     private List<ResolveInfo> queryLauncherService(String packageName) {
         if (launcherApps == null) {
             return Collections.emptyList();
@@ -121,6 +163,13 @@ public final class LauncherAppRepository {
 
     private LauncherApp createLauncherApp(ResolveInfo resolveInfo) {
         return new LauncherApp(
+                String.valueOf(resolveInfo.loadLabel(packageManager)),
+                componentNameOf(resolveInfo),
+                themedIconLoader.loadIcon(resolveInfo));
+    }
+
+    private LauncherApp createHomeApp(ResolveInfo resolveInfo) {
+        return LauncherApp.createHomeEntry(
                 String.valueOf(resolveInfo.loadLabel(packageManager)),
                 componentNameOf(resolveInfo),
                 themedIconLoader.loadIcon(resolveInfo));

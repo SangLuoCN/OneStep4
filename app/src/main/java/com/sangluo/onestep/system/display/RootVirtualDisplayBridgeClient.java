@@ -41,11 +41,13 @@ public final class RootVirtualDisplayBridgeClient {
             data.writeStrongBinder(ownerToken);
             target.transact(RootVirtualDisplayBridge.TRANSACTION_CREATE, data, reply, 0);
             reply.readException();
-            return new CreateResult(reply.readInt(), reply.readInt(), reply.readString());
+            return new CreateResult(
+                    reply.readInt(), reply.readInt(), reply.readString(),
+                    reply.readInt() != 0, reply.readString(), reply.readInt() != 0);
         } catch (RemoteException | RuntimeException e) {
             service = null;
             Log.w(TAG, "Root display create failed: " + describe(e));
-            return new CreateResult(-1, 0, describe(e));
+            return new CreateResult(-1, 0, describe(e), false, "", false);
         } finally {
             reply.recycle();
             data.recycle();
@@ -60,6 +62,7 @@ public final class RootVirtualDisplayBridgeClient {
                     data.writeInt(width);
                     data.writeInt(height);
                     data.writeInt(densityDpi);
+                    data.writeStrongBinder(ownerToken);
                 });
     }
 
@@ -68,12 +71,16 @@ public final class RootVirtualDisplayBridgeClient {
                 data -> {
                     data.writeInt(slot);
                     writeSurface(data, surface);
+                    data.writeStrongBinder(ownerToken);
                 });
     }
 
     public boolean release(String bridgeToken, int slot) {
         return transactBoolean(bridgeToken, RootVirtualDisplayBridge.TRANSACTION_RELEASE,
-                data -> data.writeInt(slot));
+                data -> {
+                    data.writeInt(slot);
+                    data.writeStrongBinder(ownerToken);
+                });
     }
 
     public boolean registerCrossAppLaunchCallback(String bridgeToken,
@@ -246,11 +253,19 @@ public final class RootVirtualDisplayBridgeClient {
         public final int displayId;
         public final int selectedFlags;
         public final String failure;
+        public final boolean homeSupportRequested;
+        public final String homeSupportFailure;
+        public final boolean primaryHomeHookActive;
 
-        CreateResult(int displayId, int selectedFlags, String failure) {
+        CreateResult(int displayId, int selectedFlags, String failure,
+                     boolean homeSupportRequested, String homeSupportFailure,
+                     boolean primaryHomeHookActive) {
             this.displayId = displayId;
             this.selectedFlags = selectedFlags;
             this.failure = failure == null ? "" : failure;
+            this.homeSupportRequested = homeSupportRequested;
+            this.homeSupportFailure = homeSupportFailure == null ? "" : homeSupportFailure;
+            this.primaryHomeHookActive = primaryHomeHookActive;
         }
 
         public boolean isSuccess() {

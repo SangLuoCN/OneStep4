@@ -56,6 +56,7 @@ import com.sangluo.onestep.data.settings.OneStepSettings;
 import com.sangluo.onestep.data.settings.OneStepSettingsStore;
 import com.sangluo.onestep.data.apps.LauncherAppRepository;
 import com.sangluo.onestep.feature.embedding.EmbeddedAppHost;
+import com.sangluo.onestep.feature.embedding.DismissedAppClosePolicy;
 import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
@@ -198,6 +199,8 @@ public class MainActivity extends Activity {
     private final Map<String, Intent> routedLaunchIntents = new HashMap<>();
 
     private List<LauncherApp> launcherApps = Collections.emptyList();
+    private List<LauncherApp> builtInDesktopApps = Collections.emptyList();
+    private LauncherApp builtInDesktopApp;
     private LauncherAppRepository launcherAppRepository;
     private final PersistentRootShell persistentRootShell = new PersistentRootShell();
     private boolean embeddingHintShown;
@@ -235,7 +238,8 @@ public class MainActivity extends Activity {
             new OneStepWindowView.Callbacks() {
                 @Override
                 public View createDesktopHome() {
-                    return MainActivity.this.createDesktopHome();
+                    return builtInDesktopApp == null
+                            ? MainActivity.this.createDesktopHome() : null;
                 }
 
                 @Override
@@ -516,6 +520,7 @@ public class MainActivity extends Activity {
         initializeEmbeddedBridgeState();
         launcherAppRepository = new LauncherAppRepository(this);
         launcherApps = launcherAppRepository.loadLauncherApps();
+        loadBuiltInDesktopApps();
         setContentView(createDesktop());
         registerLauncherIconChangeReceiver();
         sideInputShieldController = new SideWindowInputShieldController(
@@ -547,11 +552,9 @@ public class MainActivity extends Activity {
         initializeHostedLandscapeOrientationForwarding();
         prewarmRootInputBridge();
         renderWindows();
+        mainHandler.post(this::requestDesktopHomeInMain);
         initMediaMonitoring();
         initAmapNavigationMonitoring();
-        if (isDesktopHomeRequestIntent(getIntent())) {
-            mainHandler.post(this::requestDesktopHomeInMain);
-        }
     }
 
     @Override
@@ -630,15 +633,19 @@ public class MainActivity extends Activity {
         try {
             launcherIconExecutor.execute(() -> {
                 List<LauncherApp> refreshedApps = null;
+                List<LauncherApp> refreshedDesktopApps = null;
                 RuntimeException loadError = null;
                 try {
                     refreshedApps = launcherAppRepository.refreshLauncherApps();
+                    refreshedDesktopApps = launcherAppRepository.loadHomeApps();
                 } catch (RuntimeException e) {
                     loadError = e;
                 }
                 List<LauncherApp> result = refreshedApps;
+                List<LauncherApp> desktopResult = refreshedDesktopApps;
                 RuntimeException error = loadError;
-                mainHandler.post(() -> finishLauncherIconRefresh(reason, result, error));
+                mainHandler.post(() -> finishLauncherIconRefresh(
+                        reason, result, desktopResult, error));
             });
         } catch (RuntimeException e) {
             launcherIconRefreshInFlight = false;
@@ -647,10 +654,12 @@ public class MainActivity extends Activity {
     }
 
     private void finishLauncherIconRefresh(
-            String reason, List<LauncherApp> refreshedApps, RuntimeException error) {
+            String reason, List<LauncherApp> refreshedApps,
+            List<LauncherApp> refreshedDesktopApps, RuntimeException error) {
         launcherIconRefreshInFlight = false;
         if (!activityDestroyed && error == null && refreshedApps != null) {
             applyRefreshedLauncherApps(refreshedApps);
+            applyRefreshedBuiltInDesktopApps(refreshedDesktopApps);
             Log.i(TAG, "Reloaded system themed icons: reason=" + reason
                     + ", count=" + refreshedApps.size());
         } else if (error != null) {
@@ -688,6 +697,10 @@ public class MainActivity extends Activity {
             if (current == null) {
                 continue;
             }
+            if (builtInDesktopApp != null
+                    && builtInDesktopApp.componentName.equals(current.componentName)) {
+                continue;
+            }
             LauncherApp refreshed = refreshedByComponent.get(current.componentKey());
             if (refreshed == null) {
                 refreshed = refreshedByPackage.get(current.packageName);
@@ -712,6 +725,30 @@ public class MainActivity extends Activity {
         if (topPanelController != null) {
             topPanelController.refreshAppIcons();
         }
+    }
+
+    private void applyRefreshedBuiltInDesktopApps(List<LauncherApp> refreshedApps) {
+        if (refreshedApps == null) {
+            return;
+        }
+        builtInDesktopApps = refreshedApps;
+        ComponentName selectedComponent = settingsStore.getBuiltInDesktopComponent();
+        LauncherApp selected = findAppByComponent(refreshedApps, selectedComponent);
+        if (selected == null && !refreshedApps.isEmpty()) {
+            selected = refreshedApps.get(0);
+            settingsStore.saveBuiltInDesktopComponent(selected.componentName);
+        }
+        builtInDesktopApp = selected;
+        if (selected != null) {
+            for (int slot = 0; slot < windowApps.length; slot++) {
+                LauncherApp current = windowApps[slot];
+                if (current != null && selected.componentName.equals(current.componentName)) {
+                    windowApps[slot] = selected;
+                }
+            }
+        }
+        updateSettingsPageViews();
+        renderWindows();
     }
 
     @Override
@@ -2165,6 +2202,71 @@ public class MainActivity extends Activity {
         logRecordingEnabled = settings.logRecordingEnabled;
     }
 
+    private void loadBuiltInDesktopApps() {
+        try {
+            builtInDesktopApps = launcherAppRepository.loadHomeApps();
+        } catch (RuntimeException e) {
+            builtInDesktopApps = Collections.emptyList();
+            Log.w(TAG, "Loading system desktop applications failed", e);
+        }
+        ComponentName selectedComponent = settingsStore.getBuiltInDesktopComponent();
+        builtInDesktopApp = findAppByComponent(builtInDesktopApps, selectedComponent);
+        if (builtInDesktopApp == null && !builtInDesktopApps.isEmpty()) {
+            builtInDesktopApp = builtInDesktopApps.get(0);
+            settingsStore.saveBuiltInDesktopComponent(builtInDesktopApp.componentName);
+        }
+    }
+
+    private LauncherApp findAppByComponent(
+            List<LauncherApp> apps, ComponentName componentName) {
+        if (componentName == null || apps == null) {
+            return null;
+        }
+        for (LauncherApp app : apps) {
+            if (componentName.equals(app.componentName)) {
+                return app;
+            }
+        }
+        return null;
+    }
+
+    private void saveBuiltInDesktop(LauncherApp app) {
+        if (app == null || launcherAppRepository == null) {
+            return;
+        }
+        LauncherApp resolved;
+        try {
+            resolved = launcherAppRepository.loadHomeApp(app.componentName);
+        } catch (RuntimeException e) {
+            resolved = null;
+        }
+        if (resolved == null) {
+            Toast.makeText(this, "该桌面当前不可用", Toast.LENGTH_SHORT).show();
+            loadBuiltInDesktopApps();
+            updateSettingsPageViews();
+            return;
+        }
+        builtInDesktopApp = resolved;
+        settingsStore.saveBuiltInDesktopComponent(resolved.componentName);
+        boolean replaced = false;
+        List<LauncherApp> updatedApps = new ArrayList<>(builtInDesktopApps);
+        for (int index = 0; index < updatedApps.size(); index++) {
+            if (resolved.componentName.equals(updatedApps.get(index).componentName)) {
+                updatedApps.set(index, resolved);
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            updatedApps.add(resolved);
+        }
+        builtInDesktopApps = updatedApps;
+        updateSettingsPageViews();
+        Toast.makeText(this, "已将“" + resolved.label + "”设为内置桌面",
+                Toast.LENGTH_SHORT).show();
+        mainHandler.post(this::requestDesktopHomeInMain);
+    }
+
     private SettingsPanelController createSettingsPanelController() {
         return new SettingsPanelController(this, new SettingsPanelController.Callbacks() {
             @Override public OneStepWindowView activeMainWindowView() {
@@ -2183,8 +2285,6 @@ public class MainActivity extends Activity {
             }
             @Override public void pickBackground() { pickBackgroundFromGallery(); }
             @Override public void previewCornerTrigger() { showCornerTriggerPreview(); }
-            @Override public int desktopGridRows() { return desktopGridRows; }
-            @Override public int desktopGridColumns() { return desktopGridColumns; }
             @Override public int oneStepTriggerAreaScalePct() {
                 return oneStepTriggerAreaScalePct;
             }
@@ -2208,8 +2308,17 @@ public class MainActivity extends Activity {
             @Override public boolean verticalWindowLayout() { return verticalWindowLayout; }
             @Override public boolean logRecordingEnabled() { return logRecordingEnabled; }
             @Override public int sideWindowCount() { return sideWindowCount; }
-            @Override public void saveGridLayout(int rows, int columns) {
-                MainActivity.this.saveGridLayout(rows, columns);
+            @Override public List<LauncherApp> builtInDesktopApps() {
+                return new ArrayList<>(builtInDesktopApps);
+            }
+            @Override public String builtInDesktopComponentKey() {
+                return builtInDesktopApp == null ? "" : builtInDesktopApp.componentKey();
+            }
+            @Override public void refreshBuiltInDesktopApps() {
+                MainActivity.this.loadBuiltInDesktopApps();
+            }
+            @Override public void saveBuiltInDesktop(LauncherApp app) {
+                MainActivity.this.saveBuiltInDesktop(app);
             }
             @Override public void saveOneStepTriggerAreaScale(int value) {
                 MainActivity.this.saveOneStepTriggerAreaScale(value);
@@ -2264,9 +2373,11 @@ public class MainActivity extends Activity {
             @Override public void saveZygiskHookSettings(
                     boolean secureWindowEnabled,
                     boolean statusBarOverlayEnabled,
+                    boolean primaryHomeEnhancementEnabled,
                     SettingsPanelController.HookSettingsResultCallback callback) {
                 MainActivity.this.saveZygiskHookSettings(
-                        secureWindowEnabled, statusBarOverlayEnabled, callback);
+                        secureWindowEnabled, statusBarOverlayEnabled,
+                        primaryHomeEnhancementEnabled, callback);
             }
             @Override public void rebootDevice() {
                 MainActivity.this.rebootDeviceForHookSettings();
@@ -2402,16 +2513,22 @@ public class MainActivity extends Activity {
             desktopHomeRequestPending = false;
             return;
         }
-        int desktopSlot = findDesktopHomeSlot();
-        if (desktopSlot == activeMainSlot) {
-            desktopHomeRequestPending = false;
-            return;
-        }
         if (isWindowAnimationRunning() || mainSlotSwitchPendingSlot >= 0
                 || mainContentReplacementPendingSlot >= 0 || pendingMainAppStartSlot >= 0
                 || pendingInternalSettingsSlot >= 0 || pendingDesktopHomeSlot >= 0) {
             mainHandler.removeCallbacks(showDesktopHomeRunnable);
             mainHandler.postDelayed(showDesktopHomeRunnable, 80L);
+            return;
+        }
+        LauncherApp selectedDesktop = resolveBuiltInDesktopApp();
+        if (selectedDesktop != null) {
+            desktopHomeRequestPending = false;
+            showBuiltInDesktopInMain(selectedDesktop);
+            return;
+        }
+        int desktopSlot = findDesktopHomeSlot();
+        if (desktopSlot == activeMainSlot) {
+            desktopHomeRequestPending = false;
             return;
         }
         desktopHomeRequestPending = false;
@@ -2438,6 +2555,55 @@ public class MainActivity extends Activity {
             case REPLACE_MAIN:
                 replaceMainWithDesktopHome();
                 break;
+        }
+    }
+
+    private LauncherApp resolveBuiltInDesktopApp() {
+        if (launcherAppRepository == null) {
+            return null;
+        }
+        if (builtInDesktopApp == null) {
+            loadBuiltInDesktopApps();
+            updateSettingsPageViews();
+            return builtInDesktopApp;
+        }
+        try {
+            LauncherApp resolved = launcherAppRepository.loadHomeApp(
+                    builtInDesktopApp.componentName);
+            if (resolved != null) {
+                builtInDesktopApp = resolved;
+                return resolved;
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Resolving selected built-in desktop failed", e);
+        }
+        loadBuiltInDesktopApps();
+        updateSettingsPageViews();
+        return builtInDesktopApp;
+    }
+
+    private void showBuiltInDesktopInMain(LauncherApp desktopApp) {
+        suppressEmbeddedStarts = false;
+        int desktopSlot = findSlotByComponent(desktopApp.componentName);
+        if (desktopSlot < 0) {
+            desktopSlot = findSlot(desktopApp.packageName);
+        }
+        if (desktopSlot < 0) {
+            addOrFocusApp(desktopApp);
+            return;
+        }
+
+        windowApps[desktopSlot] = desktopApp;
+        windowViews[desktopSlot].hideDesktopHome();
+        EmbeddedAppHost host = embeddedHosts[desktopSlot];
+        boolean live = host != null && host.restart(desktopApp);
+        windowViews[desktopSlot].setLiveAppVisible(live);
+        renderWindows();
+        if (!live && host != null) {
+            showEmbeddingHintIfNeeded(host.getUnavailableReason());
+        }
+        if (desktopSlot != activeMainSlot && !embeddedSlotClosing[desktopSlot]) {
+            switchMainSlot(desktopSlot, true);
         }
     }
 
@@ -3130,13 +3296,20 @@ public class MainActivity extends Activity {
                 context, () -> !suppressEmbeddedStarts, this::closeHiddenActivityViewApp);
     }
 
-    private void closeHiddenActivityViewApp(String packageName, Runnable onClosed) {
+    private void closeHiddenActivityViewApp(LauncherApp app, Runnable onClosed) {
         Runnable finish = () -> {
             if (onClosed != null) {
                 onClosed.run();
             }
         };
+        String packageName = app == null ? "" : app.packageName;
         if (TextUtils.isEmpty(packageName)) {
+            mainHandler.post(finish);
+            return;
+        }
+        if (!DismissedAppClosePolicy.shouldForceStop(app.isHomeEntry())) {
+            Log.i(TAG, "Keep HOME package running after ActivityView dismissal: "
+                    + packageName);
             mainHandler.post(finish);
             return;
         }
@@ -3498,7 +3671,7 @@ public class MainActivity extends Activity {
             startAppInSlot(slot, replacementApp);
         });
         try {
-            previousHost.closeApp(previousApp.packageName, onClosed);
+            previousHost.closeApp(previousApp, onClosed);
         } catch (RuntimeException e) {
             Log.w(TAG, "Replace app close failed for slot " + slot + ": "
                     + e.getClass().getSimpleName());
@@ -4051,7 +4224,7 @@ public class MainActivity extends Activity {
             return;
         }
         try {
-            dismissedHost.closeApp(dismissedApp.packageName, onClosed);
+            dismissedHost.closeApp(dismissedApp, onClosed);
         } catch (RuntimeException e) {
             Log.w(TAG, "Close dismissed app failed for slot " + slot + ": "
                     + e.getClass().getSimpleName());
@@ -4583,6 +4756,19 @@ public class MainActivity extends Activity {
         return -1;
     }
 
+    private int findSlotByComponent(ComponentName componentName) {
+        if (componentName == null) {
+            return -1;
+        }
+        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
+            LauncherApp app = windowApps[slot];
+            if (app != null && componentName.equals(app.componentName)) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
     private int findEmptySideSlot() {
         for (int slot : sideSlotOrder) {
             if (isWindowSlotEnabled(slot) && windowApps[slot] == null
@@ -4799,11 +4985,13 @@ public class MainActivity extends Activity {
     private void saveZygiskHookSettings(
             boolean secureWindowEnabled,
             boolean statusBarOverlayEnabled,
+            boolean primaryHomeEnhancementEnabled,
             SettingsPanelController.HookSettingsResultCallback callback) {
         hookSettingsExecutor.execute(() -> {
             ShellCommandResult result = runMainPrivilegedCommand(
                     ZygiskHookConfig.writeCommand(
-                            secureWindowEnabled, statusBarOverlayEnabled),
+                            secureWindowEnabled, statusBarOverlayEnabled,
+                            primaryHomeEnhancementEnabled),
                     "save Zygisk hook settings", false);
             ZygiskHookConfig.State state = result.isSuccess()
                     ? ZygiskHookConfig.parse(result.output) : null;

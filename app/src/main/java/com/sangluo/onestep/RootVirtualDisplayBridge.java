@@ -13,6 +13,8 @@ import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
 
+import com.sangluo.onestep.system.display.DisplayOwnerPolicy;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -171,9 +173,18 @@ public final class RootVirtualDisplayBridge extends Binder {
         Surface surface = readSurface(data);
         int[] requestedCandidates = data.createIntArray();
         IBinder ownerToken = data.readStrongBinder();
+        if (ownerToken == null) {
+            if (surface != null) {
+                surface.release();
+            }
+            throw new IllegalArgumentException("missing display owner token");
+        }
 
         int displayId = -1;
         int selectedFlags = 0;
+        boolean homeSupportRequested = false;
+        boolean primaryHomeHookActive = false;
+        String homeSupportFailure = "";
         String failure = "no flag candidates";
         synchronized (displays) {
             releaseLocked(slot);
@@ -182,8 +193,14 @@ public final class RootVirtualDisplayBridge extends Binder {
                     int displayFlags = RootVirtualDisplayFlags.forRootBridge(requestedFlags);
                     VirtualDisplay candidate = null;
                     try {
-                        candidate = displayManager.createVirtualDisplay(
-                                name, width, height, densityDpi, surface, displayFlags);
+                        VirtualDisplayHomeSupport.CreationResult creation =
+                                VirtualDisplayHomeSupport.create(
+                                        displayManager, name, width, height, densityDpi,
+                                        surface, displayFlags);
+                        candidate = creation.display;
+                        homeSupportRequested = creation.homeSupportRequested;
+                        homeSupportFailure = creation.homeSupportFailure;
+                        primaryHomeHookActive = creation.primaryHomeHookActive;
                         Display display = candidate == null ? null : candidate.getDisplay();
                         if (display == null) {
                             failure = "create returned no display for flags=" + displayFlags;
@@ -238,12 +255,18 @@ public final class RootVirtualDisplayBridge extends Binder {
             Log.e(TAG, "create failed slot=" + slot + " reason=" + failure);
         } else {
             Log.i(TAG, "created slot=" + slot + " display=" + displayId
-                    + " flags=0x" + Integer.toHexString(selectedFlags));
+                    + " flags=0x" + Integer.toHexString(selectedFlags)
+                    + " homeSupport=" + homeSupportRequested
+                    + (homeSupportFailure.isEmpty()
+                    ? "" : " homeSupportFallback=" + homeSupportFailure));
         }
         reply.writeNoException();
         reply.writeInt(displayId);
         reply.writeInt(selectedFlags);
         reply.writeString(failure);
+        reply.writeInt(homeSupportRequested ? 1 : 0);
+        reply.writeString(homeSupportFailure);
+        reply.writeInt(primaryHomeHookActive ? 1 : 0);
     }
 
     private void handleResize(Parcel data, Parcel reply) {
@@ -251,10 +274,11 @@ public final class RootVirtualDisplayBridge extends Binder {
         int width = data.readInt();
         int height = data.readInt();
         int densityDpi = data.readInt();
+        IBinder ownerToken = data.readStrongBinder();
         boolean success = false;
         synchronized (displays) {
             DisplayRecord record = displays.get(slot);
-            if (record != null) {
+            if (record != null && record.isOwnedBy(ownerToken)) {
                 record.display.resize(width, height, densityDpi);
                 success = true;
             }
@@ -311,10 +335,11 @@ public final class RootVirtualDisplayBridge extends Binder {
     private void handleSetSurface(Parcel data, Parcel reply) {
         int slot = data.readInt();
         Surface nextSurface = readSurface(data);
+        IBinder ownerToken = data.readStrongBinder();
         boolean success = false;
         synchronized (displays) {
             DisplayRecord record = displays.get(slot);
-            if (record != null) {
+            if (record != null && record.isOwnedBy(ownerToken)) {
                 record.setSurface(nextSurface);
                 nextSurface = null;
                 success = true;
@@ -329,9 +354,12 @@ public final class RootVirtualDisplayBridge extends Binder {
 
     private void handleRelease(Parcel data, Parcel reply) {
         int slot = data.readInt();
+        IBinder ownerToken = data.readStrongBinder();
         boolean released;
         synchronized (displays) {
-            released = releaseLocked(slot);
+            DisplayRecord record = displays.get(slot);
+            released = record != null && record.isOwnedBy(ownerToken)
+                    && releaseLocked(slot);
         }
         reply.writeNoException();
         reply.writeInt(released ? 1 : 0);
@@ -585,6 +613,10 @@ public final class RootVirtualDisplayBridge extends Binder {
             } catch (RemoteException e) {
                 throw new IllegalStateException("display owner already dead", e);
             }
+        }
+
+        boolean isOwnedBy(IBinder requestingOwner) {
+            return DisplayOwnerPolicy.matches(ownerToken, requestingOwner);
         }
 
         void setSurface(Surface nextSurface) {

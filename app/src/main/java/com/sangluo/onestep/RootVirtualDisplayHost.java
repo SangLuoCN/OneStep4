@@ -77,12 +77,14 @@ import com.sangluo.onestep.data.settings.OneStepSettingsStore;
 import com.sangluo.onestep.data.apps.LauncherAppRepository;
 import com.sangluo.onestep.feature.embedding.EmbeddedAppHost;
 import com.sangluo.onestep.feature.embedding.DeviceOrientationMapper;
+import com.sangluo.onestep.feature.embedding.DismissedAppClosePolicy;
 import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
 import com.sangluo.onestep.feature.media.MediaSessionCoordinator;
+import com.sangluo.onestep.hook.OneStepPrimaryHomePolicy;
 import com.sangluo.onestep.model.LauncherApp;
 import com.sangluo.onestep.model.PinnedTaskState;
 import com.sangluo.onestep.model.VirtualDisplaySpec;
@@ -260,6 +262,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     private volatile VirtualDisplay virtualDisplay;
     private volatile boolean rootManagedVirtualDisplay;
+    private volatile boolean primaryHomeEnhancementActive;
     private LauncherApp pendingApp;
     private volatile int displayId = -1;
     private volatile int hostedTaskId = -1;
@@ -531,6 +534,15 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     @Override
     public boolean start(LauncherApp app) {
+        return start(app, false);
+    }
+
+    @Override
+    public boolean restart(LauncherApp app) {
+        return start(app, true);
+    }
+
+    private boolean start(LauncherApp app, boolean forceLaunch) {
         if (!isAvailable() || embeddedSlotClosing[slot]) {
             return false;
         }
@@ -540,8 +552,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return false;
         }
 
-        Intent launcherIntent = app.createLaunchIntent();
-        if (displayId < 0) {
+        if (displayId < 0 || !hasVirtualDisplay()) {
             int viewWidth = surfaceView.getWidth();
             int viewHeight = surfaceView.getHeight();
             Surface surface = surfaceView.getHolder().getSurface();
@@ -557,9 +568,20 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             }
         }
 
+        boolean enhancedHomeLaunch = app.isHomeEntry()
+                && primaryHomeEnhancementActive;
+        Intent launcherIntent = app.createLaunchIntent(enhancedHomeLaunch);
+        if (app.isHomeEntry()) {
+            Log.i(TAG, "Start built-in desktop: slot=" + slot
+                    + ", display=" + displayId
+                    + ", mode=" + (enhancedHomeLaunch ? "enhanced-home" : "regular-app")
+                    + ", component=" + app.componentName.flattenToShortString());
+        }
+
         Intent routedLaunchIntent = callbacks.consumeRoutedLaunchIntent(
                 slot, app.packageName);
         boolean reusingHostedApp = routedLaunchIntent == null
+                && !forceLaunch
                 && displayId == launchRequestedDisplayId
                 && TextUtils.equals(launchRequestedPackage, app.packageName);
         if (!reusingHostedApp && isMainDisplaySlot(slot)) {
@@ -617,11 +639,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
         ComponentName componentName = resolveLaunchComponent(requestedLaunchIntent);
         if (componentName != null) {
-            String command = "am start --display " + displayId
-                    + ((requestedLaunchIntent.getFlags()
-                    & Intent.FLAG_ACTIVITY_NO_ANIMATION) != 0
-                    ? " --activity-no-animation" : "")
-                    + " -n " + shellQuote(componentName.flattenToShortString());
+            String command = buildDisplayStartCommand(
+                    requestedLaunchIntent, componentName);
             launchRequestedPackage = app.packageName;
             launchRequestedDisplayId = displayId;
             runStartCommandAsync(command, startEpoch,
@@ -635,6 +654,34 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         launchRequestedPackage = "";
         launchRequestedDisplayId = -1;
         return false;
+    }
+
+    private String buildDisplayStartCommand(Intent launchIntent,
+                                            ComponentName componentName) {
+        StringBuilder command = new StringBuilder("am start --display ")
+                .append(displayId);
+        if ((launchIntent.getFlags() & Intent.FLAG_ACTIVITY_NO_ANIMATION) != 0) {
+            command.append(" --activity-no-animation");
+        }
+        if (!TextUtils.isEmpty(launchIntent.getAction())) {
+            command.append(" -a ").append(shellQuote(launchIntent.getAction()));
+        }
+        Set<String> categories = launchIntent.getCategories();
+        if (categories != null) {
+            for (String category : categories) {
+                command.append(" -c ").append(shellQuote(category));
+            }
+        }
+        if (launchIntent.getBooleanExtra(
+                OneStepPrimaryHomePolicy.EXTRA_EMBEDDED_PRIMARY_HOME, false)) {
+            command.append(" --ez ")
+                    .append(shellQuote(
+                            OneStepPrimaryHomePolicy.EXTRA_EMBEDDED_PRIMARY_HOME))
+                    .append(" true");
+        }
+        return command.append(" -n ")
+                .append(shellQuote(componentName.flattenToShortString()))
+                .toString();
     }
 
     private void scheduleRoutedLaunch(LauncherApp app, Intent routedLaunchIntent,
@@ -991,9 +1038,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     @Override
-    public void closeApp(String packageName, Runnable onClosed) {
-        final String targetPackage = TextUtils.isEmpty(packageName)
-                ? getHostedPackageName() : packageName;
+    public void closeApp(LauncherApp app, Runnable onClosed) {
+        final String targetPackage = app == null || TextUtils.isEmpty(app.packageName)
+                ? getHostedPackageName() : app.packageName;
+        final boolean forceStopPackage = DismissedAppClosePolicy.shouldForceStop(
+                app != null && app.isHomeEntry());
         final int targetTaskId = hostedTaskId;
         invalidateTaskResolution();
         invalidateDisplayImePolicySetup();
@@ -1004,17 +1053,22 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             rootExecutor.execute(() -> {
                 if (!TextUtils.isEmpty(targetPackage)) {
                     removeDismissedHostedTask(targetPackage, targetTaskId);
-                    ShellCommandResult result = runPrivilegedCommand(
-                            "am force-stop --user current " + shellQuote(targetPackage),
-                            "force-stop dismissed app " + targetPackage, true);
-                    if (result.exitCode != 0) {
-                        result = runPrivilegedCommand(
-                                "am force-stop " + shellQuote(targetPackage),
-                                "fallback force-stop dismissed app " + targetPackage, true);
-                    }
-                    if (result.exitCode != 0) {
-                        Log.e(TAG, "Force-stop dismissed app failed: " + targetPackage
-                                + " exit=" + result.exitCode);
+                    if (forceStopPackage) {
+                        ShellCommandResult result = runPrivilegedCommand(
+                                "am force-stop --user current " + shellQuote(targetPackage),
+                                "force-stop dismissed app " + targetPackage, true);
+                        if (result.exitCode != 0) {
+                            result = runPrivilegedCommand(
+                                    "am force-stop " + shellQuote(targetPackage),
+                                    "fallback force-stop dismissed app " + targetPackage, true);
+                        }
+                        if (result.exitCode != 0) {
+                            Log.e(TAG, "Force-stop dismissed app failed: " + targetPackage
+                                    + " exit=" + result.exitCode);
+                        }
+                    } else {
+                        Log.i(TAG, "Keep HOME package running after dismissal: "
+                                + targetPackage);
                     }
                 }
                 resetSensorServiceUidOverrideAsync();
@@ -1673,7 +1727,18 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private boolean hasVirtualDisplay() {
-        return rootManagedVirtualDisplay || virtualDisplay != null;
+        if (displayId <= DEFAULT_DISPLAY_ID
+                || (!rootManagedVirtualDisplay && virtualDisplay == null)
+                || displayManager == null) {
+            return false;
+        }
+        try {
+            return displayManager.getDisplay(displayId) != null;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Check virtual display liveness failed for slot " + slot + ": "
+                    + e.getClass().getSimpleName());
+            return false;
+        }
     }
 
     private Display getHostedDisplay() {
@@ -2257,6 +2322,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         | DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
         };
         int selectedFlags = 0;
+        boolean homeSupportRequested = false;
+        String homeSupportFailure = "";
         String failures = "";
         if (rootAvailable) {
             if (!startRootInputBridgeIfNeeded(false, true)) {
@@ -2273,6 +2340,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 rootManagedVirtualDisplay = true;
                 displayId = result.displayId;
                 selectedFlags = result.selectedFlags;
+                homeSupportRequested = result.homeSupportRequested;
+                homeSupportFailure = result.homeSupportFailure;
+                primaryHomeEnhancementActive =
+                        VirtualDisplayHomeSupport.shouldUseEnhancedHomeLaunch(
+                                true, result.homeSupportRequested,
+                                result.primaryHomeHookActive);
             } else {
                 failures = result.failure;
             }
@@ -2281,11 +2354,23 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             for (int flags : flagCandidates) {
                 VirtualDisplay candidate = null;
                 try {
-                    candidate = displayManager.createVirtualDisplay(
-                            displayName, spec.width, spec.height, spec.densityDpi,
-                            holder.getSurface(), flags);
-                    if (candidate != null && candidate.getDisplay() != null) {
+                    VirtualDisplayHomeSupport.CreationResult creation =
+                            VirtualDisplayHomeSupport.create(
+                                    displayManager, displayName,
+                                    spec.width, spec.height, spec.densityDpi,
+                                    holder.getSurface(), flags);
+                    candidate = creation.display;
+                    homeSupportRequested = creation.homeSupportRequested;
+                    homeSupportFailure = creation.homeSupportFailure;
+                    primaryHomeEnhancementActive =
+                            VirtualDisplayHomeSupport.shouldUseEnhancedHomeLaunch(
+                                    true, creation.homeSupportRequested,
+                                    creation.primaryHomeHookActive);
+                    Display candidateDisplay = candidate == null
+                            ? null : candidate.getDisplay();
+                    if (candidateDisplay != null) {
                         virtualDisplay = candidate;
+                        displayId = candidateDisplay.getDisplayId();
                         selectedFlags = flags;
                         Log.i(TAG, "Create virtual display ok for slot " + slot
                                 + " with flags=" + flags);
@@ -2363,7 +2448,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 + ((selectedFlags & VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN) != 0)
                 + ", displayRotatesWithContent="
                 + (actualDisplayFlags < 0 ? "unknown" : String.valueOf(
-                (actualDisplayFlags & DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN) != 0)));
+                (actualDisplayFlags & DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN) != 0))
+                + ", homeSupport=" + homeSupportRequested
+                + (homeSupportFailure.isEmpty()
+                ? "" : ", homeSupportFallback=" + homeSupportFailure));
         configureNativeDisplayOrientationAsync(displayId, "initialize virtual display");
         ensureRootInputBridgeStarted();
         if (isMainDisplaySlot(slot)) {
@@ -2536,6 +2624,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     + ": displayId=" + displayIdToRelease);
         }
         displayId = -1;
+        primaryHomeEnhancementActive = false;
         hostedTaskId = -1;
         imePolicyConfiguredDisplayId = -1;
         displayWidth = 0;

@@ -16,6 +16,10 @@ public interface EmbeddedAppHost {
 
     boolean start(LauncherApp app);
 
+    default boolean restart(LauncherApp app) {
+        return start(app);
+    }
+
     void refreshContainerSize();
 
     void sendBack();
@@ -24,7 +28,7 @@ public interface EmbeddedAppHost {
 
     void invalidateTaskResolution();
 
-    void closeApp(String packageName, Runnable onClosed);
+    void closeApp(LauncherApp app, Runnable onClosed);
 
     void release();
 

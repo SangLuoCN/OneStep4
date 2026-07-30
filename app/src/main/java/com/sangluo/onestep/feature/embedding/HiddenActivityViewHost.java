@@ -22,7 +22,7 @@ import java.util.function.BooleanSupplier;
 public final class HiddenActivityViewHost implements EmbeddedAppHost {
     @FunctionalInterface
     public interface AppCloser {
-        void close(String packageName, Runnable onClosed);
+        void close(LauncherApp app, Runnable onClosed);
     }
 
     private final Context context;
@@ -122,8 +122,8 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
     }
 
     @Override
-    public void closeApp(String packageName, Runnable onClosed) {
-        appCloser.close(packageName, onClosed);
+    public void closeApp(LauncherApp app, Runnable onClosed) {
+        appCloser.close(app, onClosed);
     }
 
     @Override

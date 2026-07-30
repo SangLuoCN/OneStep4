@@ -1,5 +1,6 @@
 package com.sangluo.onestep.data.settings;
 
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.net.Uri;
@@ -40,6 +41,8 @@ public final class OneStepSettingsStore {
     private static final String PREF_TOP_NAV_HEIGHT_SCALE = "top_nav_height_scale";
     private static final String PREF_TOP_NAV_HEIGHT_LEGACY = "top_nav_height";
     private static final String PREF_LOG_RECORDING_ENABLED = "log_recording_enabled";
+    private static final String PREF_BUILT_IN_DESKTOP_COMPONENT =
+            "built_in_desktop_component";
 
     private final SharedPreferences preferences;
 
@@ -152,6 +155,22 @@ public final class OneStepSettingsStore {
 
     public void saveLogRecordingEnabled(boolean enabled) {
         preferences.edit().putBoolean(PREF_LOG_RECORDING_ENABLED, enabled).apply();
+    }
+
+    public ComponentName getBuiltInDesktopComponent() {
+        String value = preferences.getString(PREF_BUILT_IN_DESKTOP_COMPONENT, "");
+        return TextUtils.isEmpty(value) ? null : ComponentName.unflattenFromString(value);
+    }
+
+    public void saveBuiltInDesktopComponent(ComponentName componentName) {
+        SharedPreferences.Editor editor = preferences.edit();
+        if (componentName == null) {
+            editor.remove(PREF_BUILT_IN_DESKTOP_COMPONENT);
+        } else {
+            editor.putString(PREF_BUILT_IN_DESKTOP_COMPONENT,
+                    componentName.flattenToString());
+        }
+        editor.apply();
     }
 
     public synchronized Set<String> getSensorUidOverrides() {

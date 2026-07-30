@@ -17,6 +17,8 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
     private static final String SYSTEM_SERVER_PROCESS = "android";
     private static final String SECURE_WINDOW_PROPERTY = "onestep.hook.secure";
     private static final String STATUS_BAR_PROPERTY = "onestep.hook.statusbar";
+    private static final String PRIMARY_HOME_ENHANCEMENT_PROPERTY =
+            "onestep.hook.primaryhome_enhancement";
     private static final String ACTIVE_MARKER =
             "/data/system/onestep-lsposed-backend-active";
     private static final AtomicBoolean STARTED = new AtomicBoolean();
@@ -32,13 +34,19 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
         markBackendActive();
         boolean secureWindowEnabled = readBooleanProperty(SECURE_WINDOW_PROPERTY);
         boolean statusBarEnabled = readBooleanProperty(STATUS_BAR_PROPERTY);
+        boolean primaryHomeEnhancementEnabled =
+                readBooleanProperty(PRIMARY_HOME_ENHANCEMENT_PROPERTY);
         Log.i(TAG, "LSPosed backend selected: secure=" + secureWindowEnabled
-                + ", statusbar=" + statusBarEnabled);
+                + ", statusbar=" + statusBarEnabled
+                + ", primaryHome=" + primaryHomeEnhancementEnabled);
         if (secureWindowEnabled) {
             OneStepSecureWindowHook.bootstrap(loadPackageParam.classLoader);
         }
         if (statusBarEnabled) {
             OneStepStatusBarOverlayHook.bootstrap(loadPackageParam.classLoader);
+        }
+        if (primaryHomeEnhancementEnabled) {
+            OneStepPrimaryHomeHook.bootstrap(loadPackageParam.classLoader);
         }
     }
 

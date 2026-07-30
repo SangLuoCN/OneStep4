@@ -7,6 +7,7 @@ ARM64_PAYLOAD="$PAYLOAD_DIR/arm64-v8a.so"
 ARM32_PAYLOAD="$PAYLOAD_DIR/armeabi-v7a.so"
 LSPOSED_ACTIVE_MARKER="/data/system/onestep-lsposed-backend-active"
 STANDALONE_ACTIVE_MARKER="/data/system/onestep-standalone-backend-active"
+PRIMARY_HOME_ACTIVE_MARKER="/data/system/onestep-primary-home-hook-active"
 
 lsposed_active() {
   for module_prop in /data/adb/modules/*/module.prop; do
@@ -31,7 +32,9 @@ set_hook_property() {
   fi
 }
 
-rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER"
+rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER" \
+  "$PRIMARY_HOME_ACTIVE_MARKER"
+set_hook_property onestep.hook.primaryhome_enhancement 0
 if [ -e "$MODDIR/hook-config/disable-secure-window" ]; then
   set_hook_property onestep.hook.secure 0
 else
@@ -41,6 +44,11 @@ if [ -e "$MODDIR/hook-config/disable-status-bar-overlay" ]; then
   set_hook_property onestep.hook.statusbar 0
 else
   set_hook_property onestep.hook.statusbar 1
+fi
+if [ -e "$MODDIR/hook-config/disable-primary-home-enhancement" ]; then
+  primary_home_enhancement=0
+else
+  primary_home_enhancement=1
 fi
 
 zygisk_next_active() {
@@ -53,6 +61,8 @@ zygisk_next_active() {
 
 if lsposed_active; then
   set_hook_property onestep.hook.backend lsposed
+  set_hook_property onestep.hook.primaryhome_enhancement \
+    "$primary_home_enhancement"
   rm -rf "$MODDIR/zygisk"
   exit 0
 fi
@@ -77,3 +87,5 @@ chmod 0755 "$STAGING_DIR"
 chmod 0644 "$STAGING_DIR/arm64-v8a.so" "$STAGING_DIR/armeabi-v7a.so"
 rm -rf "$MODDIR/zygisk"
 mv "$STAGING_DIR" "$MODDIR/zygisk"
+set_hook_property onestep.hook.primaryhome_enhancement \
+  "$primary_home_enhancement"

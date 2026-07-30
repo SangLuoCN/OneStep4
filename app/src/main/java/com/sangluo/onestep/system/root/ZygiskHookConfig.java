@@ -8,6 +8,8 @@ public final class ZygiskHookConfig {
     private static final String CONFIG_DIR_NAME = "hook-config";
     private static final String DISABLE_SECURE_WINDOW = "disable-secure-window";
     private static final String DISABLE_STATUS_BAR_OVERLAY = "disable-status-bar-overlay";
+    private static final String DISABLE_PRIMARY_HOME_ENHANCEMENT =
+            "disable-primary-home-enhancement";
     private static final String MAGISK_MODULE_DIR =
             "/data/adb/modules/onestep40_privapp";
     private static final String KSU_MODULE_DIR =
@@ -30,6 +32,10 @@ public final class ZygiskHookConfig {
                 + "if [ -n \"$onestep_module\" ] && [ -e \"$onestep_module/"
                 + CONFIG_DIR_NAME + "/" + DISABLE_STATUS_BAR_OVERLAY
                 + "\" ]; then echo statusbar=0; else echo statusbar=1; fi; "
+                + "if [ -n \"$onestep_module\" ] && [ -e \"$onestep_module/"
+                + CONFIG_DIR_NAME + "/" + DISABLE_PRIMARY_HOME_ENHANCEMENT
+                + "\" ]; then echo primaryhome_enhancement=0; "
+                + "else echo primaryhome_enhancement=1; fi; "
                 + "if [ -n \"$onestep_module\" ] "
                 + "&& [ -f \"$onestep_module/zygisk/arm64-v8a.so\" ] "
                 + "&& [ -f \"$onestep_module/zygisk/armeabi-v7a.so\" ]; then "
@@ -43,7 +49,8 @@ public final class ZygiskHookConfig {
     }
 
     public static String writeCommand(boolean secureWindowEnabled,
-                                      boolean statusBarOverlayEnabled) {
+                                      boolean statusBarOverlayEnabled,
+                                      boolean primaryHomeEnhancementEnabled) {
         return moduleDiscoveryCommand()
                 + "[ -n \"$onestep_module\" ] || exit 2; "
                 + "onestep_config=\"$onestep_module/" + CONFIG_DIR_NAME + "\"; "
@@ -52,6 +59,8 @@ public final class ZygiskHookConfig {
                 + "chown 0:0 \"$onestep_config\" >/dev/null 2>&1 || true; "
                 + updateMarkerCommand(DISABLE_SECURE_WINDOW, secureWindowEnabled)
                 + updateMarkerCommand(DISABLE_STATUS_BAR_OVERLAY, statusBarOverlayEnabled)
+                + updateMarkerCommand(DISABLE_PRIMARY_HOME_ENHANCEMENT,
+                primaryHomeEnhancementEnabled)
                 + readCommand();
     }
 
@@ -68,6 +77,7 @@ public final class ZygiskHookConfig {
         }
         if (!isBinary(values.get("secure"))
                 || !isBinary(values.get("statusbar"))
+                || !isBinary(values.get("primaryhome_enhancement"))
                 || !isBinary(values.get("module"))
                 || !isBinary(values.get("zygisk"))
                 || !isBinary(values.get("lsposed"))
@@ -78,6 +88,7 @@ public final class ZygiskHookConfig {
         return new State(
                 "1".equals(values.get("secure")),
                 "1".equals(values.get("statusbar")),
+                "1".equals(values.get("primaryhome_enhancement")),
                 "1".equals(values.get("module")),
                 "1".equals(values.get("zygisk")),
                 "1".equals(values.get("lsposed")),
@@ -125,6 +136,7 @@ public final class ZygiskHookConfig {
     public static final class State {
         public final boolean secureWindowEnabled;
         public final boolean statusBarOverlayEnabled;
+        public final boolean primaryHomeEnhancementEnabled;
         public final boolean moduleInstalled;
         public final boolean zygiskPayloadActive;
         public final boolean lsposedInstalled;
@@ -132,11 +144,13 @@ public final class ZygiskHookConfig {
         public final boolean standaloneBackendActive;
 
         State(boolean secureWindowEnabled, boolean statusBarOverlayEnabled,
+              boolean primaryHomeEnhancementEnabled,
               boolean moduleInstalled, boolean zygiskPayloadActive,
               boolean lsposedInstalled, boolean lsposedBackendActive,
               boolean standaloneBackendActive) {
             this.secureWindowEnabled = secureWindowEnabled;
             this.statusBarOverlayEnabled = statusBarOverlayEnabled;
+            this.primaryHomeEnhancementEnabled = primaryHomeEnhancementEnabled;
             this.moduleInstalled = moduleInstalled;
             this.zygiskPayloadActive = zygiskPayloadActive;
             this.lsposedInstalled = lsposedInstalled;

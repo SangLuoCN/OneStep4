@@ -33,10 +33,14 @@ constexpr const char *kHookClass =
         "com.sangluo.onestep.hook.OneStepSecureWindowHook";
 constexpr const char *kStatusBarOverlayHookClass =
         "com.sangluo.onestep.hook.OneStepStatusBarOverlayHook";
+constexpr const char *kPrimaryHomeHookClass =
+        "com.sangluo.onestep.hook.OneStepPrimaryHomeHook";
 constexpr const char *kDisableSecureWindowHook =
         "hook-config/disable-secure-window";
 constexpr const char *kDisableStatusBarOverlayHook =
         "hook-config/disable-status-bar-overlay";
+constexpr const char *kDisablePrimaryHomeEnhancement =
+        "hook-config/disable-primary-home-enhancement";
 constexpr const char *kModulesDirectory = "/data/adb/modules";
 constexpr const char *kStandaloneBackendMarker =
         "/data/system/onestep-standalone-backend-active";
@@ -316,6 +320,24 @@ jclass loadStatusBarOverlayHookClass(JNIEnv *env, jobject appLoader) {
     return overlayHookClass;
 }
 
+jclass loadPrimaryHomeHookClass(JNIEnv *env, jobject appLoader) {
+    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
+    jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
+            classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (loadClass == nullptr
+            || clearException(env, "ClassLoader.loadClass method for primary HOME")) {
+        return nullptr;
+    }
+    jstring className = env->NewStringUTF(kPrimaryHomeHookClass);
+    auto primaryHomeClass = static_cast<jclass>(
+            env->CallObjectMethod(appLoader, loadClass, className));
+    if (primaryHomeClass == nullptr
+            || clearException(env, "load OneStep primary HOME hook class")) {
+        return nullptr;
+    }
+    return primaryHomeClass;
+}
+
 class OneStepZygiskModule : public zygisk::ModuleBase {
 public:
     void onLoad(zygisk::Api *loadedApi, JNIEnv *loadedEnv) override {
@@ -337,13 +359,11 @@ public:
                 faccessat(moduleFd, kDisableSecureWindowHook, F_OK, 0) != 0;
         statusBarOverlayHookEnabled =
                 faccessat(moduleFd, kDisableStatusBarOverlayHook, F_OK, 0) != 0;
-        LOGI("Hook settings: secure=%d, statusbar=%d",
-             secureWindowHookEnabled, statusBarOverlayHookEnabled);
-        if (!secureWindowHookEnabled && !statusBarOverlayHookEnabled) {
-            LOGI("All system_server hooks disabled by user");
-            close(moduleFd);
-            return;
-        }
+        primaryHomeEnhancementEnabled =
+                faccessat(moduleFd, kDisablePrimaryHomeEnhancement, F_OK, 0) != 0;
+        LOGI("Hook settings: secure=%d, statusbar=%d, primaryHome=%d",
+             secureWindowHookEnabled, statusBarOverlayHookEnabled,
+             primaryHomeEnhancementEnabled);
         if (activeLsposedModuleInstalled()) {
             lsposedBackendSelected = true;
             LOGI("Active LSPosed module detected; skip standalone Aliuhook/LSPlant");
@@ -361,10 +381,19 @@ public:
                 hookClass = static_cast<jclass>(env->NewGlobalRef(localHookClass));
                 LOGI("Hook runtime prepared for %s", kAbi);
             }
+            jclass localPrimaryHomeClass = appLoader == nullptr
+                    || !primaryHomeEnhancementEnabled
+                    ? nullptr : loadPrimaryHomeHookClass(env, appLoader);
+            if (localPrimaryHomeClass != nullptr) {
+                primaryHomeHookClass = static_cast<jclass>(
+                        env->NewGlobalRef(localPrimaryHomeClass));
+                LOGI("Primary HOME hook runtime prepared for %s", kAbi);
+            }
             if (appLoader != nullptr && statusBarOverlayHookEnabled) {
                 appClassLoaderRef = env->NewGlobalRef(appLoader);
             }
-            if (hookClass != nullptr || appClassLoaderRef != nullptr) {
+            if (hookClass != nullptr || appClassLoaderRef != nullptr
+                    || primaryHomeHookClass != nullptr) {
                 systemClassLoaderRef = env->NewGlobalRef(systemLoader);
             }
         }
@@ -374,9 +403,6 @@ public:
     void postServerSpecialize(const zygisk::ServerSpecializeArgs *) override {
         if (lsposedBackendSelected) {
             LOGI("LSPosed backend selected for system_server");
-            return;
-        }
-        if (!secureWindowHookEnabled && !statusBarOverlayHookEnabled) {
             return;
         }
         markStandaloneBackendActive();
@@ -434,6 +460,24 @@ public:
                 }
             }
         }
+        if (!primaryHomeEnhancementEnabled) {
+            LOGI("Primary HOME enhancement disabled by user");
+        } else if (primaryHomeHookClass == nullptr) {
+            LOGE("Primary HOME hook runtime was not prepared");
+        } else {
+            jmethodID primaryHomeBootstrap = env->GetStaticMethodID(
+                    primaryHomeHookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
+            if (primaryHomeBootstrap == nullptr
+                    || clearException(env, "find primary HOME hook bootstrap")) {
+                LOGE("Primary HOME hook bootstrap was unavailable");
+            } else {
+                env->CallStaticVoidMethod(
+                        primaryHomeHookClass, primaryHomeBootstrap, systemClassLoaderRef);
+                if (!clearException(env, "run primary HOME hook bootstrap")) {
+                    LOGI("Primary HOME hook bootstrap started");
+                }
+            }
+        }
         closeStatusHookDiagnostic();
     }
 
@@ -448,10 +492,12 @@ private:
     zygisk::Api *api = nullptr;
     JNIEnv *env = nullptr;
     jclass hookClass = nullptr;
+    jclass primaryHomeHookClass = nullptr;
     jobject appClassLoaderRef = nullptr;
     jobject systemClassLoaderRef = nullptr;
     bool secureWindowHookEnabled = true;
     bool statusBarOverlayHookEnabled = true;
+    bool primaryHomeEnhancementEnabled = true;
     bool lsposedBackendSelected = false;
 };
 

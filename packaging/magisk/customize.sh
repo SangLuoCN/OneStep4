@@ -26,11 +26,15 @@ lsposed_active() {
 }
 
 mkdir -p "$HOOK_CONFIG_DIR"
-for hook_marker in disable-secure-window disable-status-bar-overlay; do
+for hook_marker in disable-secure-window disable-status-bar-overlay \
+    disable-primary-home-enhancement; do
   if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/$hook_marker" ]; then
     : >"$HOOK_CONFIG_DIR/$hook_marker"
   fi
 done
+if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/disable-primary-home" ]; then
+  : >"$HOOK_CONFIG_DIR/disable-primary-home-enhancement"
+fi
 set_perm_recursive "$HOOK_CONFIG_DIR" 0 0 0700 0600
 
 ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"

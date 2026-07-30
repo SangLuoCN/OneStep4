@@ -8,10 +8,13 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.SystemClock;
+import android.provider.Settings;
 import android.text.method.LinkMovementMethod;
 import android.text.TextUtils;
 import android.text.util.Linkify;
@@ -20,6 +23,9 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
+import android.view.Window;
+import android.widget.ArrayAdapter;
+import android.widget.CheckedTextView;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -30,6 +36,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.sangluo.onestep.R;
+import com.sangluo.onestep.model.LauncherApp;
 import com.sangluo.onestep.system.root.ZygiskHookConfig;
 import com.sangluo.onestep.ui.widget.AspectRatioImageView;
 import com.sangluo.onestep.ui.widget.FixedViewportFrameLayout;
@@ -39,6 +46,9 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 import static com.sangluo.onestep.data.settings.OneStepSettings.CORNER_TRIGGER_SENSITIVITY_MAX;
 import static com.sangluo.onestep.data.settings.OneStepSettings.CORNER_TRIGGER_SENSITIVITY_MIN;
@@ -67,8 +77,6 @@ public final class SettingsPanelController {
         void applyBackground(ImageView target);
         void pickBackground();
         void previewCornerTrigger();
-        int desktopGridRows();
-        int desktopGridColumns();
         int oneStepTriggerAreaScalePct();
         int cornerTriggerSensitivityPct();
         int topNavVerticalMarginScalePct();
@@ -80,7 +88,10 @@ public final class SettingsPanelController {
         boolean verticalWindowLayout();
         boolean logRecordingEnabled();
         int sideWindowCount();
-        void saveGridLayout(int rows, int columns);
+        List<LauncherApp> builtInDesktopApps();
+        String builtInDesktopComponentKey();
+        void refreshBuiltInDesktopApps();
+        void saveBuiltInDesktop(LauncherApp app);
         void saveOneStepTriggerAreaScale(int value);
         void saveCornerTriggerSensitivity(int value);
         void saveTopNavVerticalMarginScale(int value);
@@ -99,6 +110,7 @@ public final class SettingsPanelController {
         void loadZygiskHookSettings(HookSettingsResultCallback callback);
         void saveZygiskHookSettings(boolean secureWindowEnabled,
                                     boolean statusBarOverlayEnabled,
+                                    boolean primaryHomeEnhancementEnabled,
                                     HookSettingsResultCallback callback);
         void rebootDevice();
     }
@@ -127,7 +139,7 @@ public final class SettingsPanelController {
     private FrameLayout legalNoticesPage;
     private LinearLayout rootAuthorizationItem;
     private ImageView settingsBackgroundPreview;
-    private TextView gridLayoutValueView;
+    private TextView builtInDesktopValueView;
     private TextView topAppIconSizeValueView;
     private TextView topAppStripSpacingValueView;
     private TextView topAppStripVerticalPaddingValueView;
@@ -147,12 +159,12 @@ public final class SettingsPanelController {
     private TextView zygiskHookStatusValueView;
     private TextView secureWindowHookValueView;
     private TextView statusBarOverlayHookValueView;
+    private TextView primaryHomeEnhancementValueView;
     private Switch secureWindowHookSwitch;
     private Switch statusBarOverlayHookSwitch;
+    private Switch primaryHomeEnhancementSwitch;
     private LinearLayout applyHookSettingsItem;
     private LinearLayout exportLogItem;
-    private int desktopGridRows;
-    private int desktopGridColumns;
     private int oneStepTriggerAreaScalePct;
     private int cornerTriggerSensitivityPct;
     private int topNavVerticalMarginScalePct;
@@ -165,6 +177,7 @@ public final class SettingsPanelController {
     private boolean logRecordingEnabled;
     private boolean secureWindowHookEnabled = true;
     private boolean statusBarOverlayHookEnabled = true;
+    private boolean primaryHomeEnhancementEnabled = true;
     private boolean zygiskModuleInstalled;
     private boolean zygiskPayloadActive;
     private boolean lsposedInstalled;
@@ -179,6 +192,8 @@ public final class SettingsPanelController {
     private boolean rootAuthorizationRequestInFlight;
     private int hookSettingsRequestGeneration;
     private int sideWindowCount;
+    private List<LauncherApp> builtInDesktopApps = Collections.emptyList();
+    private String builtInDesktopComponentKey = "";
 
     public SettingsPanelController(Activity activity, Callbacks callbacks) {
         this.activity = activity;
@@ -298,13 +313,23 @@ public final class SettingsPanelController {
         list.addView(backgroundItem, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        LinearLayout gridItem = createSettingsItem("图标布局设置", getGridLayoutLabel());
-        gridLayoutValueView = (TextView) gridItem.getTag();
-        gridItem.setOnClickListener(v -> showGridLayoutDialog());
-        LinearLayout.LayoutParams gridLp = new LinearLayout.LayoutParams(
+        LinearLayout builtInDesktopItem = createSettingsItem(
+                "内置桌面", "选择工作区中显示的系统桌面", getBuiltInDesktopLabel());
+        builtInDesktopValueView = (TextView) builtInDesktopItem.getTag();
+        builtInDesktopValueView.setEllipsize(TextUtils.TruncateAt.END);
+        builtInDesktopItem.setOnClickListener(v -> showBuiltInDesktopDialog());
+        LinearLayout.LayoutParams builtInDesktopLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(88));
+        builtInDesktopLp.topMargin = dp(12);
+        list.addView(builtInDesktopItem, builtInDesktopLp);
+
+        LinearLayout systemHomeItem = createSettingsItem(
+                "设置为系统桌面", "前往设置");
+        systemHomeItem.setOnClickListener(v -> openSystemHomeSettings());
+        LinearLayout.LayoutParams systemHomeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
-        gridLp.topMargin = dp(12);
-        list.addView(gridItem, gridLp);
+        systemHomeLp.topMargin = dp(12);
+        list.addView(systemHomeItem, systemHomeLp);
 
         LinearLayout sideWindowCountItem = createSettingsItem("小窗口数量",
                 getSideWindowCountLabel());
@@ -415,7 +440,8 @@ public final class SettingsPanelController {
                 "开启可正常显示隐私窗口（必需开启Zygisk）",
                 secureWindowHookEnabled,
                 enabled -> updateZygiskHookSettings(
-                        enabled, statusBarOverlayHookEnabled));
+                        enabled, statusBarOverlayHookEnabled,
+                        primaryHomeEnhancementEnabled));
         secureWindowHookValueView = (TextView) secureWindowHookItem.getTag();
         secureWindowHookSwitch = findSwitchInItem(secureWindowHookItem);
         LinearLayout.LayoutParams secureWindowHookLp = new LinearLayout.LayoutParams(
@@ -428,13 +454,27 @@ public final class SettingsPanelController {
                 "开启可去除应用界面顶部的间距（必需开启Zygisk），部分应用无效",
                 statusBarOverlayHookEnabled,
                 enabled -> updateZygiskHookSettings(
-                        secureWindowHookEnabled, enabled));
+                        secureWindowHookEnabled, enabled,
+                        primaryHomeEnhancementEnabled));
         statusBarOverlayHookValueView = (TextView) statusBarOverlayHookItem.getTag();
         statusBarOverlayHookSwitch = findSwitchInItem(statusBarOverlayHookItem);
         LinearLayout.LayoutParams statusBarOverlayHookLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
         statusBarOverlayHookLp.topMargin = dp(12);
         list.addView(statusBarOverlayHookItem, statusBarOverlayHookLp);
+
+        LinearLayout primaryHomeEnhancementItem = createSwitchSettingsItem(
+                "主屏桌面增强",
+                "开启且Hook生效时增强主屏及壁纸，否则按普通应用打开桌面",
+                primaryHomeEnhancementEnabled,
+                enabled -> updateZygiskHookSettings(
+                        secureWindowHookEnabled, statusBarOverlayHookEnabled, enabled));
+        primaryHomeEnhancementValueView = (TextView) primaryHomeEnhancementItem.getTag();
+        primaryHomeEnhancementSwitch = findSwitchInItem(primaryHomeEnhancementItem);
+        LinearLayout.LayoutParams primaryHomeEnhancementLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
+        primaryHomeEnhancementLp.topMargin = dp(12);
+        list.addView(primaryHomeEnhancementItem, primaryHomeEnhancementLp);
 
         applyHookSettingsItem = createSettingsItem("应用 Hook 设置", "重启");
         applyHookSettingsItem.setOnClickListener(v -> showHookSettingsRebootDialog());
@@ -1068,8 +1108,8 @@ public final class SettingsPanelController {
         if (settingsBackgroundPreview != null) {
             applyCurrentListBackground(settingsBackgroundPreview);
         }
-        if (gridLayoutValueView != null) {
-            gridLayoutValueView.setText(getGridLayoutLabel());
+        if (builtInDesktopValueView != null) {
+            builtInDesktopValueView.setText(getBuiltInDesktopLabel());
         }
         if (oneStepTriggerAreaValueView != null) {
             oneStepTriggerAreaValueView.setText(
@@ -1180,7 +1220,7 @@ public final class SettingsPanelController {
     }
 
     private void showKernelSuAuthorizationDialog() {
-        new AlertDialog.Builder(activity)
+        showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("在 KernelSU 中授权")
                 .setMessage("KernelSU 不支持弹窗授权。请打开 KernelSU 后进入“超级用户”，"
                         + "搜索“One Step”并打开“超级用户”开关。"
@@ -1192,8 +1232,7 @@ public final class SettingsPanelController {
                         Toast.makeText(activity, "无法打开 KernelSU 管理器",
                                 Toast.LENGTH_SHORT).show();
                     }
-                })
-                .show();
+                }));
     }
 
     private void refreshRootAuthorizationView() {
@@ -1241,20 +1280,25 @@ public final class SettingsPanelController {
     }
 
     private void updateZygiskHookSettings(boolean secureWindowEnabled,
-                                          boolean statusBarOverlayEnabled) {
+                                          boolean statusBarOverlayEnabled,
+                                          boolean primaryHomeEnhancementEnabled) {
         if (updatingHookSwitches || !hookSettingsLoaded || hookSettingsSaving) {
             return;
         }
         boolean previousSecureWindowEnabled = this.secureWindowHookEnabled;
         boolean previousStatusBarOverlayEnabled = this.statusBarOverlayHookEnabled;
+        boolean previousPrimaryHomeEnhancementEnabled =
+                this.primaryHomeEnhancementEnabled;
         this.secureWindowHookEnabled = secureWindowEnabled;
         this.statusBarOverlayHookEnabled = statusBarOverlayEnabled;
+        this.primaryHomeEnhancementEnabled = primaryHomeEnhancementEnabled;
         hookSettingsSaving = true;
         int requestGeneration = ++hookSettingsRequestGeneration;
         refreshZygiskHookSettingsViews();
         callbacks.saveZygiskHookSettings(
                 secureWindowEnabled,
                 statusBarOverlayEnabled,
+                primaryHomeEnhancementEnabled,
                 (state, error) -> activity.runOnUiThread(() -> {
                     if (requestGeneration != hookSettingsRequestGeneration) {
                         return;
@@ -1263,6 +1307,8 @@ public final class SettingsPanelController {
                     if (state == null) {
                         this.secureWindowHookEnabled = previousSecureWindowEnabled;
                         this.statusBarOverlayHookEnabled = previousStatusBarOverlayEnabled;
+                        this.primaryHomeEnhancementEnabled =
+                                previousPrimaryHomeEnhancementEnabled;
                         rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
                         hookSettingsNeedsRoot = !rootAuthorizationGranted;
                         refreshRootAuthorizationView();
@@ -1285,6 +1331,7 @@ public final class SettingsPanelController {
     private void applyZygiskHookState(ZygiskHookConfig.State state) {
         secureWindowHookEnabled = state.secureWindowEnabled;
         statusBarOverlayHookEnabled = state.statusBarOverlayEnabled;
+        primaryHomeEnhancementEnabled = state.primaryHomeEnhancementEnabled;
         zygiskModuleInstalled = state.moduleInstalled;
         zygiskPayloadActive = state.zygiskPayloadActive;
         lsposedInstalled = state.lsposedInstalled;
@@ -1322,6 +1369,10 @@ public final class SettingsPanelController {
             statusBarOverlayHookValueView.setText(
                     formatSwitchValue(statusBarOverlayHookEnabled));
         }
+        if (primaryHomeEnhancementValueView != null) {
+            primaryHomeEnhancementValueView.setText(
+                    formatSwitchValue(primaryHomeEnhancementEnabled));
+        }
         boolean controlsEnabled = hookSettingsLoaded
                 && zygiskModuleInstalled && !hookSettingsSaving;
         updatingHookSwitches = true;
@@ -1329,6 +1380,8 @@ public final class SettingsPanelController {
             updateHookSwitch(secureWindowHookSwitch, secureWindowHookEnabled, controlsEnabled);
             updateHookSwitch(statusBarOverlayHookSwitch,
                     statusBarOverlayHookEnabled, controlsEnabled);
+            updateHookSwitch(primaryHomeEnhancementSwitch,
+                    primaryHomeEnhancementEnabled, controlsEnabled);
         } finally {
             updatingHookSwitches = false;
         }
@@ -1352,47 +1405,114 @@ public final class SettingsPanelController {
         if (!hookSettingsLoaded || hookSettingsSaving) {
             return;
         }
-        new AlertDialog.Builder(activity)
+        showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("重启设备")
                 .setMessage("Hook 设置将在重启后生效。")
                 .setNegativeButton("稍后", null)
                 .setPositiveButton("立即重启", (dialog, which) -> {
                     Toast.makeText(activity, "正在重启", Toast.LENGTH_SHORT).show();
                     callbacks.rebootDevice();
-                })
-                .show();
-    }
-
-    private String getGridLayoutLabel() {
-        return desktopGridRows + "x" + desktopGridColumns;
+                }));
     }
 
     private String getSideWindowCountLabel() {
         return sideWindowCount + "个";
     }
 
-    private void showGridLayoutDialog() {
-        String[] labels = {"4x3", "5x4", "6x5"};
-        int checked = desktopGridRows == 5 ? 1 : desktopGridRows == 6 ? 2 : 0;
-        new AlertDialog.Builder(activity)
-                .setTitle("图标布局设置")
-                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                    if (which == 1) {
-                        saveGridLayout(5, 4);
-                    } else if (which == 2) {
-                        saveGridLayout(6, 5);
-                    } else {
-                        saveGridLayout(4, 3);
+    private String getBuiltInDesktopLabel() {
+        for (LauncherApp app : builtInDesktopApps) {
+            if (TextUtils.equals(app.componentKey(), builtInDesktopComponentKey)) {
+                return app.label;
+            }
+        }
+        return builtInDesktopApps.isEmpty() ? "未找到" : "未设置";
+    }
+
+    private void showBuiltInDesktopDialog() {
+        callbacks.refreshBuiltInDesktopApps();
+        syncState();
+        if (builtInDesktopApps.isEmpty()) {
+            Toast.makeText(activity, "未找到可用的系统桌面", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        int checkedItem = -1;
+        for (int index = 0; index < builtInDesktopApps.size(); index++) {
+            if (TextUtils.equals(builtInDesktopApps.get(index).componentKey(),
+                    builtInDesktopComponentKey)) {
+                checkedItem = index;
+                break;
+            }
+        }
+        ArrayAdapter<LauncherApp> adapter = new ArrayAdapter<LauncherApp>(activity,
+                android.R.layout.select_dialog_singlechoice,
+                new ArrayList<>(builtInDesktopApps)) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                CheckedTextView row = (CheckedTextView) super.getView(
+                        position, convertView, parent);
+                LauncherApp app = getItem(position);
+                if (app == null) {
+                    return row;
+                }
+                row.setText(TextUtils.concat(app.label, "\n", app.packageName));
+                row.setTextColor(0xff222222);
+                row.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+                row.setMaxLines(2);
+                row.setCompoundDrawablePadding(dp(12));
+                Drawable icon = copyDrawable(app.icon);
+                if (icon != null) {
+                    int iconSize = dp(36);
+                    icon.setBounds(0, 0, iconSize, iconSize);
+                }
+                row.setCompoundDrawables(icon, null, null, null);
+                row.setMinHeight(dp(64));
+                return row;
+            }
+        };
+        showRoundedDialog(new AlertDialog.Builder(activity)
+                .setTitle("选择内置桌面")
+                .setSingleChoiceItems(adapter, checkedItem, (dialog, which) -> {
+                    LauncherApp app = adapter.getItem(which);
+                    if (app != null) {
+                        callbacks.saveBuiltInDesktop(app);
+                        builtInDesktopComponentKey = app.componentKey();
+                        refresh();
                     }
                     dialog.dismiss();
                 })
-                .show();
+                .setNegativeButton("取消", null));
+    }
+
+    private Drawable copyDrawable(Drawable source) {
+        if (source == null) {
+            return null;
+        }
+        Drawable.ConstantState state = source.getConstantState();
+        return state == null ? null : state.newDrawable(activity.getResources()).mutate();
+    }
+
+    private void openSystemHomeSettings() {
+        if (tryOpenSettings(Settings.ACTION_HOME_SETTINGS)
+                || tryOpenSettings(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)
+                || tryOpenSettings(Settings.ACTION_SETTINGS)) {
+            return;
+        }
+        Toast.makeText(activity, "无法打开系统桌面设置", Toast.LENGTH_SHORT).show();
+    }
+
+    private boolean tryOpenSettings(String action) {
+        try {
+            activity.startActivity(new Intent(action));
+            return true;
+        } catch (ActivityNotFoundException | SecurityException e) {
+            return false;
+        }
     }
 
     private void showSideWindowCountDialog() {
         String[] labels = {"3个", "4个", "5个", "6个"};
         int checked = sanitizeSideWindowCount(sideWindowCount) - MIN_SIDE_WINDOWS;
-        new AlertDialog.Builder(activity)
+        showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("小窗口数量")
                 .setSingleChoiceItems(labels, checked, (dialog, which) -> {
                     int count = MIN_SIDE_WINDOWS + which;
@@ -1403,14 +1523,26 @@ public final class SettingsPanelController {
                     }
                     saveSideWindowCount(count);
                     dialog.dismiss();
-                })
-                .show();
+                }));
+    }
+
+    private AlertDialog showRoundedDialog(AlertDialog.Builder builder) {
+        AlertDialog dialog = builder.create();
+        dialog.show();
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+            View decorView = window.getDecorView();
+            decorView.setBackground(makePanelBackground(
+                    Color.WHITE, 0x1a000000, dp(12)));
+            decorView.setClipToOutline(true);
+            decorView.setElevation(dp(8));
+        }
+        return dialog;
     }
 
 
     private void syncState() {
-        desktopGridRows = callbacks.desktopGridRows();
-        desktopGridColumns = callbacks.desktopGridColumns();
         oneStepTriggerAreaScalePct = callbacks.oneStepTriggerAreaScalePct();
         cornerTriggerSensitivityPct = callbacks.cornerTriggerSensitivityPct();
         topNavVerticalMarginScalePct = callbacks.topNavVerticalMarginScalePct();
@@ -1422,9 +1554,12 @@ public final class SettingsPanelController {
         verticalWindowLayout = callbacks.verticalWindowLayout();
         logRecordingEnabled = callbacks.logRecordingEnabled();
         sideWindowCount = callbacks.sideWindowCount();
+        List<LauncherApp> desktopApps = callbacks.builtInDesktopApps();
+        builtInDesktopApps = desktopApps == null
+                ? Collections.emptyList() : new ArrayList<>(desktopApps);
+        builtInDesktopComponentKey = callbacks.builtInDesktopComponentKey();
         rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
     }
-    private void saveGridLayout(int r,int c){callbacks.saveGridLayout(r,c);refresh();}
     private void saveOneStepTriggerAreaScale(int v){callbacks.saveOneStepTriggerAreaScale(v);}
     private void saveCornerTriggerSensitivity(int v){callbacks.saveCornerTriggerSensitivity(v);}
     private void saveTopNavVerticalMarginScale(int v){callbacks.saveTopNavVerticalMarginScale(v);}
