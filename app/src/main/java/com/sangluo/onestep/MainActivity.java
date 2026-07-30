@@ -22,6 +22,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -40,6 +41,7 @@ import android.view.ViewGroup;
 import android.view.ViewPropertyAnimator;
 import android.view.ViewParent;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.FrameLayout;
@@ -138,7 +140,12 @@ public class MainActivity extends Activity {
     private static final long PIP_MONITOR_INTERVAL_MS = 450L;
     private static final long PIP_MONITOR_RETRY_INTERVAL_MS = 1200L;
     private static final long SUPERSEDED_DISPLAY_RELEASE_GRACE_MS = 5000L;
+    private static final int TOP_NAV_VERTICAL_SPACING_DEFAULT_DP = 20;
     private static final int TOP_BAR_HEIGHT_DEFAULT_DP = 74;
+    private static final int TOP_NAV_BUTTON_SIZE_DP = 26;
+    private static final int TOP_NAV_BUTTON_SPACING_DP = 8;
+    private static final int TOP_NAV_ICON_SIZE_DP = 20;
+    private static final int STATUS_BAR_SPACING_TRIM_DP = 16;
     private static final int MEDIA_ROOT_COMMAND_TIMEOUT_SECONDS = 8;
     private static final String[] KERNEL_SU_MANAGER_PACKAGES = {
             "me.weishu.kernelsu",
@@ -446,6 +453,7 @@ public class MainActivity extends Activity {
     private int topAppStripVerticalPaddingScalePct =
             TOP_APP_STRIP_VERTICAL_PADDING_SCALE_DEFAULT;
     private boolean topComponentsVisible = true;
+    private boolean statusBarSpacingEnabled;
     private boolean verticalWindowLayout;
     private int sideWindowCount = DEFAULT_SIDE_WINDOWS;
     private int topNavVerticalMarginScalePct = TOP_NAV_VERTICAL_MARGIN_SCALE_DEFAULT;
@@ -1183,6 +1191,7 @@ public class MainActivity extends Activity {
         topChromeContainer = new FrameLayout(this);
         topChromeContent = new LinearLayout(this);
         topChromeContent.setOrientation(LinearLayout.VERTICAL);
+        topChromeContent.setPadding(0, getStatusBarSpacingHeight(), 0, 0);
         topChromeContainer.addView(topChromeContent, matchFrame());
         topChromeContent.addView(createTopMediaArea(), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, getTopMediaAreaHeight()));
@@ -1506,7 +1515,8 @@ public class MainActivity extends Activity {
     }
 
     private int getTopChromeHeight() {
-        return getTopMediaAreaHeight() + getTopNavHeight() + getTopAppStripHeight();
+        return getStatusBarSpacingHeight() + getTopMediaAreaHeight()
+                + getTopNavHeight() + getTopAppStripHeight();
     }
 
     private void setTopChromeVisible(boolean visible, boolean animate) {
@@ -1514,6 +1524,12 @@ public class MainActivity extends Activity {
             return;
         }
         int chromeHeight = Math.max(1, getTopChromeHeight());
+        topChromeContent.setPadding(0, getStatusBarSpacingHeight(), 0, 0);
+        ViewGroup.LayoutParams layoutParams = topChromeContainer.getLayoutParams();
+        if (layoutParams != null && layoutParams.height != chromeHeight) {
+            layoutParams.height = chromeHeight;
+            topChromeContainer.setLayoutParams(layoutParams);
+        }
         topChromeContainer.animate().cancel();
         if (visible) {
             topChromeContainer.setVisibility(View.VISIBLE);
@@ -1550,6 +1566,7 @@ public class MainActivity extends Activity {
         }
         shortcutViews.clear();
         topChromeContent.removeAllViews();
+        topChromeContent.setPadding(0, getStatusBarSpacingHeight(), 0, 0);
         topChromeContent.addView(createTopMediaArea(), new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, getTopMediaAreaHeight()));
         topChromeContent.addView(createTopNavigationBar(), new LinearLayout.LayoutParams(
@@ -1773,13 +1790,13 @@ public class MainActivity extends Activity {
     private View createTopNavigationBar() {
         FrameLayout navRoot = new FrameLayout(this);
         navRoot.setBackgroundColor(Color.TRANSPARENT);
-        int contentHeight = dp(TOP_NAV_CONTENT_HEIGHT_DP);
 
         topNavLeftControls = new LinearLayout(this);
         topNavLeftControls.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
         topNavLeftControls.setPadding(dp(16), 0, 0, 0);
         FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(
-                dp(122), contentHeight, Gravity.START | Gravity.CENTER_VERTICAL);
+                dp(122), ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.START | Gravity.CENTER_VERTICAL);
         navRoot.addView(topNavLeftControls, leftLp);
 
         topNavPageLeftControl = createTopNavImageControl(
@@ -1806,16 +1823,17 @@ public class MainActivity extends Activity {
         title.setTextColor(0x86ffffff);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setShadowLayer(dp(1), 0, dp(1), 0x26000000);
-        setDpTextSize(title, 25);
+        setDpTextSize(title, 20);
         FrameLayout.LayoutParams titleLp = new FrameLayout.LayoutParams(
-                dp(172), contentHeight, Gravity.CENTER);
+                dp(172), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER);
         navRoot.addView(title, titleLp);
 
         topNavRightControls = new LinearLayout(this);
         topNavRightControls.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         topNavRightControls.setPadding(0, 0, dp(16), 0);
         FrameLayout.LayoutParams rightLp = new FrameLayout.LayoutParams(
-                dp(122), contentHeight, Gravity.END | Gravity.CENTER_VERTICAL);
+                dp(122), ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.END | Gravity.CENTER_VERTICAL);
         navRoot.addView(topNavRightControls, rightLp);
         updateTopNavigationControls();
 
@@ -1835,9 +1853,12 @@ public class MainActivity extends Activity {
 
     private ImageView createTopNavImageControl(int drawableResId, String description) {
         ImageView control = new ImageView(this);
-        control.setImageResource(drawableResId);
-        control.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        control.setPadding(dp(12), dp(12), dp(12), dp(12));
+        LayerDrawable icon = new LayerDrawable(new Drawable[]{getDrawable(drawableResId)});
+        icon.setLayerSize(0, dp(TOP_NAV_ICON_SIZE_DP), dp(TOP_NAV_ICON_SIZE_DP));
+        icon.setLayerGravity(0, Gravity.CENTER);
+        control.setImageDrawable(icon);
+        control.setScaleType(ImageView.ScaleType.CENTER);
+        control.setPadding(0, 0, 0, 0);
         control.setImageAlpha(217);
         control.setContentDescription(description);
         control.setClickable(true);
@@ -1868,8 +1889,12 @@ public class MainActivity extends Activity {
     }
 
     private void addTopNavControl(LinearLayout container, View control) {
-        container.addView(control, new LinearLayout.LayoutParams(
-                dp(42), ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout.LayoutParams layoutParams = new LinearLayout.LayoutParams(
+                dp(TOP_NAV_BUTTON_SIZE_DP), dp(TOP_NAV_BUTTON_SIZE_DP));
+        if (container.getChildCount() > 0) {
+            layoutParams.leftMargin = dp(TOP_NAV_BUTTON_SPACING_DP);
+        }
+        container.addView(control, layoutParams);
     }
 
     private TextView createTopNavControl(String symbol, float sizeDp, String description) {
@@ -2131,6 +2156,7 @@ public class MainActivity extends Activity {
         topAppStripSpacingScalePct = settings.topAppStripSpacingScalePct;
         topAppStripVerticalPaddingScalePct = settings.topAppStripVerticalPaddingScalePct;
         topComponentsVisible = settings.topComponentsVisible;
+        statusBarSpacingEnabled = settings.statusBarSpacingEnabled;
         verticalWindowLayout = settings.verticalWindowLayout;
         sideWindowCount = settings.sideWindowCount;
         topNavVerticalMarginScalePct = settings.topNavVerticalMarginScalePct;
@@ -2176,6 +2202,9 @@ public class MainActivity extends Activity {
                 return topAppStripVerticalPaddingScalePct;
             }
             @Override public boolean topComponentsVisible() { return topComponentsVisible; }
+            @Override public boolean statusBarSpacingEnabled() {
+                return statusBarSpacingEnabled;
+            }
             @Override public boolean verticalWindowLayout() { return verticalWindowLayout; }
             @Override public boolean logRecordingEnabled() { return logRecordingEnabled; }
             @Override public int sideWindowCount() { return sideWindowCount; }
@@ -2202,6 +2231,9 @@ public class MainActivity extends Activity {
             }
             @Override public void saveTopComponentsVisible(boolean visible) {
                 MainActivity.this.saveTopComponentsVisible(visible);
+            }
+            @Override public void saveStatusBarSpacingEnabled(boolean enabled) {
+                MainActivity.this.saveStatusBarSpacingEnabled(enabled);
             }
             @Override public void saveVerticalWindowLayout(boolean enabled) {
                 MainActivity.this.saveVerticalWindowLayout(enabled);
@@ -2657,6 +2689,17 @@ public class MainActivity extends Activity {
         }
         updateSettingsPageViews();
         rebuildTopChromeContent();
+    }
+
+    private void saveStatusBarSpacingEnabled(boolean enabled) {
+        if (enabled == statusBarSpacingEnabled) {
+            return;
+        }
+        statusBarSpacingEnabled = enabled;
+        settingsStore.saveStatusBarSpacingEnabled(enabled);
+        updateSettingsPageViews();
+        rebuildTopChromeContent();
+        scheduleEmbeddedSlotRefresh();
     }
 
     private void saveVerticalWindowLayout(boolean enabled) {
@@ -4608,7 +4651,33 @@ public class MainActivity extends Activity {
     }
 
     private int getPipDockTopInset() {
-        return getStatusBarHeight() + dp(16);
+        return (statusBarSpacingEnabled ? 0 : getStatusBarHeight()) + dp(16);
+    }
+
+    private int getStatusBarSpacingHeight() {
+        return statusBarSpacingEnabled
+                ? Math.max(0, getStatusBarSafeInsetHeight() - dp(STATUS_BAR_SPACING_TRIM_DP))
+                : 0;
+    }
+
+    private int getStatusBarSafeInsetHeight() {
+        int safeInsetHeight = Math.max(dp(24), getStatusBarHeight());
+        WindowInsets windowInsets = getWindow().getDecorView().getRootWindowInsets();
+        if (windowInsets == null) {
+            return safeInsetHeight;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.graphics.Insets topInsets = windowInsets.getInsetsIgnoringVisibility(
+                    WindowInsets.Type.statusBars() | WindowInsets.Type.displayCutout());
+            return Math.max(safeInsetHeight, topInsets.top);
+        }
+        safeInsetHeight = Math.max(safeInsetHeight, windowInsets.getStableInsetTop());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+                && windowInsets.getDisplayCutout() != null) {
+            safeInsetHeight = Math.max(safeInsetHeight,
+                    windowInsets.getDisplayCutout().getSafeInsetTop());
+        }
+        return safeInsetHeight;
     }
 
     private int getTopNavHeight() {
@@ -4616,7 +4685,9 @@ public class MainActivity extends Activity {
     }
 
     private int getTopNavHeightDp() {
-        return getTopBarHeightDp(topNavVerticalMarginScalePct);
+        int verticalSpacingDp = Math.round(TOP_NAV_VERTICAL_SPACING_DEFAULT_DP
+                * topNavVerticalMarginScalePct / 100f);
+        return TOP_NAV_BUTTON_SIZE_DP + verticalSpacingDp;
     }
 
     private int getTopAppStripHeight() {
@@ -4630,7 +4701,7 @@ public class MainActivity extends Activity {
     private int getTopBarHeightDp(int scalePct) {
         int scaledHeightDp = Math.round(TOP_BAR_HEIGHT_DEFAULT_DP * scalePct / 100f);
         int contentBlockDp = Math.max(TOP_NAV_CONTENT_HEIGHT_DP, getTopAppIconSizeDp() + 6);
-        int minHeightDp = contentBlockDp + getTopBarVerticalPaddingDp(scalePct) * 2 + 6;
+        int minHeightDp = contentBlockDp + getTopBarVerticalPaddingDp(scalePct) * 2;
         return Math.max(minHeightDp, scaledHeightDp);
     }
 

@@ -22,6 +22,8 @@ public final class OneStepSettingsStore {
     private static final String PREF_TOP_APP_STRIP_VERTICAL_PADDING_SCALE =
             "top_app_strip_vertical_padding_scale";
     private static final String PREF_TOP_COMPONENTS_VISIBLE = "top_components_visible";
+    private static final String PREF_STATUS_BAR_SPACING_ENABLED =
+            "status_bar_spacing_enabled";
     private static final String PREF_MEDIA_PLAYER_VISIBLE_LEGACY = "media_player_visible";
     private static final String PREF_SENSOR_UID_OVERRIDES = "sensor_uid_overrides";
     private static final String PREF_ONE_STEP_TRIGGER_AREA_SCALE =
@@ -70,6 +72,7 @@ public final class OneStepSettingsStore {
                         PREF_TOP_APP_STRIP_VERTICAL_PADDING_SCALE,
                         OneStepSettings.TOP_APP_STRIP_VERTICAL_PADDING_SCALE_DEFAULT)),
                 topComponentsVisible,
+                preferences.getBoolean(PREF_STATUS_BAR_SPACING_ENABLED, false),
                 verticalWindowLayout,
                 OneStepSettings.sanitizeAllowedSideWindowCount(preferences.getInt(
                         PREF_SIDE_WINDOW_COUNT, OneStepSettings.DEFAULT_SIDE_WINDOWS)),
@@ -126,6 +129,10 @@ public final class OneStepSettingsStore {
 
     public void saveTopComponentsVisible(boolean visible) {
         preferences.edit().putBoolean(PREF_TOP_COMPONENTS_VISIBLE, visible).apply();
+    }
+
+    public void saveStatusBarSpacingEnabled(boolean enabled) {
+        preferences.edit().putBoolean(PREF_STATUS_BAR_SPACING_ENABLED, enabled).apply();
     }
 
     public void saveVerticalWindowLayout(boolean vertical) {

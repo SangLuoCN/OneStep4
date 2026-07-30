@@ -76,6 +76,7 @@ public final class SettingsPanelController {
         int topAppStripSpacingScalePct();
         int topAppStripVerticalPaddingScalePct();
         boolean topComponentsVisible();
+        boolean statusBarSpacingEnabled();
         boolean verticalWindowLayout();
         boolean logRecordingEnabled();
         int sideWindowCount();
@@ -87,6 +88,7 @@ public final class SettingsPanelController {
         void saveTopAppStripSpacingScale(int value);
         void saveTopAppStripVerticalPaddingScale(int value);
         void saveTopComponentsVisible(boolean visible);
+        void saveStatusBarSpacingEnabled(boolean enabled);
         void saveVerticalWindowLayout(boolean enabled);
         void saveLogRecordingEnabled(boolean enabled);
         void saveSideWindowCount(int count);
@@ -130,6 +132,7 @@ public final class SettingsPanelController {
     private TextView topAppStripSpacingValueView;
     private TextView topAppStripVerticalPaddingValueView;
     private TextView topComponentsVisibleValueView;
+    private TextView statusBarSpacingValueView;
     private TextView verticalWindowLayoutValueView;
     private TextView sideWindowCountValueView;
     private TextView topNavVerticalMarginValueView;
@@ -137,6 +140,7 @@ public final class SettingsPanelController {
     private TextView cornerTriggerSensitivityValueView;
     private TextView logRecordingEnabledValueView;
     private Switch topComponentsVisibleSwitch;
+    private Switch statusBarSpacingSwitch;
     private Switch verticalWindowLayoutSwitch;
     private Switch logRecordingEnabledSwitch;
     private TextView rootAuthorizationValueView;
@@ -156,6 +160,7 @@ public final class SettingsPanelController {
     private int topAppStripSpacingScalePct;
     private int topAppStripVerticalPaddingScalePct;
     private boolean topComponentsVisible;
+    private boolean statusBarSpacingEnabled;
     private boolean verticalWindowLayout;
     private boolean logRecordingEnabled;
     private boolean secureWindowHookEnabled = true;
@@ -378,6 +383,15 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
         topComponentsVisibleLp.topMargin = dp(12);
         list.addView(topComponentsVisibleItem, topComponentsVisibleLp);
+
+        LinearLayout statusBarSpacingItem = createSwitchSettingsItem(
+                "状态栏间距", statusBarSpacingEnabled, this::saveStatusBarSpacingEnabled);
+        statusBarSpacingValueView = (TextView) statusBarSpacingItem.getTag();
+        statusBarSpacingSwitch = findSwitchInItem(statusBarSpacingItem);
+        LinearLayout.LayoutParams statusBarSpacingLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
+        statusBarSpacingLp.topMargin = dp(12);
+        list.addView(statusBarSpacingItem, statusBarSpacingLp);
 
         rootAuthorizationItem = createSettingsItem(
                 "ROOT 权限", "必需授权才可正常使用", "未授权");
@@ -1082,6 +1096,13 @@ public final class SettingsPanelController {
                 && topComponentsVisibleSwitch.isChecked() != topComponentsVisible) {
             topComponentsVisibleSwitch.setChecked(topComponentsVisible);
         }
+        if (statusBarSpacingValueView != null) {
+            statusBarSpacingValueView.setText(formatSwitchValue(statusBarSpacingEnabled));
+        }
+        if (statusBarSpacingSwitch != null
+                && statusBarSpacingSwitch.isChecked() != statusBarSpacingEnabled) {
+            statusBarSpacingSwitch.setChecked(statusBarSpacingEnabled);
+        }
         if (verticalWindowLayoutValueView != null) {
             verticalWindowLayoutValueView.setText(formatSwitchValue(verticalWindowLayout));
         }
@@ -1397,6 +1418,7 @@ public final class SettingsPanelController {
         topAppStripSpacingScalePct = callbacks.topAppStripSpacingScalePct();
         topAppStripVerticalPaddingScalePct = callbacks.topAppStripVerticalPaddingScalePct();
         topComponentsVisible = callbacks.topComponentsVisible();
+        statusBarSpacingEnabled = callbacks.statusBarSpacingEnabled();
         verticalWindowLayout = callbacks.verticalWindowLayout();
         logRecordingEnabled = callbacks.logRecordingEnabled();
         sideWindowCount = callbacks.sideWindowCount();
@@ -1410,6 +1432,7 @@ public final class SettingsPanelController {
     private void saveTopAppStripSpacingScale(int v){callbacks.saveTopAppStripSpacingScale(v);}
     private void saveTopAppStripVerticalPaddingScale(int v){callbacks.saveTopAppStripVerticalPaddingScale(v);}
     private void saveTopComponentsVisible(boolean v){callbacks.saveTopComponentsVisible(v);}
+    private void saveStatusBarSpacingEnabled(boolean v){callbacks.saveStatusBarSpacingEnabled(v);}
     private void saveVerticalWindowLayout(boolean v){callbacks.saveVerticalWindowLayout(v);}
     private void saveLogRecordingEnabled(boolean v){callbacks.saveLogRecordingEnabled(v);}
     private void saveSideWindowCount(int v){callbacks.saveSideWindowCount(v);refresh();}

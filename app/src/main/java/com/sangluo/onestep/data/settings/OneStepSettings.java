@@ -43,6 +43,7 @@ public final class OneStepSettings {
     public final int topAppStripSpacingScalePct;
     public final int topAppStripVerticalPaddingScalePct;
     public final boolean topComponentsVisible;
+    public final boolean statusBarSpacingEnabled;
     public final boolean verticalWindowLayout;
     public final int sideWindowCount;
     public final int topNavVerticalMarginScalePct;
@@ -53,7 +54,8 @@ public final class OneStepSettings {
     public OneStepSettings(int desktopGridRows, int desktopGridColumns,
                            int topAppIconScalePct, int topAppStripSpacingScalePct,
                            int topAppStripVerticalPaddingScalePct, boolean topComponentsVisible,
-                           boolean verticalWindowLayout, int sideWindowCount,
+                           boolean statusBarSpacingEnabled, boolean verticalWindowLayout,
+                           int sideWindowCount,
                            int topNavVerticalMarginScalePct, int oneStepTriggerAreaScalePct,
                            int cornerTriggerSensitivityPct, boolean logRecordingEnabled) {
         this.desktopGridRows = desktopGridRows;
@@ -62,6 +64,7 @@ public final class OneStepSettings {
         this.topAppStripSpacingScalePct = topAppStripSpacingScalePct;
         this.topAppStripVerticalPaddingScalePct = topAppStripVerticalPaddingScalePct;
         this.topComponentsVisible = topComponentsVisible;
+        this.statusBarSpacingEnabled = statusBarSpacingEnabled;
         this.verticalWindowLayout = verticalWindowLayout;
         this.sideWindowCount = sideWindowCount;
         this.topNavVerticalMarginScalePct = topNavVerticalMarginScalePct;
