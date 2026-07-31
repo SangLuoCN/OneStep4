@@ -6,12 +6,19 @@ import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.ColorFilter;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.AdaptiveIconDrawable;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.util.Log;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.content.res.AppCompatResources;
+
+import com.sangluo.onestep.R;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
@@ -39,6 +46,15 @@ final class SystemThemedIconLoader {
         Drawable systemIcon = resolveInfo.loadIcon(packageManager);
         Drawable miuiIcon = loadMiuiCustomizedIcon(resolveInfo, systemIcon);
         return miuiIcon == null ? systemIcon : miuiIcon;
+    }
+
+    Drawable addCloneBadge(Drawable icon) {
+        Drawable badge = AppCompatResources.getDrawable(
+                context, R.drawable.ic_clone_app_badge);
+        if (icon == null || badge == null) {
+            return icon;
+        }
+        return new CloneBadgedDrawable(icon.mutate(), badge.mutate());
     }
 
     void invalidateThemeCaches(List<ResolveInfo> resolveInfos) {
@@ -173,6 +189,73 @@ final class SystemThemedIconLoader {
             // Not a ColorOS/OxygenOS framework.
         } catch (ReflectiveOperationException | RuntimeException | LinkageError e) {
             Log.d(TAG, "ColorOS icon cache is managed by the system framework", e);
+        }
+    }
+
+    /** Matches Launcher3's bottom-end badge placement and 44.4% badge scale. */
+    private static final class CloneBadgedDrawable extends Drawable {
+        private static final float BADGE_SIZE_RATIO = 0.444f;
+
+        private final Drawable icon;
+        private final Drawable badge;
+
+        CloneBadgedDrawable(Drawable icon, Drawable badge) {
+            this.icon = icon;
+            this.badge = badge;
+        }
+
+        @Override
+        protected void onBoundsChange(Rect bounds) {
+            icon.setBounds(bounds);
+            int badgeSize = Math.max(1, Math.round(
+                    Math.min(bounds.width(), bounds.height()) * BADGE_SIZE_RATIO));
+            badge.setBounds(bounds.right - badgeSize, bounds.bottom - badgeSize,
+                    bounds.right, bounds.bottom);
+        }
+
+        @Override
+        public void draw(@NonNull Canvas canvas) {
+            icon.draw(canvas);
+            badge.draw(canvas);
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+            icon.setAlpha(alpha);
+            badge.setAlpha(alpha);
+        }
+
+        @Override
+        public void setColorFilter(ColorFilter colorFilter) {
+            icon.setColorFilter(colorFilter);
+            badge.setColorFilter(colorFilter);
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
+
+        @Override
+        public int getIntrinsicWidth() {
+            return icon.getIntrinsicWidth();
+        }
+
+        @Override
+        public int getIntrinsicHeight() {
+            return icon.getIntrinsicHeight();
+        }
+
+        @Override
+        public boolean isStateful() {
+            return icon.isStateful() || badge.isStateful();
+        }
+
+        @Override
+        protected boolean onStateChange(int[] state) {
+            boolean changed = icon.setState(state);
+            changed |= badge.setState(state);
+            return changed;
         }
     }
 }

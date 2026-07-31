@@ -3,6 +3,8 @@ package com.sangluo.onestep.model;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.graphics.drawable.Drawable;
+import android.os.Process;
+import android.os.UserHandle;
 
 import com.sangluo.onestep.hook.OneStepPrimaryHomePolicy;
 
@@ -12,10 +14,16 @@ public final class LauncherApp {
     public final String packageName;
     public final ComponentName componentName;
     public final Drawable icon;
+    public final UserHandle userHandle;
     private final String launchCategory;
 
     public LauncherApp(String label, ComponentName componentName, Drawable icon) {
-        this(label, componentName, icon, Intent.CATEGORY_LAUNCHER);
+        this(label, componentName, icon, Process.myUserHandle());
+    }
+
+    public LauncherApp(String label, ComponentName componentName, Drawable icon,
+                       UserHandle userHandle) {
+        this(label, componentName, icon, Intent.CATEGORY_LAUNCHER, userHandle);
     }
 
     public static LauncherApp createHomeEntry(
@@ -25,10 +33,16 @@ public final class LauncherApp {
 
     private LauncherApp(String label, ComponentName componentName, Drawable icon,
                         String launchCategory) {
+        this(label, componentName, icon, launchCategory, Process.myUserHandle());
+    }
+
+    private LauncherApp(String label, ComponentName componentName, Drawable icon,
+                        String launchCategory, UserHandle userHandle) {
         this.label = label;
         this.componentName = componentName;
         this.packageName = componentName.getPackageName();
         this.icon = icon;
+        this.userHandle = userHandle == null ? Process.myUserHandle() : userHandle;
         this.launchCategory = launchCategory;
     }
 
@@ -56,5 +70,25 @@ public final class LauncherApp {
 
     public String componentKey() {
         return componentName.flattenToString();
+    }
+
+    /** Identifies one installed instance even when multiple users expose the same component. */
+    public String instanceKey() {
+        return componentKey() + "@" + userId();
+    }
+
+    /** UserHandle.hashCode() is the public SDK representation of its integer handle. */
+    public int userId() {
+        return userHandle.hashCode();
+    }
+
+    public boolean isSameInstance(LauncherApp other) {
+        return other != null
+                && componentName.equals(other.componentName)
+                && userHandle.equals(other.userHandle);
+    }
+
+    public boolean isCurrentUser() {
+        return Process.myUserHandle().equals(userHandle);
     }
 }

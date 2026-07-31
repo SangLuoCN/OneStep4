@@ -689,7 +689,7 @@ public class MainActivity extends Activity {
             for (int i = 0; i < launcherApps.size(); i++) {
                 LauncherApp oldApp = launcherApps.get(i);
                 LauncherApp newApp = refreshedApps.get(i);
-                if (!oldApp.componentName.equals(newApp.componentName)
+                if (!oldApp.isSameInstance(newApp)
                         || !TextUtils.equals(oldApp.label, newApp.label)) {
                     structureChanged = true;
                     break;
@@ -698,11 +698,13 @@ public class MainActivity extends Activity {
         }
 
         launcherApps = refreshedApps;
-        Map<String, LauncherApp> refreshedByComponent = new HashMap<>();
+        Map<String, LauncherApp> refreshedByInstance = new HashMap<>();
         Map<String, LauncherApp> refreshedByPackage = new HashMap<>();
         for (LauncherApp app : refreshedApps) {
-            refreshedByComponent.put(app.componentKey(), app);
-            refreshedByPackage.putIfAbsent(app.packageName, app);
+            refreshedByInstance.put(app.instanceKey(), app);
+            if (app.isCurrentUser()) {
+                refreshedByPackage.putIfAbsent(app.packageName, app);
+            }
         }
         for (int slot = 0; slot < windowApps.length; slot++) {
             LauncherApp current = windowApps[slot];
@@ -713,8 +715,8 @@ public class MainActivity extends Activity {
                     && builtInDesktopApp.componentName.equals(current.componentName)) {
                 continue;
             }
-            LauncherApp refreshed = refreshedByComponent.get(current.componentKey());
-            if (refreshed == null) {
+            LauncherApp refreshed = refreshedByInstance.get(current.instanceKey());
+            if (refreshed == null && current.isCurrentUser()) {
                 refreshed = refreshedByPackage.get(current.packageName);
             }
             if (refreshed != null) {
@@ -726,9 +728,7 @@ public class MainActivity extends Activity {
             rebuildTopChromeContent();
         } else {
             for (AppShortcutView shortcut : shortcutViews) {
-                ComponentName componentName = shortcut.getComponentNameValue();
-                LauncherApp app = componentName == null ? null
-                        : refreshedByComponent.get(componentName.flattenToString());
+                LauncherApp app = refreshedByInstance.get(shortcut.getInstanceKeyValue());
                 if (app != null) {
                     shortcut.bind(app);
                 }
@@ -1031,6 +1031,16 @@ public class MainActivity extends Activity {
         if (systemDesktopMovedToFront && rootHost.isHostedSurfaceRevealPending(currentApp)) {
             Log.i(TAG, "Keep secondary desktop concealed while hosted app is launching: slot="
                     + activeMainSlot + ", app=" + currentApp.packageName);
+            return;
+        }
+        boolean hostedTaskMovedToFront = event
+                == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
+                && displayId == rootHost.getDisplayId()
+                && !TextUtils.equals(packageName, getPackageName())
+                && !systemDesktopMovedToFront;
+        if (hostedTaskMovedToFront
+                && rootHost.onHostedTaskMovedToFront(
+                currentApp, taskId, packageName)) {
             return;
         }
         if (hostedTaskRemovalStarted) {
@@ -3412,10 +3422,11 @@ public class MainActivity extends Activity {
         }
         try {
             mediaRootExecutor.execute(() -> {
+                int userId = app.userId();
                 ShellCommandResult result = runMainPrivilegedCommand(
-                        "am force-stop --user current " + mainShellQuote(packageName),
+                        "am force-stop --user " + userId + " " + mainShellQuote(packageName),
                         "force-stop dismissed ActivityView app " + packageName, true);
-                if (!result.isSuccess()) {
+                if (!result.isSuccess() && app.isCurrentUser()) {
                     result = runMainPrivilegedCommand(
                             "am force-stop " + mainShellQuote(packageName),
                             "fallback force-stop dismissed ActivityView app " + packageName, true);
@@ -3497,7 +3508,7 @@ public class MainActivity extends Activity {
 
         pendingCrossAppRoutes.removeFirst();
         routedLaunchIntents.put(launch.targetApp.packageName, launch.intent);
-        int existingSlot = findSlot(launch.targetApp.packageName);
+        int existingSlot = findSlot(launch.targetApp);
         if (existingSlot >= 0 && existingSlot != activeMainSlot
                 && !embeddedSlotClosing[existingSlot]) {
             switchMainSlot(existingSlot, true);
@@ -3538,7 +3549,7 @@ public class MainActivity extends Activity {
         }
         boolean replaceMainDesktopHome = isDesktopHomeSlot(activeMainSlot);
         boolean replaceMainSettings = isInternalSettingsSlot(activeMainSlot);
-        int existingSlot = findSlot(app.packageName);
+        int existingSlot = findSlot(app);
         if (replaceMainDesktopHome) {
             if (existingSlot >= 0 && embeddedSlotClosing[existingSlot]) {
                 return;
@@ -3734,7 +3745,7 @@ public class MainActivity extends Activity {
             return;
         }
         windowViews[slot].hideDesktopHome();
-        backgroundAppPackages.remove(app.packageName);
+        backgroundAppPackages.remove(app.instanceKey());
         windowApps[slot] = app;
         renderWindows();
         syncEmbeddedSlot(slot);
@@ -3754,7 +3765,7 @@ public class MainActivity extends Activity {
             startAppInSlot(slot, replacementApp);
             return;
         }
-        if (TextUtils.equals(previousApp.packageName, replacementApp.packageName)) {
+        if (previousApp.isSameInstance(replacementApp)) {
             startAppInSlot(slot, replacementApp);
             return;
         }
@@ -3779,7 +3790,7 @@ public class MainActivity extends Activity {
                 return;
             }
             embeddedSlotClosing[slot] = false;
-            backgroundAppPackages.remove(previousApp.packageName);
+            backgroundAppPackages.remove(previousApp.instanceKey());
             startAppInSlot(slot, replacementApp);
         });
         try {
@@ -3825,7 +3836,7 @@ public class MainActivity extends Activity {
             return;
         }
         embeddedSyncGenerations[slot]++;
-        backgroundAppPackages.remove(replacementApp.packageName);
+        backgroundAppPackages.remove(replacementApp.instanceKey());
         windowApps[slot] = replacementApp;
         // Do not cover or hide this SurfaceView. WindowManager owns the immediate target
         // StartingWindow/task surface and swaps it with the app's first real buffer.
@@ -4022,8 +4033,7 @@ public class MainActivity extends Activity {
     private void animateWindowAppAppear(int slot, LauncherApp expectedApp, boolean fadeIn) {
         animateWindowContentAppear(slot, fadeIn, () -> {
             LauncherApp currentApp = windowApps[slot];
-            return currentApp != null
-                    && TextUtils.equals(currentApp.packageName, expectedApp.packageName);
+            return currentApp != null && currentApp.isSameInstance(expectedApp);
         });
     }
 
@@ -4143,8 +4153,7 @@ public class MainActivity extends Activity {
             return;
         }
         LauncherApp currentApp = windowApps[slot];
-        if (currentApp == null
-                || !exitedApp.componentName.equals(currentApp.componentName)) {
+        if (currentApp == null || !exitedApp.isSameInstance(currentApp)) {
             return;
         }
         LauncherApp primaryDesktop = resolveBuiltInDesktopApp();
@@ -4273,7 +4282,7 @@ public class MainActivity extends Activity {
         }
         LauncherApp currentApp = windowApps[slot];
         return currentApp != null && exitedApp != null
-                && exitedApp.componentName.equals(currentApp.componentName);
+                && exitedApp.isSameInstance(currentApp);
     }
 
     private void clearStalePrimaryDesktopSlot(int slot, LauncherApp primaryDesktop) {
@@ -4306,7 +4315,7 @@ public class MainActivity extends Activity {
         }
         LauncherApp currentExitedSlotApp = windowApps[exitedSlot];
         if (currentExitedSlotApp == null
-                || !exitedApp.componentName.equals(currentExitedSlotApp.componentName)) {
+                || !exitedApp.isSameInstance(currentExitedSlotApp)) {
             return;
         }
         if (activeMainSlot == desktopSlot && !isWindowAnimationRunning()) {
@@ -4356,8 +4365,7 @@ public class MainActivity extends Activity {
             return;
         }
         LauncherApp currentApp = windowApps[slot];
-        if (currentApp == null
-                || !exitedApp.componentName.equals(currentApp.componentName)) {
+        if (currentApp == null || !exitedApp.isSameInstance(currentApp)) {
             return;
         }
         embeddedSyncGenerations[slot]++;
@@ -4367,7 +4375,7 @@ public class MainActivity extends Activity {
         }
         windowApps[slot] = null;
         clearHostedAppRevealState(slot);
-        backgroundAppPackages.remove(exitedApp.packageName);
+        backgroundAppPackages.remove(exitedApp.instanceKey());
         windowViews[slot].setLiveAppVisible(false);
         renderWindows();
     }
@@ -4608,7 +4616,7 @@ public class MainActivity extends Activity {
             }
             windowApps[slot] = null;
             clearHostedAppRevealState(slot);
-            backgroundAppPackages.remove(dismissedApp.packageName);
+            backgroundAppPackages.remove(dismissedApp.instanceKey());
             embeddedSlotClosing[slot] = false;
             windowView.setTranslationX(0f);
             windowView.setTranslationY(0f);
@@ -4945,8 +4953,7 @@ public class MainActivity extends Activity {
             return;
         }
         LauncherApp currentApp = windowApps[slot];
-        if (currentApp == null || !TextUtils.equals(currentApp.packageName,
-                expectedApp.packageName)) {
+        if (currentApp == null || !currentApp.isSameInstance(expectedApp)) {
             return;
         }
 
@@ -5056,12 +5063,12 @@ public class MainActivity extends Activity {
             windowViews[i].bind(windowApps[i], i);
         }
         for (AppShortcutView shortcutView : shortcutViews) {
-            String packageName = shortcutView.getPackageNameValue();
-            boolean foreground = findSlot(packageName) >= 0;
+            String instanceKey = shortcutView.getInstanceKeyValue();
+            boolean foreground = findSlot(instanceKey) >= 0;
             shortcutView.setActive(foreground);
             shortcutView.setAppStatus(foreground
                     ? AppShortcutView.AppStatus.FOREGROUND
-                    : backgroundAppPackages.contains(packageName)
+                    : backgroundAppPackages.contains(instanceKey)
                     ? AppShortcutView.AppStatus.BACKGROUND
                     : AppShortcutView.AppStatus.NONE);
         }
@@ -5109,14 +5116,21 @@ public class MainActivity extends Activity {
 
     private void markAppBackgrounded(LauncherApp app) {
         if (app != null && !TextUtils.isEmpty(app.packageName)) {
-            backgroundAppPackages.add(app.packageName);
+            backgroundAppPackages.add(app.instanceKey());
         }
     }
 
-    private int findSlot(String packageName) {
+    private int findSlot(LauncherApp target) {
+        if (target == null) {
+            return -1;
+        }
+        return findSlot(target.instanceKey());
+    }
+
+    private int findSlot(String instanceKey) {
         for (int i = 0; i < MAX_WINDOWS; i++) {
             LauncherApp app = windowApps[i];
-            if (app != null && TextUtils.equals(app.packageName, packageName)) {
+            if (app != null && TextUtils.equals(app.instanceKey(), instanceKey)) {
                 return i;
             }
         }

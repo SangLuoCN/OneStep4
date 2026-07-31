@@ -1,6 +1,5 @@
 package com.sangluo.onestep.ui.widget;
 
-import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -31,8 +30,7 @@ public final class AppShortcutView extends LinearLayout {
     private final ImageView icon;
     private final View statusIndicator;
     private final TextView label;
-    private String packageName = "";
-    private ComponentName componentName;
+    private String instanceKey = "";
     private String appLabel = "";
     private boolean statusIndicatorEnabled;
     private AppStatus appStatus = AppStatus.NONE;
@@ -80,20 +78,15 @@ public final class AppShortcutView extends LinearLayout {
     }
 
     public void bind(LauncherApp app) {
-        packageName = app.packageName;
-        componentName = app.componentName;
+        instanceKey = app.instanceKey();
         appLabel = app.label;
         icon.setImageDrawable(app.icon);
         label.setText(app.label);
         updateContentDescription();
     }
 
-    public String getPackageNameValue() {
-        return packageName;
-    }
-
-    public ComponentName getComponentNameValue() {
-        return componentName;
+    public String getInstanceKeyValue() {
+        return instanceKey;
     }
 
     public void setActive(boolean active) {

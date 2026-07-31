@@ -62,7 +62,12 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
         }
 
         Intent launchIntent = app.createLaunchIntent();
-        Object[] args = makeStartArguments(startActivityMethod.getParameterTypes(), launchIntent);
+        if (!app.isCurrentUser() && !supportsExplicitUser(startActivityMethod)) {
+            unavailableReason = "ActivityView 不支持指定分身用户";
+            return false;
+        }
+        Object[] args = makeStartArguments(
+                startActivityMethod.getParameterTypes(), launchIntent, app.userHandle);
         if (args == null) {
             unavailableReason = "ActivityView 启动参数不匹配";
             return false;
@@ -194,23 +199,31 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
     private Method findStartActivityMethod(Class<?> activityViewClass)
             throws NoSuchMethodException {
         try {
-            Method method = activityViewClass.getMethod("startActivity", Intent.class);
-            method.setAccessible(true);
-            return method;
-        } catch (NoSuchMethodException ignored) {
-            Method method = findCompatibleStartMethod(activityViewClass.getMethods());
+            Method method = findCompatibleStartMethod(
+                    activityViewClass.getMethods(), true);
             if (method == null) {
-                method = findCompatibleStartMethod(activityViewClass.getDeclaredMethods());
+                method = findCompatibleStartMethod(
+                        activityViewClass.getDeclaredMethods(), true);
+            }
+            if (method == null) {
+                method = findCompatibleStartMethod(
+                        activityViewClass.getMethods(), false);
+            }
+            if (method == null) {
+                method = findCompatibleStartMethod(
+                        activityViewClass.getDeclaredMethods(), false);
             }
             if (method == null) {
                 throw new NoSuchMethodException("startActivity");
             }
             method.setAccessible(true);
             return method;
+        } catch (RuntimeException e) {
+            throw new NoSuchMethodException("startActivity");
         }
     }
 
-    private Method findCompatibleStartMethod(Method[] methods) {
+    private Method findCompatibleStartMethod(Method[] methods, boolean requireExplicitUser) {
         for (Method method : methods) {
             Class<?>[] parameterTypes = method.getParameterTypes();
             if (!TextUtils.equals(method.getName(), "startActivity")
@@ -218,11 +231,22 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
                     || !Intent.class.isAssignableFrom(parameterTypes[0])) {
                 continue;
             }
-            if (makeStartArguments(parameterTypes, new Intent()) != null) {
+            if (makeStartArguments(parameterTypes, new Intent(),
+                    android.os.Process.myUserHandle()) != null
+                    && (!requireExplicitUser || supportsExplicitUser(method))) {
                 return method;
             }
         }
         return null;
+    }
+
+    private boolean supportsExplicitUser(Method method) {
+        for (Class<?> parameterType : method.getParameterTypes()) {
+            if (TextUtils.equals(parameterType.getName(), "android.os.UserHandle")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private Method findOptionalNoArgMethod(Class<?> targetClass, String name) {
@@ -241,7 +265,8 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
         }
     }
 
-    private Object[] makeStartArguments(Class<?>[] parameterTypes, Intent launchIntent) {
+    private Object[] makeStartArguments(Class<?>[] parameterTypes, Intent launchIntent,
+                                        android.os.UserHandle userHandle) {
         if (parameterTypes.length == 0 || !Intent.class.isAssignableFrom(parameterTypes[0])) {
             return null;
         }
@@ -254,7 +279,7 @@ public final class HiddenActivityViewHost implements EmbeddedAppHost {
             } else if (parameterType == Bundle.class) {
                 args[i] = Bundle.EMPTY;
             } else if (TextUtils.equals(parameterType.getName(), "android.os.UserHandle")) {
-                args[i] = android.os.Process.myUserHandle();
+                args[i] = userHandle;
             } else if (parameterType.isPrimitive()) {
                 return null;
             } else {

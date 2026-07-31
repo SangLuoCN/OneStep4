@@ -8,25 +8,32 @@ import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Process;
+import android.os.UserHandle;
+import android.os.UserManager;
 import android.text.TextUtils;
 
 import com.sangluo.onestep.model.LauncherApp;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 /** Loads launchable applications with their system-provided labels and icons. */
 public final class LauncherAppRepository {
+    private static final int ZTE_CLONE_USER_ID = 999;
+
     private final Context context;
     private final PackageManager packageManager;
     private final LauncherApps launcherApps;
+    private final UserManager userManager;
     private final SystemThemedIconLoader themedIconLoader;
 
     public LauncherAppRepository(Context context) {
         this.context = context.getApplicationContext();
         packageManager = context.getPackageManager();
         launcherApps = context.getSystemService(LauncherApps.class);
+        userManager = context.getSystemService(UserManager.class);
         themedIconLoader = new SystemThemedIconLoader(context);
     }
 
@@ -69,38 +76,47 @@ public final class LauncherAppRepository {
         Intent launchIntent = packageManager.getLaunchIntentForPackage(packageName);
         ComponentName preferredComponent = launchIntent == null
                 ? null : launchIntent.getComponent();
-        List<ResolveInfo> launcherActivities = queryLauncherActivities(packageName);
+        List<LauncherActivityEntry> launcherActivities = queryLauncherActivities(packageName);
         if (preferredComponent != null) {
-            for (ResolveInfo resolveInfo : launcherActivities) {
-                if (preferredComponent.equals(componentNameOf(resolveInfo))) {
-                    return createLauncherApp(resolveInfo);
+            for (LauncherActivityEntry entry : launcherActivities) {
+                if (entry.isCurrentUser()
+                        && preferredComponent.equals(entry.componentName())) {
+                    return createLauncherApp(entry);
                 }
             }
         }
         return launcherActivities.isEmpty()
-                ? null : createLauncherApp(launcherActivities.get(0));
+                ? null : createLauncherApp(preferCurrentUser(launcherActivities));
     }
 
     private List<LauncherApp> loadLauncherApps(boolean invalidateThemeCaches) {
-        List<ResolveInfo> resolveInfos = queryLauncherActivities(null);
-        Collections.sort(resolveInfos, new ResolveInfo.DisplayNameComparator(packageManager));
+        List<LauncherActivityEntry> entries = queryLauncherActivities(null);
+        entries.sort(Comparator
+                .comparing(LauncherActivityEntry::label, String.CASE_INSENSITIVE_ORDER)
+                .thenComparingInt(entry -> entry.userHandle.hashCode()));
         if (invalidateThemeCaches) {
+            List<ResolveInfo> resolveInfos = new ArrayList<>();
+            for (LauncherActivityEntry entry : entries) {
+                if (entry.resolveInfo != null) {
+                    resolveInfos.add(entry.resolveInfo);
+                }
+            }
             themedIconLoader.invalidateThemeCaches(resolveInfos);
         }
 
         List<LauncherApp> apps = new ArrayList<>();
-        for (ResolveInfo resolveInfo : resolveInfos) {
-            String packageName = resolveInfo.activityInfo.packageName;
+        for (LauncherActivityEntry entry : entries) {
+            String packageName = entry.componentName().getPackageName();
             if (TextUtils.equals(packageName, context.getPackageName())) {
                 continue;
             }
-            apps.add(createLauncherApp(resolveInfo));
+            apps.add(createLauncherApp(entry));
         }
         return apps;
     }
 
-    private List<ResolveInfo> queryLauncherActivities(String packageName) {
-        List<ResolveInfo> desktopActivities = queryLauncherService(packageName);
+    private List<LauncherActivityEntry> queryLauncherActivities(String packageName) {
+        List<LauncherActivityEntry> desktopActivities = queryLauncherService(packageName);
         if (!desktopActivities.isEmpty()) {
             return desktopActivities;
         }
@@ -110,7 +126,15 @@ public final class LauncherAppRepository {
         if (!TextUtils.isEmpty(packageName)) {
             mainIntent.setPackage(packageName);
         }
-        return packageManager.queryIntentActivities(mainIntent, 0);
+        List<ResolveInfo> resolveInfos = packageManager.queryIntentActivities(mainIntent, 0);
+        List<LauncherActivityEntry> entries = new ArrayList<>(resolveInfos.size());
+        for (ResolveInfo resolveInfo : resolveInfos) {
+            if (resolveInfo.activityInfo != null) {
+                entries.add(new LauncherActivityEntry(
+                        resolveInfo, null, Process.myUserHandle()));
+            }
+        }
+        return entries;
     }
 
     private List<ResolveInfo> queryHomeActivities() {
@@ -128,25 +152,29 @@ public final class LauncherAppRepository {
                 context.getPackageName());
     }
 
-    private List<ResolveInfo> queryLauncherService(String packageName) {
+    private List<LauncherActivityEntry> queryLauncherService(String packageName) {
         if (launcherApps == null) {
             return Collections.emptyList();
         }
-        try {
-            List<LauncherActivityInfo> activityInfos = launcherApps.getActivityList(
-                    packageName, Process.myUserHandle());
-            List<ResolveInfo> result = new ArrayList<>(activityInfos.size());
-            for (LauncherActivityInfo activityInfo : activityInfos) {
-                ResolveInfo resolveInfo = resolveLauncherActivity(
-                        activityInfo.getComponentName());
-                if (resolveInfo != null && resolveInfo.activityInfo != null) {
-                    result.add(resolveInfo);
+        List<UserHandle> profiles = userManager == null
+                ? Collections.singletonList(Process.myUserHandle())
+                : userManager.getUserProfiles();
+        List<LauncherActivityEntry> result = new ArrayList<>();
+        for (UserHandle profile : profiles) {
+            try {
+                List<LauncherActivityInfo> activityInfos = launcherApps.getActivityList(
+                        packageName, profile);
+                for (LauncherActivityInfo activityInfo : activityInfos) {
+                    ResolveInfo resolveInfo = resolveLauncherActivity(
+                            activityInfo.getComponentName());
+                    result.add(new LauncherActivityEntry(
+                            resolveInfo, activityInfo, profile));
                 }
+            } catch (RuntimeException ignored) {
+                // A profile may be visible to UserManager but unavailable to LauncherApps.
             }
-            return result;
-        } catch (RuntimeException ignored) {
-            return Collections.emptyList();
         }
+        return result;
     }
 
     private ResolveInfo resolveLauncherActivity(ComponentName componentName) {
@@ -161,11 +189,12 @@ public final class LauncherAppRepository {
                 resolveInfo.activityInfo.name);
     }
 
-    private LauncherApp createLauncherApp(ResolveInfo resolveInfo) {
+    private LauncherApp createLauncherApp(LauncherActivityEntry entry) {
         return new LauncherApp(
-                String.valueOf(resolveInfo.loadLabel(packageManager)),
-                componentNameOf(resolveInfo),
-                themedIconLoader.loadIcon(resolveInfo));
+                entry.label(),
+                entry.componentName(),
+                entry.loadIcon(themedIconLoader, context),
+                entry.userHandle);
     }
 
     private LauncherApp createHomeApp(ResolveInfo resolveInfo) {
@@ -173,5 +202,60 @@ public final class LauncherAppRepository {
                 String.valueOf(resolveInfo.loadLabel(packageManager)),
                 componentNameOf(resolveInfo),
                 themedIconLoader.loadIcon(resolveInfo));
+    }
+
+    private LauncherActivityEntry preferCurrentUser(List<LauncherActivityEntry> entries) {
+        for (LauncherActivityEntry entry : entries) {
+            if (entry.isCurrentUser()) {
+                return entry;
+            }
+        }
+        return entries.get(0);
+    }
+
+    private final class LauncherActivityEntry {
+        final ResolveInfo resolveInfo;
+        final LauncherActivityInfo activityInfo;
+        final UserHandle userHandle;
+
+        LauncherActivityEntry(ResolveInfo resolveInfo, LauncherActivityInfo activityInfo,
+                              UserHandle userHandle) {
+            this.resolveInfo = resolveInfo;
+            this.activityInfo = activityInfo;
+            this.userHandle = userHandle;
+        }
+
+        ComponentName componentName() {
+            return activityInfo != null
+                    ? activityInfo.getComponentName() : componentNameOf(resolveInfo);
+        }
+
+        String label() {
+            return String.valueOf(activityInfo != null
+                    ? activityInfo.getLabel() : resolveInfo.loadLabel(packageManager));
+        }
+
+        boolean isCurrentUser() {
+            return Process.myUserHandle().equals(userHandle);
+        }
+
+        android.graphics.drawable.Drawable loadIcon(
+                SystemThemedIconLoader iconLoader, Context iconContext) {
+            if (isCurrentUser() && resolveInfo != null) {
+                return iconLoader.loadIcon(resolveInfo);
+            }
+            if (activityInfo != null) {
+                if (userHandle.hashCode() == ZTE_CLONE_USER_ID) {
+                    android.graphics.drawable.Drawable baseIcon = resolveInfo != null
+                            ? iconLoader.loadIcon(resolveInfo)
+                            : activityInfo.getIcon(iconContext.getResources()
+                            .getDisplayMetrics().densityDpi);
+                    return iconLoader.addCloneBadge(baseIcon);
+                }
+                return activityInfo.getBadgedIcon(
+                        iconContext.getResources().getDisplayMetrics().densityDpi);
+            }
+            return iconLoader.loadIcon(resolveInfo);
+        }
     }
 }
