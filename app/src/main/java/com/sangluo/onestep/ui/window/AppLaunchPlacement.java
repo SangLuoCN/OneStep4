@@ -5,6 +5,7 @@ public final class AppLaunchPlacement {
     public enum Action {
         START_IN_MAIN,
         START_IN_SIDE_AND_PROMOTE,
+        REPLACE_SIDE_AND_PROMOTE,
         REPLACE_MAIN
     }
 
@@ -18,6 +19,17 @@ public final class AppLaunchPlacement {
 
     public static AppLaunchPlacement decide(int activeMainSlot, boolean mainOccupied,
                                             int emptySideSlot) {
+        return decide(activeMainSlot, mainOccupied, emptySideSlot, -1);
+    }
+
+    public static AppLaunchPlacement decide(int activeMainSlot, boolean mainOccupied,
+                                            int emptySideSlot, int mainDesktopSlot) {
+        if (mainDesktopSlot >= 0) {
+            return new AppLaunchPlacement(
+                    mainDesktopSlot == activeMainSlot
+                            ? Action.REPLACE_MAIN : Action.REPLACE_SIDE_AND_PROMOTE,
+                    mainDesktopSlot);
+        }
         if (!mainOccupied) {
             return new AppLaunchPlacement(Action.START_IN_MAIN, activeMainSlot);
         }

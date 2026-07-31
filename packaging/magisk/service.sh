@@ -2,15 +2,26 @@
 
 MODDIR="${0%/*}"
 PACKAGE_NAME="com.sangluo.onestep"
-LAUNCHER_COMPONENT="$PACKAGE_NAME/.HomeRedirectActivity"
+HOME_COMPONENT="$PACKAGE_NAME/.MainActivity"
 VIRTUAL_DISPLAY_ROLE="android.app.role.COMPANION_DEVICE_APP_STREAMING"
 LOG_FILE="$MODDIR/service.log"
 PACKAGE_SCAN_WAIT_SECONDS=30
+USER_UNLOCK_POLL_INTERVAL_SECONDS=0.2
+USER_UNLOCK_WAIT_ATTEMPTS=3000
 
 write_log() {
   message="$1"
   echo "$(date '+%Y-%m-%d %H:%M:%S') $message" >>"$LOG_FILE"
   log -t OneStepModule "$message" >/dev/null 2>&1 || true
+}
+
+run_and_log() {
+  logged_output="$("$@" 2>&1)"
+  logged_status=$?
+  if [ -n "$logged_output" ]; then
+    echo "$logged_output" >>"$LOG_FILE"
+  fi
+  return "$logged_status"
 }
 
 package_known() {
@@ -131,31 +142,131 @@ ensure_current_package() {
 
 restore_for_user() {
   user_id="$1"
-  if cmd package install-existing --user "$user_id" "$PACKAGE_NAME" \
-      >>"$LOG_FILE" 2>&1; then
-    write_log "Restored package for user $user_id with cmd package"
-  elif pm install-existing --user "$user_id" "$PACKAGE_NAME" \
-      >>"$LOG_FILE" 2>&1; then
-    write_log "Restored package for user $user_id with pm"
-  elif pm list packages --user "$user_id" 2>/dev/null \
+  if pm list packages --user "$user_id" 2>/dev/null \
       | grep -qx "package:$PACKAGE_NAME"; then
     write_log "Package already installed for user $user_id"
+  elif run_and_log cmd package install-existing --user "$user_id" \
+      "$PACKAGE_NAME"; then
+    write_log "Restored package for user $user_id with cmd package"
+  elif run_and_log pm install-existing --user "$user_id" "$PACKAGE_NAME"; then
+    write_log "Restored package for user $user_id with pm"
   else
     write_log "Failed to restore package for user $user_id"
     return
   fi
 
-  pm enable --user "$user_id" "$PACKAGE_NAME" >>"$LOG_FILE" 2>&1 || true
-  pm enable --user "$user_id" "$LAUNCHER_COMPONENT" >>"$LOG_FILE" 2>&1 || true
-
   if cmd role get-role-holders --user "$user_id" "$VIRTUAL_DISPLAY_ROLE" \
       2>/dev/null | grep -qx "$PACKAGE_NAME"; then
     write_log "Trusted display role already granted for user $user_id"
-  elif cmd role add-role-holder --user "$user_id" "$VIRTUAL_DISPLAY_ROLE" \
-      "$PACKAGE_NAME" 0 >>"$LOG_FILE" 2>&1; then
+  elif run_and_log cmd role add-role-holder --user "$user_id" \
+      "$VIRTUAL_DISPLAY_ROLE" "$PACKAGE_NAME" 0; then
     write_log "Granted trusted display role for user $user_id"
   else
     write_log "Trusted display role unavailable for user $user_id"
+  fi
+}
+
+user_unlocked() {
+  user_id="$1"
+  ce_available="$(getprop "sys.user.$user_id.ce_available")"
+  if [ "$ce_available" = "true" ]; then
+    return 0
+  fi
+  if [ -n "$ce_available" ]; then
+    return 1
+  fi
+  dumpsys user 2>/dev/null \
+      | sed -n "/UserInfo{$user_id:/,/State:/p" \
+      | grep -q 'State: RUNNING_UNLOCKED'
+}
+
+resolve_home_component() {
+  user_id="$1"
+  home_component="$(cmd package resolve-activity --brief --user "$user_id" \
+      -a android.intent.action.MAIN \
+      -c android.intent.category.HOME 2>/dev/null \
+      | grep '^[^[:space:]][^[:space:]]*/[^[:space:]]*$' | tail -n 1)"
+  if [ -z "$home_component" ]; then
+    home_component="$(pm resolve-activity --brief --user "$user_id" \
+        -a android.intent.action.MAIN \
+        -c android.intent.category.HOME 2>/dev/null \
+        | grep '^[^[:space:]][^[:space:]]*/[^[:space:]]*$' | tail -n 1)"
+  fi
+  printf '%s\n' "$home_component"
+}
+
+onestep_is_selected_home() {
+  user_id="$1"
+  resolved_home="$(resolve_home_component "$user_id")"
+  case "$resolved_home" in
+    "$PACKAGE_NAME"/*)
+      return 0
+      ;;
+  esac
+
+  cmd role get-role-holders --user "$user_id" android.app.role.HOME \
+      2>/dev/null | grep -qx "$PACKAGE_NAME"
+}
+
+restore_onestep_home_selection() {
+  user_id="$1"
+  selection_attempt=0
+  while [ "$selection_attempt" -lt 5 ]; do
+    if run_and_log cmd package set-home-activity --user "$user_id" \
+        "$HOME_COMPONENT"; then
+      write_log "Restored OneStep HOME selection for user $user_id"
+      return 0
+    fi
+    selection_attempt=$((selection_attempt + 1))
+    sleep "$USER_UNLOCK_POLL_INTERVAL_SECONDS"
+  done
+  write_log "Unable to restore OneStep HOME selection for user $user_id"
+  return 1
+}
+
+restore_selected_home_when_unlocked() {
+  user_id="$1"
+  was_selected_before_recovery="$2"
+  if [ "$was_selected_before_recovery" != "1" ] \
+      && ! onestep_is_selected_home "$user_id"; then
+    write_log "HOME restore skipped for user $user_id: OneStep is not selected"
+    return
+  fi
+
+  restore_onestep_home_selection "$user_id"
+  unlock_attempt=0
+  while ! user_unlocked "$user_id" \
+      && [ "$unlock_attempt" -lt "$USER_UNLOCK_WAIT_ATTEMPTS" ]; do
+    sleep "$USER_UNLOCK_POLL_INTERVAL_SECONDS"
+    unlock_attempt=$((unlock_attempt + 1))
+  done
+  if [ "$unlock_attempt" -ge "$USER_UNLOCK_WAIT_ATTEMPTS" ] \
+      && ! user_unlocked "$user_id"; then
+    write_log "HOME restore timed out waiting for user $user_id unlock"
+    return
+  fi
+
+  write_log "Restoring selected OneStep HOME for user $user_id"
+  start_output="$(cmd activity start-activity --user "$user_id" \
+      -a android.intent.action.MAIN \
+      -c android.intent.category.HOME \
+      -n "$HOME_COMPONENT" 2>&1)"
+  start_status=$?
+  if [ "$start_status" -ne 0 ]; then
+    start_output="$(am start --user "$user_id" \
+        -a android.intent.action.MAIN \
+        -c android.intent.category.HOME \
+        -n "$HOME_COMPONENT" 2>&1)"
+    start_status=$?
+  fi
+  if [ -n "$start_output" ]; then
+    echo "$start_output" >>"$LOG_FILE"
+  fi
+  if [ "$start_status" -eq 0 ] \
+      && ! echo "$start_output" | grep -Eqi '(^|[[:space:]])(Error|Exception):'; then
+    write_log "Restored selected OneStep HOME for user $user_id"
+  else
+    write_log "Failed to restore selected OneStep HOME for user $user_id: status=$start_status"
   fi
 }
 
@@ -184,6 +295,17 @@ while ! package_known && [ "$scan_wait" -lt "$PACKAGE_SCAN_WAIT_SECONDS" ]; do
   scan_wait=$((scan_wait + 2))
 done
 
+current_user="$(cmd activity get-current-user 2>/dev/null)"
+case "$current_user" in
+  ''|*[!0-9]*)
+    current_user=0
+    ;;
+esac
+onestep_home_was_selected=0
+if onestep_is_selected_home "$current_user"; then
+  onestep_home_was_selected=1
+fi
+
 if ! ensure_current_package 0 "$module_version_code"; then
   write_log "PackageManager update failed for $PACKAGE_NAME"
   exit 1
@@ -191,14 +313,9 @@ fi
 
 restore_for_user 0
 
-current_user="$(cmd activity get-current-user 2>/dev/null)"
-case "$current_user" in
-  ''|*[!0-9]*)
-    current_user=0
-    ;;
-esac
 if [ "$current_user" != "0" ]; then
   restore_for_user "$current_user"
 fi
 
 write_log "OneStep package recovery completed"
+restore_selected_home_when_unlocked "$current_user" "$onestep_home_was_selected"

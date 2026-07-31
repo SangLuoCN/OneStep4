@@ -27,15 +27,14 @@ final class VirtualDisplayHomeSupport {
                                  Surface surface, int flags) {
         String homeSupportFailure = "";
         boolean hookActive = isPrimaryHomeHookActive();
-        if (shouldRequestHomeSupport(
-                Build.VERSION.SDK_INT,
-                readBooleanProperty(ENHANCEMENT_PROPERTY),
-                hookActive)) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+                && shouldRequestHomeSupport(
+                        Build.VERSION.SDK_INT,
+                        readBooleanProperty(ENHANCEMENT_PROPERTY),
+                        hookActive)) {
             try {
-                VirtualDisplayConfig config = buildHomeSupportedConfig(
-                        name, width, height, densityDpi, surface, flags);
-                return new CreationResult(
-                        displayManager.createVirtualDisplay(config), true, "", hookActive);
+                return createHomeSupportedDisplay(displayManager, name, width, height,
+                        densityDpi, surface, flags, hookActive);
             } catch (ReflectiveOperationException | LinkageError | RuntimeException e) {
                 homeSupportFailure = describeFailure(e);
             }
@@ -74,6 +73,18 @@ final class VirtualDisplayHomeSupport {
         } catch (ReflectiveOperationException | RuntimeException e) {
             return false;
         }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private static CreationResult createHomeSupportedDisplay(
+            DisplayManager displayManager, String name,
+            int width, int height, int densityDpi,
+            Surface surface, int flags, boolean hookActive)
+            throws ReflectiveOperationException {
+        VirtualDisplayConfig config = buildHomeSupportedConfig(
+                name, width, height, densityDpi, surface, flags);
+        return new CreationResult(
+                displayManager.createVirtualDisplay(config), true, "", hookActive);
     }
 
     @RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)

@@ -149,6 +149,7 @@ unzip -qq "$OUT_ZIP" \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
     "post-fs-data.sh" \
+    "boot-completed.sh" \
     "uninstall.sh" \
     "action.sh" \
     "statusbar-post-fs-data.sh" \
@@ -164,6 +165,7 @@ for required_entry in \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
     "post-fs-data.sh" \
+    "boot-completed.sh" \
     "uninstall.sh" \
     "action.sh" \
     "statusbar-post-fs-data.sh" \

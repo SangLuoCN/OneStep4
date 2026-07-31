@@ -28,4 +28,21 @@ public class AppLaunchPlacementTest {
         assertEquals(AppLaunchPlacement.Action.REPLACE_MAIN, placement.action);
         assertEquals(1, placement.targetSlot);
     }
+
+    @Test
+    public void displayedMainDesktopReplacesEmptySideSlotPriority() {
+        AppLaunchPlacement placement = AppLaunchPlacement.decide(0, true, 3, 2);
+
+        assertEquals(
+                AppLaunchPlacement.Action.REPLACE_SIDE_AND_PROMOTE, placement.action);
+        assertEquals(2, placement.targetSlot);
+    }
+
+    @Test
+    public void displayedMainDesktopInMainIsReplacedDirectly() {
+        AppLaunchPlacement placement = AppLaunchPlacement.decide(2, true, 0, 2);
+
+        assertEquals(AppLaunchPlacement.Action.REPLACE_MAIN, placement.action);
+        assertEquals(2, placement.targetSlot);
+    }
 }

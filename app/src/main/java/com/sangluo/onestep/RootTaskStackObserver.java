@@ -18,8 +18,11 @@ final class RootTaskStackObserver extends Binder {
     private static final String DESCRIPTOR = "android.app.ITaskStackListener";
 
     private final RootVirtualDisplayBridge displayBridge;
+    private final int taskStackChangedTransaction;
     private final int taskMovedToFrontTransaction;
     private final int taskRemovalStartedTransaction;
+    private final boolean movedToFrontUsesTaskInfo;
+    private final boolean removalStartedUsesTaskInfo;
     @SuppressWarnings("FieldCanBeLocal")
     private final Object listenerProxy;
 
@@ -27,10 +30,16 @@ final class RootTaskStackObserver extends Binder {
                                   Class<?> listenerInterface, Class<?> listenerStub)
             throws ReflectiveOperationException {
         this.displayBridge = displayBridge;
-        taskMovedToFrontTransaction = readTransaction(
+        taskStackChangedTransaction = readOptionalTransaction(
+                listenerStub, "TRANSACTION_onTaskStackChanged");
+        Method movedToFront = findListenerMethod(listenerInterface, "onTaskMovedToFront");
+        Method removalStarted = findListenerMethod(listenerInterface, "onTaskRemovalStarted");
+        taskMovedToFrontTransaction = movedToFront == null ? -1 : readOptionalTransaction(
                 listenerStub, "TRANSACTION_onTaskMovedToFront");
-        taskRemovalStartedTransaction = readTransaction(
+        taskRemovalStartedTransaction = removalStarted == null ? -1 : readOptionalTransaction(
                 listenerStub, "TRANSACTION_onTaskRemovalStarted");
+        movedToFrontUsesTaskInfo = usesTaskInfoPayload(movedToFront);
+        removalStartedUsesTaskInfo = usesTaskInfoPayload(removalStarted);
         attachInterface(null, DESCRIPTOR);
         listenerProxy = Proxy.newProxyInstance(
                 listenerInterface.getClassLoader(), new Class<?>[] {listenerInterface},
@@ -54,14 +63,7 @@ final class RootTaskStackObserver extends Binder {
 
     static RootTaskStackObserver install(RootVirtualDisplayBridge displayBridge)
             throws ReflectiveOperationException {
-        Class<?> activityTaskManagerClass = Class.forName("android.app.ActivityTaskManager");
-        Method getService = activityTaskManagerClass.getDeclaredMethod("getService");
-        getService.setAccessible(true);
-        Object activityTaskManager = getService.invoke(null);
-        if (activityTaskManager == null) {
-            throw new IllegalStateException("activity task manager unavailable");
-        }
-
+        Object activityTaskManager = RootActivityManagerCompat.getTaskService();
         Class<?> listenerInterface = Class.forName("android.app.ITaskStackListener");
         Class<?> listenerStub = Class.forName("android.app.ITaskStackListener$Stub");
         RootTaskStackObserver observer = new RootTaskStackObserver(
@@ -84,17 +86,30 @@ final class RootTaskStackObserver extends Binder {
             return true;
         }
         data.enforceInterface(DESCRIPTOR);
+        if (code == taskStackChangedTransaction) {
+            displayBridge.notifyTaskEvent(
+                    RootVirtualDisplayBridge.TASK_EVENT_STACK_CHANGED, -1, -1, "");
+            return true;
+        }
         if (code == taskMovedToFrontTransaction) {
-            notifyTaskEvent(RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT,
-                    readTaskInfo(data));
+            readAndNotifyTaskEvent(RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT,
+                    movedToFrontUsesTaskInfo, data);
             return true;
         }
         if (code == taskRemovalStartedTransaction) {
-            notifyTaskEvent(RootVirtualDisplayBridge.TASK_EVENT_REMOVAL_STARTED,
-                    readTaskInfo(data));
+            readAndNotifyTaskEvent(RootVirtualDisplayBridge.TASK_EVENT_REMOVAL_STARTED,
+                    removalStartedUsesTaskInfo, data);
             return true;
         }
         return true;
+    }
+
+    private void readAndNotifyTaskEvent(int event, boolean usesTaskInfo, Parcel data) {
+        if (!usesTaskInfo) {
+            displayBridge.notifyTaskEvent(event, -1, data.readInt(), "");
+            return;
+        }
+        notifyTaskEvent(event, readTaskInfo(data));
     }
 
     private void notifyTaskEvent(int event, ActivityManager.RunningTaskInfo taskInfo) {
@@ -104,7 +119,8 @@ final class RootTaskStackObserver extends Binder {
         int displayId = readDisplayId(taskInfo);
         ComponentName topActivity = taskInfo.topActivity;
         String packageName = topActivity == null ? "" : topActivity.getPackageName();
-        displayBridge.notifyTaskEvent(event, displayId, taskInfo.taskId, packageName);
+        displayBridge.notifyTaskEvent(
+                event, displayId, readTaskId(taskInfo), packageName);
     }
 
     private static ActivityManager.RunningTaskInfo readTaskInfo(Parcel data) {
@@ -113,18 +129,43 @@ final class RootTaskStackObserver extends Binder {
     }
 
     private static int readDisplayId(ActivityManager.RunningTaskInfo taskInfo) {
+        return readIntField(taskInfo, "displayId", -1);
+    }
+
+    private static int readTaskId(ActivityManager.RunningTaskInfo taskInfo) {
+        int taskId = readIntField(taskInfo, "taskId", -1);
+        return taskId > 0 ? taskId : readIntField(taskInfo, "id", -1);
+    }
+
+    private static int readIntField(Object target, String name, int fallback) {
         try {
-            Field field = taskInfo.getClass().getField("displayId");
-            return field.getInt(taskInfo);
+            Field field = target.getClass().getField(name);
+            return field.getInt(target);
         } catch (ReflectiveOperationException | RuntimeException e) {
-            return -1;
+            return fallback;
         }
     }
 
-    private static int readTransaction(Class<?> stubClass, String fieldName)
-            throws ReflectiveOperationException {
-        Field field = stubClass.getDeclaredField(fieldName);
-        field.setAccessible(true);
-        return field.getInt(null);
+    private static Method findListenerMethod(Class<?> listenerInterface, String name) {
+        for (Method method : listenerInterface.getMethods()) {
+            if (name.equals(method.getName()) && method.getParameterTypes().length == 1) {
+                return method;
+            }
+        }
+        return null;
+    }
+
+    static boolean usesTaskInfoPayload(Method method) {
+        return method != null && method.getParameterTypes()[0] != int.class;
+    }
+
+    private static int readOptionalTransaction(Class<?> stubClass, String fieldName) {
+        try {
+            Field field = stubClass.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field.getInt(null);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return -1;
+        }
     }
 }

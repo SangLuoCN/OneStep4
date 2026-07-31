@@ -212,6 +212,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int ROOT_INPUT_BRIDGE_READY_TIMEOUT_MS = 2000;
     private static final int ROOT_INPUT_BRIDGE_READY_RETRY_MS = 50;
     private static final int ROOT_DISPLAY_REGISTRATION_TIMEOUT_MS = 800;
+    private static final String TASK_STACK_LIST_COMMAND =
+            "cmd activity stack list 2>/dev/null || am stack list";
     private static final int VIRTUAL_DISPLAY_RELEASE_RETRY_MS = 120;
     private static final int VIRTUAL_DISPLAY_RELEASE_MAX_ATTEMPTS = 4;
     private static final int VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX = 1080;
@@ -739,7 +741,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         try {
             rootExecutor.execute(() -> {
                 ShellCommandResult stackList = runPrivilegedCommand(
-                        "cmd activity stack list", "validate reused hosted app", false);
+                        TASK_STACK_LIST_COMMAND, "validate reused hosted app", false);
                 int resolvedTaskId = stackList.exitCode == 0
                         && !TextUtils.isEmpty(stackList.output)
                         ? findVisibleHostedTaskId(
@@ -1030,7 +1032,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 int resolvedTaskId = targetTaskId;
                 if (resolvedTaskId <= 0) {
                     ShellCommandResult stackList = runPrivilegedCommand(
-                            "cmd activity stack list",
+                            TASK_STACK_LIST_COMMAND,
                             "resolve task before back", false);
                     if (stackList.exitCode == 0 && !TextUtils.isEmpty(stackList.output)) {
                         resolvedTaskId = HostedTaskParser.findHostedTaskId(
@@ -1126,7 +1128,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         try {
             rootExecutor.execute(() -> {
                 ShellCommandResult stackList = runPrivilegedCommand(
-                        "cmd activity stack list", "check app after back", false);
+                        TASK_STACK_LIST_COMMAND, "check app after back", false);
                 boolean scanSucceeded = stackList.exitCode == 0
                         && !TextUtils.isEmpty(stackList.output);
                 boolean taskPresent = scanSucceeded && (targetTaskId > 0
@@ -1182,15 +1184,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 && expectedApp.componentName.equals(currentApp.componentName);
     }
 
-    void onSystemActivityResuming(String resumedPackage) {
-        if (TextUtils.isEmpty(resumedPackage) || displayId <= DEFAULT_DISPLAY_ID
-                || !isMainDisplaySlot(slot) || embeddedSlotClosing[slot]) {
+    void checkHostedTaskAfterSystemTaskChange() {
+        if (displayId <= DEFAULT_DISPLAY_ID || !isMainDisplaySlot(slot)
+                || embeddedSlotClosing[slot]) {
             return;
         }
         LauncherApp app = slot >= 0 && slot < MAX_WINDOWS ? windowApps[slot] : null;
-        if (app == null || app.isHomeEntry()
-                || TextUtils.equals(app.packageName, resumedPackage)
-                || isHostedSurfaceRevealPending(app)) {
+        if (app == null || app.isHomeEntry() || isHostedSurfaceRevealPending(app)) {
             return;
         }
         int targetDisplayId = displayId;
@@ -1199,7 +1199,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         try {
             rootExecutor.execute(() -> {
                 ShellCommandResult stackList = runPrivilegedCommand(
-                        "cmd activity stack list",
+                        TASK_STACK_LIST_COMMAND,
                         "check hosted task on activity resume", false);
                 boolean scanSucceeded = stackList.exitCode == 0
                         && !TextUtils.isEmpty(stackList.output);
@@ -1215,8 +1215,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         return;
                     }
                     if (scanSucceeded && !taskPresent) {
-                        Log.i(TAG, "Hosted task disappeared while system resumed "
-                                + resumedPackage + ": slot=" + slot
+                        Log.i(TAG, "Hosted task disappeared after system task change: slot="
+                                + slot
                                 + ", display=" + targetDisplayId
                                 + ", app=" + app.packageName);
                         hostedTaskId = -1;
@@ -1240,6 +1240,15 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         LauncherApp currentApp = windowApps[slot];
         return currentApp != null
                 && expectedApp.componentName.equals(currentApp.componentName);
+    }
+
+    boolean matchesHostedTask(LauncherApp app, int taskId) {
+        if (app == null || taskId <= 0 || taskId != hostedTaskId
+                || slot < 0 || slot >= MAX_WINDOWS) {
+            return false;
+        }
+        LauncherApp currentApp = windowApps[slot];
+        return currentApp != null && app.componentName.equals(currentApp.componentName);
     }
 
     @Override
@@ -1286,7 +1295,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         try {
             rootExecutor.execute(() -> {
                 ShellCommandResult stackList = runPrivilegedCommand(
-                        "cmd activity stack list", "validate hosted task visibility", false);
+                        TASK_STACK_LIST_COMMAND, "validate hosted task visibility", false);
                 int resolvedTaskId = stackList.exitCode == 0
                         && !TextUtils.isEmpty(stackList.output)
                         ? findVisibleHostedTaskId(stackList.output, targetDisplayId, app) : -1;
@@ -2537,7 +2546,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         return;
                     }
                     ShellCommandResult stackList = runPrivilegedCommand(
-                            "cmd activity stack list", "resolve task after " + reason, false);
+                            TASK_STACK_LIST_COMMAND, "resolve task after " + reason, false);
                     if (token != taskResolutionToken || targetDisplayId != displayId) {
                         return;
                     }

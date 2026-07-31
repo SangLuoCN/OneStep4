@@ -148,7 +148,6 @@ public class MainActivity extends Activity {
     private static final int TOP_NAV_BUTTON_SIZE_DP = 26;
     private static final int TOP_NAV_BUTTON_SPACING_DP = 8;
     private static final int TOP_NAV_ICON_SIZE_DP = 20;
-    private static final int STATUS_BAR_SPACING_TRIM_DP = 16;
     private static final int MEDIA_ROOT_COMMAND_TIMEOUT_SECONDS = 8;
     private static final String[] KERNEL_SU_MANAGER_PACKAGES = {
             "me.weishu.kernelsu",
@@ -1001,20 +1000,31 @@ public class MainActivity extends Activity {
 
     private void handleSystemTaskEvent(
             int event, int displayId, int taskId, String packageName) {
-        if (activityDestroyed || displayId <= Display.DEFAULT_DISPLAY) {
+        if (activityDestroyed || activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS) {
             return;
         }
-        RootVirtualDisplayHost rootHost = findRootVirtualDisplayHost(displayId);
-        if (rootHost == null || rootHost.getSlot() != activeMainSlot) {
+        EmbeddedAppHost activeHost = embeddedHosts[activeMainSlot];
+        if (!(activeHost instanceof RootVirtualDisplayHost)) {
+            return;
+        }
+        RootVirtualDisplayHost rootHost = (RootVirtualDisplayHost) activeHost;
+        if (displayId > Display.DEFAULT_DISPLAY
+                && rootHost.getDisplayId() != displayId) {
             return;
         }
         LauncherApp currentApp = windowApps[activeMainSlot];
         if (currentApp == null || currentApp.isHomeEntry()) {
             return;
         }
+        if (event == RootVirtualDisplayBridge.TASK_EVENT_STACK_CHANGED) {
+            rootHost.checkHostedTaskAfterSystemTaskChange();
+            return;
+        }
         boolean hostedTaskRemovalStarted = event
                 == RootVirtualDisplayBridge.TASK_EVENT_REMOVAL_STARTED
-                && TextUtils.equals(currentApp.packageName, packageName);
+                && (TextUtils.equals(currentApp.packageName, packageName)
+                || (TextUtils.isEmpty(packageName)
+                && rootHost.matchesHostedTask(currentApp, taskId)));
         boolean systemDesktopMovedToFront = event
                 == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
                 && isBuiltInDesktopPackage(packageName);
@@ -1035,6 +1045,10 @@ public class MainActivity extends Activity {
                     + activeMainSlot + ", app=" + currentApp.packageName);
             rootHost.concealHostedSurfaceForDesktopTakeover(currentApp);
             onHostedAppExitedAfterBack(activeMainSlot, currentApp, null);
+            return;
+        }
+        if (displayId <= Display.DEFAULT_DISPLAY) {
+            rootHost.checkHostedTaskAfterSystemTaskChange();
         }
     }
 
@@ -2781,6 +2795,26 @@ public class MainActivity extends Activity {
         return -1;
     }
 
+    private boolean isDisplayedMainDesktopSlot(int slot) {
+        if (slot < 0 || slot >= MAX_WINDOWS || embeddedSlotClosing[slot]) {
+            return false;
+        }
+        LauncherApp app = windowApps[slot];
+        return isDesktopHomeSlot(slot) || (app != null && app.isHomeEntry());
+    }
+
+    private int findDisplayedMainDesktopSlot() {
+        if (isDisplayedMainDesktopSlot(activeMainSlot)) {
+            return activeMainSlot;
+        }
+        for (int slot : sideSlotOrder) {
+            if (isWindowSlotEnabled(slot) && isDisplayedMainDesktopSlot(slot)) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
     private void showInternalSettingsPage() {
         if (settingsPanelController == null || activeMainSlot < 0
                 || activeMainSlot >= MAX_WINDOWS || isWindowAnimationRunning()
@@ -3525,6 +3559,12 @@ public class MainActivity extends Activity {
                 switchMainSlot(existingSlot, true);
                 return;
             }
+            int mainDesktopSlot = findDisplayedMainDesktopSlot();
+            if (mainDesktopSlot >= 0 && mainDesktopSlot != activeMainSlot) {
+                suppressEmbeddedStarts = false;
+                stageAppForMainDesktopReplacement(mainDesktopSlot, app);
+                return;
+            }
             int emptySideSlot = findEmptySideSlot();
             if (emptySideSlot >= 0) {
                 stageAppForMainPromotion(emptySideSlot, app);
@@ -3550,15 +3590,10 @@ public class MainActivity extends Activity {
 
         suppressEmbeddedStarts = false;
         int emptySideSlot = findEmptySideSlot();
-        int desktopHomeSlot = findDesktopHomeSlot();
         boolean mainOccupied = windowApps[activeMainSlot] != null;
-        if (desktopHomeSlot >= 0 && desktopHomeSlot != activeMainSlot
-                && mainOccupied && emptySideSlot < 0) {
-            stageAppForDesktopHomePromotion(desktopHomeSlot, app);
-            return;
-        }
+        int mainDesktopSlot = findDisplayedMainDesktopSlot();
         AppLaunchPlacement placement = AppLaunchPlacement.decide(
-                activeMainSlot, mainOccupied, emptySideSlot);
+                activeMainSlot, mainOccupied, emptySideSlot, mainDesktopSlot);
         switch (placement.action) {
             case START_IN_MAIN:
                 startAppInSlot(placement.targetSlot, app);
@@ -3566,8 +3601,15 @@ public class MainActivity extends Activity {
             case START_IN_SIDE_AND_PROMOTE:
                 stageAppForMainPromotion(placement.targetSlot, app);
                 break;
+            case REPLACE_SIDE_AND_PROMOTE:
+                stageAppForMainDesktopReplacement(placement.targetSlot, app);
+                break;
             case REPLACE_MAIN:
-                replaceAppInSlot(placement.targetSlot, app);
+                if (isDesktopHomeSlot(placement.targetSlot)) {
+                    replaceDesktopHomeWithApp(app);
+                } else {
+                    replaceAppInSlot(placement.targetSlot, app);
+                }
                 break;
         }
     }
@@ -3611,13 +3653,18 @@ public class MainActivity extends Activity {
             replaceDesktopHomeWithApp(app);
             return;
         }
+        LauncherApp currentApp = windowApps[slot];
+        if (currentApp != null && currentApp.isHomeEntry()) {
+            replaceAppInSlot(slot, app);
+            return;
+        }
         startAppInSlot(slot, app, false, false);
     }
 
-    private void stageAppForDesktopHomePromotion(int slot, LauncherApp app) {
+    private void stageAppForMainDesktopReplacement(int slot, LauncherApp app) {
         if (activityDestroyed || slot < 0 || slot >= MAX_WINDOWS || app == null
-                || slot == activeMainSlot || !isDesktopHomeSlot(slot)
-                || windowApps[slot] != null || embeddedSlotClosing[slot]
+                || slot == activeMainSlot || !isDisplayedMainDesktopSlot(slot)
+                || embeddedSlotClosing[slot]
                 || !sideSlotOrder.contains(slot) || isWindowAnimationRunning()
                 || mainSlotSwitchPendingSlot >= 0 || mainContentReplacementPendingSlot >= 0
                 || pendingMainAppStartSlot >= 0 || pendingInternalSettingsSlot >= 0
@@ -3627,7 +3674,9 @@ public class MainActivity extends Activity {
         pendingMainAppStartSlot = slot;
         pendingMainAppStart = app;
         embeddedSyncGenerations[slot]++;
-        windowViews[slot].setLiveAppVisible(false);
+        if (isDesktopHomeSlot(slot)) {
+            windowViews[slot].setLiveAppVisible(false);
+        }
         switchMainSlot(slot, true);
     }
 
@@ -5159,9 +5208,7 @@ public class MainActivity extends Activity {
     }
 
     private int getStatusBarSpacingHeight() {
-        return statusBarSpacingEnabled
-                ? Math.max(0, getStatusBarSafeInsetHeight() - dp(STATUS_BAR_SPACING_TRIM_DP))
-                : 0;
+        return statusBarSpacingEnabled ? getStatusBarSafeInsetHeight() : 0;
     }
 
     private int getStatusBarSafeInsetHeight() {

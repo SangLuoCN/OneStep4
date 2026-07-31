@@ -45,13 +45,7 @@ final class RootCrossAppLaunchController extends Binder {
 
     static RootCrossAppLaunchController install(RootVirtualDisplayBridge displayBridge)
             throws ReflectiveOperationException {
-        Class<?> activityTaskManagerClass = Class.forName("android.app.ActivityTaskManager");
-        Method getService = activityTaskManagerClass.getDeclaredMethod("getService");
-        getService.setAccessible(true);
-        Object activityTaskManager = getService.invoke(null);
-        if (activityTaskManager == null) {
-            throw new IllegalStateException("activity task manager unavailable");
-        }
+        Object activityTaskManager = RootActivityManagerCompat.getTaskService();
 
         Class<?> controllerInterface = Class.forName("android.app.IActivityController");
         Class<?> controllerStubClass = Class.forName("android.app.IActivityController$Stub");

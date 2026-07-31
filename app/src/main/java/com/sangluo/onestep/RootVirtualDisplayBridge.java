@@ -21,7 +21,6 @@ import java.io.InputStreamReader;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
 /** Owns virtual displays inside the root app_process bridge. */
 public final class RootVirtualDisplayBridge extends Binder {
@@ -35,6 +34,7 @@ public final class RootVirtualDisplayBridge extends Binder {
             IBinder.FIRST_CALL_TRANSACTION + 1;
     public static final int TASK_EVENT_MOVED_TO_FRONT = 1;
     public static final int TASK_EVENT_REMOVAL_STARTED = 2;
+    public static final int TASK_EVENT_STACK_CHANGED = 3;
     public static final String SERVICE_NAME_PREFIX = "onestep_display_";
     public static final int TRANSACTION_CREATE = IBinder.FIRST_CALL_TRANSACTION;
     public static final int TRANSACTION_RESIZE = IBinder.FIRST_CALL_TRANSACTION + 1;
@@ -310,10 +310,7 @@ public final class RootVirtualDisplayBridge extends Binder {
                     "-f", String.valueOf(0x10010000))
                     .redirectErrorStream(true)
                     .start();
-            if (!process.waitFor(2, TimeUnit.SECONDS)) {
-                process.destroy();
-                throw new IllegalStateException("display access activity start timed out");
-            }
+            waitForProcess(process, 2000L);
             StringBuilder output = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(process.getInputStream()))) {
@@ -332,12 +329,26 @@ public final class RootVirtualDisplayBridge extends Binder {
                     + " output=" + output);
         } catch (IOException e) {
             throw new IllegalStateException("cannot launch display access activity", e);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("display access activity start interrupted", e);
         } finally {
             if (process != null) {
                 process.destroy();
+            }
+        }
+    }
+
+    private static void waitForProcess(Process process, long timeoutMs) {
+        long deadline = SystemClock.uptimeMillis() + timeoutMs;
+        while (true) {
+            try {
+                process.exitValue();
+                return;
+            } catch (IllegalThreadStateException stillRunning) {
+                if (SystemClock.uptimeMillis() >= deadline) {
+                    process.destroy();
+                    throw new IllegalStateException(
+                            "display access activity start timed out");
+                }
+                SystemClock.sleep(20L);
             }
         }
     }
@@ -508,7 +519,7 @@ public final class RootVirtualDisplayBridge extends Binder {
     }
 
     void notifyTaskEvent(int event, int displayId, int taskId, String packageName) {
-        if (displayId <= Display.DEFAULT_DISPLAY || !ownsDisplay(displayId)) {
+        if (displayId > Display.DEFAULT_DISPLAY && !ownsDisplay(displayId)) {
             return;
         }
         LaunchCallbackRecord callback;

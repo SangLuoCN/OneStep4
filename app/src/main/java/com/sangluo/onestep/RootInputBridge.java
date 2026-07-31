@@ -485,10 +485,7 @@ public final class RootInputBridge {
 
     private Object getActivityTaskManagerService() throws ReflectiveOperationException {
         if (activityTaskManagerService == null) {
-            Class<?> activityTaskManagerClass = Class.forName("android.app.ActivityTaskManager");
-            Method getServiceMethod = activityTaskManagerClass.getDeclaredMethod("getService");
-            getServiceMethod.setAccessible(true);
-            activityTaskManagerService = getServiceMethod.invoke(null);
+            activityTaskManagerService = RootActivityManagerCompat.getTaskService();
         }
         return activityTaskManagerService;
     }

@@ -156,6 +156,7 @@ unzip -qq "$OUT_ZIP" \
     "zygisk-payload/arm64-v8a.so" \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
+    "service.sh" \
     "zygisk-toggle.sh" \
     "uninstall.sh" \
     "action.sh" \
@@ -171,6 +172,7 @@ for required_entry in \
     "zygisk-payload/arm64-v8a.so" \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
+    "service.sh" \
     "zygisk-toggle.sh" \
     "uninstall.sh" \
     "action.sh" \
