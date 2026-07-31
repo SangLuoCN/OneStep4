@@ -7,6 +7,12 @@ final class CrossAppLaunchRoutingPolicy {
     private CrossAppLaunchRoutingPolicy() {
     }
 
+    static boolean shouldBypassHomeLaunch(
+            String action, boolean hasHomeCategory, boolean hasSecondaryHomeCategory) {
+        return Intent.ACTION_MAIN.equals(action)
+                && (hasHomeCategory || hasSecondaryHomeCategory);
+    }
+
     static boolean shouldPreserveCallerTask(String action, int flags) {
         if ((flags & Intent.FLAG_ACTIVITY_FORWARD_RESULT) != 0) {
             return true;

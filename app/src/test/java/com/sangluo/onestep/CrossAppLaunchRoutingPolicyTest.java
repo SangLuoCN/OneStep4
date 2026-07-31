@@ -9,6 +9,24 @@ import static org.junit.Assert.assertTrue;
 
 public class CrossAppLaunchRoutingPolicyTest {
     @Test
+    public void bypassesPrimaryHomeLaunch() {
+        assertTrue(CrossAppLaunchRoutingPolicy.shouldBypassHomeLaunch(
+                Intent.ACTION_MAIN, true, false));
+    }
+
+    @Test
+    public void bypassesSecondaryHomeLaunch() {
+        assertTrue(CrossAppLaunchRoutingPolicy.shouldBypassHomeLaunch(
+                Intent.ACTION_MAIN, false, true));
+    }
+
+    @Test
+    public void doesNotBypassLauncherMainLaunch() {
+        assertFalse(CrossAppLaunchRoutingPolicy.shouldBypassHomeLaunch(
+                Intent.ACTION_MAIN, false, false));
+    }
+
+    @Test
     public void preservesStorageAccessFrameworkContracts() {
         assertTrue(preserves(Intent.ACTION_GET_CONTENT));
         assertTrue(preserves(Intent.ACTION_OPEN_DOCUMENT));

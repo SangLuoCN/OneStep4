@@ -147,6 +147,14 @@ final class RootCrossAppLaunchController extends Binder {
             if (source == null) {
                 return true;
             }
+            if (CrossAppLaunchRoutingPolicy.shouldBypassHomeLaunch(
+                    intent.getAction(), intent.hasCategory(Intent.CATEGORY_HOME),
+                    intent.hasCategory(Intent.CATEGORY_SECONDARY_HOME))) {
+                displayBridge.consumeArmedRoutingSource(source);
+                Log.i(TAG, "bypassed HOME launch routing: display=" + source.displayId
+                        + " target=" + targetPackage);
+                return true;
+            }
             if (CrossAppLaunchRoutingPolicy.shouldPreserveCallerTask(
                     intent.getAction(), intent.getFlags())) {
                 displayBridge.consumeArmedRoutingSource(source);

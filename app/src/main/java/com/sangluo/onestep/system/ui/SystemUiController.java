@@ -5,7 +5,6 @@ import android.app.Activity;
 import android.app.Dialog;
 import android.graphics.Color;
 import android.os.Build;
-import android.os.Handler;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -21,27 +20,22 @@ import java.util.function.BooleanSupplier;
 public final class SystemUiController implements AutoCloseable {
     private static final String TAG = "OneStep40";
     private final Activity activity;
-    private final Handler handler;
     private final BooleanSupplier hideStatusBar;
     private final BooleanSupplier destroyed;
     private final BooleanSupplier systemAppInstall;
     private final Runnable backHandler;
-    private final Runnable focusHostedDisplay;
     private Dialog defaultDisplayFocusWindow;
     private Boolean appliedHideStatusBar;
     private Boolean appliedSystemAppInstall;
 
-    public SystemUiController(Activity activity, Handler handler,
+    public SystemUiController(Activity activity,
                               BooleanSupplier hideStatusBar, BooleanSupplier destroyed,
-                              BooleanSupplier systemAppInstall, Runnable backHandler,
-                              Runnable focusHostedDisplay) {
+                              BooleanSupplier systemAppInstall, Runnable backHandler) {
         this.activity = activity;
-        this.handler = handler;
         this.hideStatusBar = hideStatusBar;
         this.destroyed = destroyed;
         this.systemAppInstall = systemAppInstall;
         this.backHandler = backHandler;
-        this.focusHostedDisplay = focusHostedDisplay;
     }
 
     public void apply() {
@@ -116,9 +110,6 @@ public final class SystemUiController implements AutoCloseable {
                     }
                     return true;
                 }
-                if (event.getAction() == KeyEvent.ACTION_UP) {
-                    handler.post(focusHostedDisplay);
-                }
                 return false;
             });
             FrameLayout content = new FrameLayout(focusWindow.getContext());
@@ -158,7 +149,6 @@ public final class SystemUiController implements AutoCloseable {
             window.setLayout(1, 1);
             content.requestFocus();
             Log.i(TAG, "Default display key focus anchor shown");
-            handler.post(focusHostedDisplay);
         } catch (RuntimeException e) {
             dismissDefaultDisplayFocusWindow();
             Log.w(TAG, "Default display key focus anchor failed: "

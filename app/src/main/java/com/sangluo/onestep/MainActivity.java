@@ -169,6 +169,8 @@ public class MainActivity extends Activity {
     private static final int VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX = 1080;
     private static final long POST_ANIMATION_NON_CRITICAL_WORK_DELAY_MS = 64L;
     private static final long CROSS_APP_ROUTE_RETRY_MS = 60L;
+    private static final long DEFAULT_HOME_RESTORE_DELAY_MS = 80L;
+    private static final long DEFAULT_NAVIGATION_FOCUS_RESTORE_DELAY_MS = 80L;
     private static final int MAX_PENDING_CROSS_APP_ROUTES = 8;
     private static final int DEFERRED_MEDIA_SESSION_REFRESH = 1;
     private static final int DEFERRED_MEDIA_UI_REFRESH = 1 << 1;
@@ -489,10 +491,12 @@ public class MainActivity extends Activity {
     private boolean pipDockApplied;
     private int pipTaskId = -1;
     private int pipMonitorGeneration;
+    private boolean defaultHomeRestorePending;
     private final Rect pipRestoreBounds = new Rect();
     private final Runnable flushDeferredWindowSwitchWorkRunnable =
             this::flushDeferredWindowSwitchWork;
     private final Runnable showDesktopHomeRunnable = this::showDesktopHomeInMain;
+    private final Runnable restoreOneStepHomeRunnable = this::restoreOneStepHomeNow;
     private final Runnable pipMonitorRunnable = this::queryPipStateAsync;
     private final Runnable pipDockBoundsUpdateRunnable = this::requestPipDockFromSlot;
 
@@ -552,9 +556,8 @@ public class MainActivity extends Activity {
         hostWindow.setFormat(PixelFormat.OPAQUE);
         hostWindow.getDecorView().setBackgroundColor(Color.BLACK);
         systemUiController = new SystemUiController(
-                this, mainHandler, this::shouldHideStatusBarForOneStep,
-                () -> activityDestroyed, this::isSystemAppInstall,
-                this::handleSystemBack, this::focusActiveHostedDisplay);
+                this, this::shouldHideStatusBarForOneStep,
+                () -> activityDestroyed, this::isSystemAppInstall, this::handleSystemBack);
         getWindow().getDecorView().post(() -> Log.i(TAG, "Hardware acceleration: decor="
                 + getWindow().getDecorView().isHardwareAccelerated()));
         applyStatusBarForCurrentMode();
@@ -907,17 +910,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void focusActiveHostedDisplay() {
-        if (activityDestroyed || !shouldHideStatusBarForOneStep()
-                || activeMainSlot < 0 || activeMainSlot >= embeddedHosts.length) {
-            return;
-        }
-        EmbeddedAppHost activeHost = embeddedHosts[activeMainSlot];
-        if (activeHost instanceof RootVirtualDisplayHost) {
-            ((RootVirtualDisplayHost) activeHost).focusHostedDisplay();
-        }
-    }
-
     private void restoreDefaultDisplayFocus(String reason) {
         RootVirtualDisplayHost activeHost = activeMainSlot >= 0
                 && activeMainSlot < embeddedHosts.length
@@ -1003,6 +995,28 @@ public class MainActivity extends Activity {
         if (activityDestroyed || activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS) {
             return;
         }
+        if (event == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
+                && displayId > Display.DEFAULT_DISPLAY
+                && findRootVirtualDisplayHost(displayId) != null) {
+            scheduleDefaultNavigationFocusRestore("hosted task moved to front");
+        }
+        boolean oneStepHomeMovedToFront = event
+                == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
+                && displayId == Display.DEFAULT_DISPLAY
+                && TextUtils.equals(packageName, getPackageName());
+        if (oneStepHomeMovedToFront) {
+            Log.i(TAG, "Route default-display HOME through OneStep containers");
+            requestDesktopHomeInMain();
+            return;
+        }
+        boolean systemDesktopMovedToDefaultDisplay = event
+                == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
+                && displayId == Display.DEFAULT_DISPLAY
+                && isBuiltInDesktopPackage(packageName);
+        if (systemDesktopMovedToDefaultDisplay) {
+            bringOneStepHomeToFront();
+            return;
+        }
         EmbeddedAppHost activeHost = embeddedHosts[activeMainSlot];
         if (!(activeHost instanceof RootVirtualDisplayHost)) {
             return;
@@ -1051,14 +1065,79 @@ public class MainActivity extends Activity {
             return;
         }
         if (systemDesktopMovedToFront) {
-            Log.i(TAG, "Conceal secondary desktop after it moved to front: slot="
-                    + activeMainSlot + ", app=" + currentApp.packageName);
-            rootHost.concealHostedSurfaceForDesktopTakeover(currentApp);
-            onHostedAppExitedAfterBack(activeMainSlot, currentApp, null);
+            handleHostedHomeRequest(activeMainSlot, currentApp, rootHost);
             return;
         }
         if (displayId <= Display.DEFAULT_DISPLAY) {
             rootHost.checkHostedTaskAfterSystemTaskChange();
+        }
+    }
+
+    private void handleHostedHomeRequest(
+            int sourceSlot, LauncherApp currentApp, RootVirtualDisplayHost sourceHost) {
+        LauncherApp selectedDesktop = resolveBuiltInDesktopApp();
+        int existingDesktopSlot = selectedDesktop == null
+                ? -1 : findSlotByComponent(selectedDesktop.componentName);
+        boolean canKeepCurrentApp = findEmptySideSlot() >= 0
+                || (existingDesktopSlot >= 0 && existingDesktopSlot != sourceSlot
+                && !embeddedSlotClosing[existingDesktopSlot]);
+
+        Log.i(TAG, "Route hosted HOME through OneStep containers: sourceSlot="
+                + sourceSlot + ", app=" + currentApp.packageName
+                + ", keepCurrent=" + canKeepCurrentApp
+                + ", existingDesktopSlot=" + existingDesktopSlot);
+        if (canKeepCurrentApp) {
+            // HOME has already put the launcher task above this app on its display.
+            // Bring the app back before that display becomes a side container.
+            if (!sourceHost.restart(currentApp)) {
+                sourceHost.concealHostedSurfaceForDesktopTakeover(currentApp);
+            }
+        } else {
+            sourceHost.concealHostedSurfaceForDesktopTakeover(currentApp);
+        }
+        requestDesktopHomeInMain();
+    }
+
+    private void bringOneStepHomeToFront() {
+        if (defaultHomeRestorePending) {
+            return;
+        }
+        defaultHomeRestorePending = true;
+        Log.i(TAG, "Restore OneStep after system HOME moved desktop to default display");
+        mainHandler.postDelayed(restoreOneStepHomeRunnable, DEFAULT_HOME_RESTORE_DELAY_MS);
+    }
+
+    private void scheduleDefaultNavigationFocusRestore(String reason) {
+        mainHandler.postDelayed(() -> {
+            if (!activityDestroyed) {
+                restoreDefaultDisplayFocus(reason);
+            }
+        }, DEFAULT_NAVIGATION_FOCUS_RESTORE_DELAY_MS);
+    }
+
+    private void restoreOneStepHomeNow() {
+        defaultHomeRestorePending = false;
+        if (activityDestroyed) {
+            return;
+        }
+        Intent homeIntent = new Intent(this, MainActivity.class)
+                .putExtra(EXTRA_SHOW_DESKTOP_HOME, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ActivityOptions options = ActivityOptions.makeBasic();
+                options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
+                startActivity(homeIntent, options.toBundle());
+            } else {
+                startActivity(homeIntent);
+            }
+            overridePendingTransition(0, 0);
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Log.e(TAG, "Unable to restore OneStep after system HOME", e);
+            requestDesktopHomeInMain();
         }
     }
 
@@ -1134,6 +1213,7 @@ public class MainActivity extends Activity {
         mainHandler.removeCallbacks(drainCrossAppRoutesRunnable);
         mainHandler.removeCallbacks(flushDeferredWindowSwitchWorkRunnable);
         mainHandler.removeCallbacks(showDesktopHomeRunnable);
+        mainHandler.removeCallbacks(restoreOneStepHomeRunnable);
         mainHandler.removeCallbacks(pipMonitorRunnable);
         mainHandler.removeCallbacks(pipDockBoundsUpdateRunnable);
         mainHandler.removeCallbacks(syncSideInputProtectionRunnable);
@@ -4806,17 +4886,16 @@ public class MainActivity extends Activity {
         EmbeddedAppHost newHost = embeddedHosts[newMainSlot];
         if (newHost instanceof RootVirtualDisplayHost) {
             RootVirtualDisplayHost newRootHost = (RootVirtualDisplayHost) newHost;
-            newRootHost.focusHostedDisplayAsync(() -> {
-                if (switchGeneration == mainSlotSwitchGeneration
-                        && activeMainSlot == newMainSlot) {
-                    newRootHost.restoreHostedInputFocus();
-                    refreshAllHostedSensorLandscapeRotations();
-                }
-                if (mainSlotSwitchPendingSlot == newMainSlot
-                        && mainSlotSwitchPendingOldSlot == oldMainSlot) {
-                    clearPendingMainSlotSwitch();
-                }
-            });
+            if (switchGeneration == mainSlotSwitchGeneration
+                    && activeMainSlot == newMainSlot) {
+                newRootHost.restoreHostedInputFocus();
+                restoreDefaultDisplayFocus("main slot switched");
+                refreshAllHostedSensorLandscapeRotations();
+            }
+            if (mainSlotSwitchPendingSlot == newMainSlot
+                    && mainSlotSwitchPendingOldSlot == oldMainSlot) {
+                clearPendingMainSlotSwitch();
+            }
             return;
         }
         clearPendingMainSlotSwitch();

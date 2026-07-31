@@ -1665,10 +1665,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     return true;
                 }
                 if (touchSequenceSuppressed) {
+                    focusDefaultDisplayForSystemNavigation("host touch completed");
                     clearTouchState();
                     return true;
                 }
                 injectMotionDirect(event);
+                focusDefaultDisplayForSystemNavigation("host touch completed");
                 clearTouchState();
                 return true;
             case MotionEvent.ACTION_CANCEL:
@@ -1886,10 +1888,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
         scheduleRootInputBridgeRecovery();
         return false;
-    }
-
-    void focusHostedDisplay() {
-        focusHostedDisplayAsync(null);
     }
 
     void focusHostedDisplayAsync(Runnable onFinished) {
