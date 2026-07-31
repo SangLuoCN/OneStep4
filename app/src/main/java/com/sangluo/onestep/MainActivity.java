@@ -3,6 +3,7 @@ package com.sangluo.onestep;
 import android.annotation.SuppressLint;
 import android.Manifest;
 import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.ActivityOptions;
 import android.app.WallpaperManager;
 import android.content.ActivityNotFoundException;
@@ -62,6 +63,7 @@ import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.logging.SessionLogRecorder;
+import com.sangluo.onestep.feature.tasks.RunningTaskAppResolver;
 import com.sangluo.onestep.model.LauncherApp;
 import com.sangluo.onestep.model.PinnedTaskState;
 import com.sangluo.onestep.system.root.PersistentRootShell;
@@ -143,6 +145,10 @@ public class MainActivity extends Activity {
     private static final int TOP_MEDIA_PLAYER_HEIGHT_DP = 76;
     private static final long PIP_MONITOR_INTERVAL_MS = 450L;
     private static final long PIP_MONITOR_RETRY_INTERVAL_MS = 1200L;
+    private static final long RUNNING_TASK_MONITOR_INTERVAL_MS = 500L;
+    private static final long RUNNING_TASK_MONITOR_RETRY_INTERVAL_MS = 2000L;
+    private static final long RUNNING_TASK_EVENT_REFRESH_DELAY_MS = 32L;
+    private static final int RUNNING_TASK_QUERY_LIMIT = 256;
     private static final long SUPERSEDED_DISPLAY_RELEASE_GRACE_MS = 5000L;
     private static final int TOP_NAV_VERTICAL_SPACING_DEFAULT_DP = 20;
     private static final int TOP_BAR_HEIGHT_DEFAULT_DP = 74;
@@ -198,7 +204,7 @@ public class MainActivity extends Activity {
     private final int[] embeddedSyncGenerations = new int[MAX_WINDOWS];
     private final boolean[] embeddedSlotClosing = new boolean[MAX_WINDOWS];
     private final List<AppShortcutView> shortcutViews = new ArrayList<>();
-    private final Set<String> backgroundAppPackages = new HashSet<>();
+    private final Set<String> taskBackedAppInstances = new HashSet<>();
     private final List<Integer> sideSlotOrder = new ArrayList<>();
     private final ArrayDeque<RoutedAppLaunch> pendingCrossAppRoutes = new ArrayDeque<>();
     private final Map<String, Intent> routedLaunchIntents = new HashMap<>();
@@ -221,6 +227,7 @@ public class MainActivity extends Activity {
     private final ExecutorService wallpaperExecutor =
             Executors.newSingleThreadExecutor();
     private final ExecutorService pipDockExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService runningTaskExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService launcherIconExecutor = Executors.newSingleThreadExecutor();
     private final Object rootInputBridgeStartLock = new Object();
     private boolean launcherIconReceiverRegistered;
@@ -494,6 +501,11 @@ public class MainActivity extends Activity {
     private boolean pipDockApplied;
     private int pipTaskId = -1;
     private int pipMonitorGeneration;
+    private boolean runningTaskMonitoringActive;
+    private boolean runningTaskQueryInFlight;
+    private boolean runningTaskRefreshPending;
+    private boolean runningTaskQueryFailureLogged;
+    private int runningTaskMonitorGeneration;
     private boolean defaultHomeRestorePending;
     private boolean blockedDefaultRecentsRestorePending;
     private boolean systemRecentsComponentResolved;
@@ -507,6 +519,7 @@ public class MainActivity extends Activity {
             () -> blockedDefaultRecentsRestorePending = false;
     private final Runnable pipMonitorRunnable = this::queryPipStateAsync;
     private final Runnable pipDockBoundsUpdateRunnable = this::requestPipDockFromSlot;
+    private final Runnable runningTaskMonitorRunnable = this::queryRunningTaskStatusesAsync;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -588,6 +601,7 @@ public class MainActivity extends Activity {
         }
         boolean returningToForeground = !activityResumed;
         activityResumed = true;
+        startRunningTaskMonitoring();
         if (returningToForeground && completedFirstResume) {
             requestLauncherIconRefresh("returned to foreground");
         }
@@ -820,6 +834,7 @@ public class MainActivity extends Activity {
         }
         restoreDefaultDisplayFocus("OneStep paused");
         activityResumed = false;
+        stopRunningTaskMonitoring();
         pauseMediaMonitoring();
         super.onPause();
     }
@@ -1001,6 +1016,7 @@ public class MainActivity extends Activity {
 
     private void handleSystemTaskEvent(
             int event, int displayId, int taskId, String packageName, String componentName) {
+        requestRunningTaskStatusRefresh();
         if (activityDestroyed || activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS) {
             return;
         }
@@ -1341,6 +1357,7 @@ public class MainActivity extends Activity {
             visualEffectExecutor.shutdownNow();
             wallpaperExecutor.shutdownNow();
             pipDockExecutor.shutdownNow();
+            runningTaskExecutor.shutdownNow();
             releaseEmbeddedResources();
             super.onDestroy();
             return;
@@ -1363,6 +1380,7 @@ public class MainActivity extends Activity {
         mainHandler.removeCallbacks(clearBlockedDefaultRecentsRestoreRunnable);
         mainHandler.removeCallbacks(pipMonitorRunnable);
         mainHandler.removeCallbacks(pipDockBoundsUpdateRunnable);
+        mainHandler.removeCallbacks(runningTaskMonitorRunnable);
         mainHandler.removeCallbacks(syncSideInputProtectionRunnable);
         if (sideInputShieldController != null) {
             sideInputShieldController.release();
@@ -1386,6 +1404,7 @@ public class MainActivity extends Activity {
         visualEffectExecutor.shutdownNow();
         wallpaperExecutor.shutdownNow();
         pipDockExecutor.shutdown();
+        runningTaskExecutor.shutdownNow();
         if (supersededOnDefaultDisplay) {
             Log.w(TAG, "Keep superseded virtual displays for "
                     + SUPERSEDED_DISPLAY_RELEASE_GRACE_MS
@@ -1928,6 +1947,8 @@ public class MainActivity extends Activity {
         }
         topChromeContainer.setTranslationY(multiWindowMode ? 0f : -getTopChromeHeight());
         rebuildDesktopHomeViews();
+        updateShortcutAppStatuses();
+        requestRunningTaskStatusRefresh();
         applyWindowLayout(false);
     }
 
@@ -3003,7 +3024,6 @@ public class MainActivity extends Activity {
                         if (previousHost != null) {
                             previousHost.sendHome();
                         }
-                        markAppBackgrounded(previousApp);
                         windowApps[slot] = null;
                         clearHostedAppRevealState(slot);
                     }
@@ -3973,7 +3993,6 @@ public class MainActivity extends Activity {
             return;
         }
         windowViews[slot].hideDesktopHome();
-        backgroundAppPackages.remove(app.instanceKey());
         windowApps[slot] = app;
         renderWindows();
         syncEmbeddedSlot(slot);
@@ -4018,7 +4037,6 @@ public class MainActivity extends Activity {
                 return;
             }
             embeddedSlotClosing[slot] = false;
-            backgroundAppPackages.remove(previousApp.instanceKey());
             startAppInSlot(slot, replacementApp);
         });
         try {
@@ -4064,7 +4082,6 @@ public class MainActivity extends Activity {
             return;
         }
         embeddedSyncGenerations[slot]++;
-        backgroundAppPackages.remove(replacementApp.instanceKey());
         windowApps[slot] = replacementApp;
         // Do not cover or hide this SurfaceView. WindowManager owns the immediate target
         // StartingWindow/task surface and swaps it with the app's first real buffer.
@@ -4081,7 +4098,6 @@ public class MainActivity extends Activity {
             showEmbeddingHintIfNeeded(previousHost.getUnavailableReason());
             return;
         }
-        markAppBackgrounded(previousApp);
         mainContentReplacementPendingSlot = -1;
         Log.i(TAG, "Launch replacement with WindowManager starting surface: previous="
                 + previousApp.packageName + ", replacement="
@@ -4167,7 +4183,6 @@ public class MainActivity extends Activity {
                     }
                     embeddedSyncGenerations[slot]++;
                     previousHost.sendHome();
-                    markAppBackgrounded(previousApp);
                     windowApps[slot] = null;
                     clearHostedAppRevealState(slot);
                     renderWindows();
@@ -4603,7 +4618,6 @@ public class MainActivity extends Activity {
         }
         windowApps[slot] = null;
         clearHostedAppRevealState(slot);
-        backgroundAppPackages.remove(exitedApp.instanceKey());
         windowViews[slot].setLiveAppVisible(false);
         renderWindows();
     }
@@ -4844,7 +4858,6 @@ public class MainActivity extends Activity {
             }
             windowApps[slot] = null;
             clearHostedAppRevealState(slot);
-            backgroundAppPackages.remove(dismissedApp.instanceKey());
             embeddedSlotClosing[slot] = false;
             windowView.setTranslationX(0f);
             windowView.setTranslationY(0f);
@@ -5285,21 +5298,210 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "当前环境未开放固定容器内活 App 嵌入" + detail, Toast.LENGTH_LONG).show();
     }
 
+    private void startRunningTaskMonitoring() {
+        if (activityDestroyed || runningTaskMonitoringActive) {
+            return;
+        }
+        runningTaskMonitoringActive = true;
+        runningTaskRefreshPending = false;
+        runningTaskMonitorGeneration++;
+        mainHandler.removeCallbacks(runningTaskMonitorRunnable);
+        mainHandler.post(runningTaskMonitorRunnable);
+    }
+
+    private void stopRunningTaskMonitoring() {
+        runningTaskMonitoringActive = false;
+        runningTaskQueryInFlight = false;
+        runningTaskRefreshPending = false;
+        runningTaskMonitorGeneration++;
+        mainHandler.removeCallbacks(runningTaskMonitorRunnable);
+    }
+
+    private void requestRunningTaskStatusRefresh() {
+        if (!runningTaskMonitoringActive || activityDestroyed) {
+            return;
+        }
+        if (runningTaskQueryInFlight) {
+            runningTaskRefreshPending = true;
+            return;
+        }
+        mainHandler.removeCallbacks(runningTaskMonitorRunnable);
+        mainHandler.postDelayed(
+                runningTaskMonitorRunnable, RUNNING_TASK_EVENT_REFRESH_DELAY_MS);
+    }
+
+    private void queryRunningTaskStatusesAsync() {
+        if (!runningTaskMonitoringActive || activityDestroyed || runningTaskQueryInFlight) {
+            return;
+        }
+        final int generation = runningTaskMonitorGeneration;
+        final List<LauncherApp> apps = new ArrayList<>(launcherApps);
+        runningTaskQueryInFlight = true;
+        try {
+            runningTaskExecutor.execute(() -> {
+                Set<String> snapshot = queryTaskBackedAppInstances(apps);
+                mainHandler.post(() -> finishRunningTaskStatusQuery(generation, snapshot));
+            });
+        } catch (RuntimeException e) {
+            runningTaskQueryInFlight = false;
+            scheduleNextRunningTaskStatusQuery(RUNNING_TASK_MONITOR_RETRY_INTERVAL_MS);
+        }
+    }
+
+    private void finishRunningTaskStatusQuery(int generation, Set<String> snapshot) {
+        if (!runningTaskMonitoringActive || activityDestroyed
+                || generation != runningTaskMonitorGeneration) {
+            return;
+        }
+        runningTaskQueryInFlight = false;
+        if (snapshot != null && !taskBackedAppInstances.equals(snapshot)) {
+            taskBackedAppInstances.clear();
+            taskBackedAppInstances.addAll(snapshot);
+            updateShortcutAppStatuses();
+        }
+        boolean refreshAgain = runningTaskRefreshPending;
+        runningTaskRefreshPending = false;
+        scheduleNextRunningTaskStatusQuery(refreshAgain
+                ? RUNNING_TASK_EVENT_REFRESH_DELAY_MS
+                : snapshot == null
+                ? RUNNING_TASK_MONITOR_RETRY_INTERVAL_MS
+                : RUNNING_TASK_MONITOR_INTERVAL_MS);
+    }
+
+    private void scheduleNextRunningTaskStatusQuery(long delayMs) {
+        if (!runningTaskMonitoringActive || activityDestroyed) {
+            return;
+        }
+        mainHandler.removeCallbacks(runningTaskMonitorRunnable);
+        mainHandler.postDelayed(runningTaskMonitorRunnable, delayMs);
+    }
+
+    @SuppressWarnings("deprecation")
+    private Set<String> queryTaskBackedAppInstances(List<LauncherApp> apps) {
+        ActivityManager activityManager = getSystemService(ActivityManager.class);
+        if (activityManager == null) {
+            return null;
+        }
+        List<RunningTaskAppResolver.TaskIdentity> tasks = new ArrayList<>();
+        Set<Integer> recentTaskIds = new HashSet<>();
+        boolean querySucceeded = false;
+        RuntimeException lastFailure = null;
+        try {
+            List<ActivityManager.RecentTaskInfo> recentTasks = activityManager.getRecentTasks(
+                    RUNNING_TASK_QUERY_LIMIT, ActivityManager.RECENT_WITH_EXCLUDED);
+            if (recentTasks != null) {
+                for (ActivityManager.RecentTaskInfo task : recentTasks) {
+                    if (task != null) {
+                        tasks.add(toTaskIdentity(task));
+                        int taskId = readTaskId(task);
+                        if (taskId > 0) {
+                            recentTaskIds.add(taskId);
+                        }
+                    }
+                }
+            }
+            querySucceeded = true;
+        } catch (RuntimeException e) {
+            lastFailure = e;
+        }
+        try {
+            List<ActivityManager.RunningTaskInfo> runningTasks =
+                    activityManager.getRunningTasks(RUNNING_TASK_QUERY_LIMIT);
+            if (runningTasks != null) {
+                for (ActivityManager.RunningTaskInfo task : runningTasks) {
+                    if (task != null && !recentTaskIds.contains(readTaskId(task))) {
+                        tasks.add(toTaskIdentity(task));
+                    }
+                }
+            }
+            querySucceeded = true;
+        } catch (RuntimeException e) {
+            lastFailure = e;
+        }
+        if (!querySucceeded) {
+            if (!runningTaskQueryFailureLogged) {
+                runningTaskQueryFailureLogged = true;
+                Log.w(TAG, "Unable to query system tasks for app status", lastFailure);
+            }
+            return null;
+        }
+        runningTaskQueryFailureLogged = false;
+        List<RunningTaskAppResolver.AppIdentity> appIdentities =
+                new ArrayList<>(apps.size());
+        for (LauncherApp app : apps) {
+            appIdentities.add(new RunningTaskAppResolver.AppIdentity(
+                    app.instanceKey(), app.componentKey(), app.packageName, app.userId()));
+        }
+        return RunningTaskAppResolver.resolve(appIdentities, tasks);
+    }
+
+    private RunningTaskAppResolver.TaskIdentity toTaskIdentity(
+            ActivityManager.RecentTaskInfo task) {
+        return new RunningTaskAppResolver.TaskIdentity(
+                readTaskUserId(task),
+                componentKey(task.baseIntent == null ? null : task.baseIntent.getComponent()),
+                componentKey(task.origActivity),
+                componentKey(task.baseActivity),
+                componentKey(task.topActivity));
+    }
+
+    private RunningTaskAppResolver.TaskIdentity toTaskIdentity(
+            ActivityManager.RunningTaskInfo task) {
+        return new RunningTaskAppResolver.TaskIdentity(
+                readTaskUserId(task),
+                componentKey(task.baseIntent == null ? null : task.baseIntent.getComponent()),
+                "",
+                componentKey(task.baseActivity),
+                componentKey(task.topActivity));
+    }
+
+    private int readTaskUserId(Object taskInfo) {
+        try {
+            return taskInfo.getClass().getField("userId").getInt(taskInfo);
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return android.os.Process.myUserHandle().hashCode();
+        }
+    }
+
+    private int readTaskId(Object taskInfo) {
+        for (String fieldName : new String[]{"taskId", "id"}) {
+            try {
+                int taskId = taskInfo.getClass().getField(fieldName).getInt(taskInfo);
+                if (taskId > 0) {
+                    return taskId;
+                }
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // Android releases renamed this field; try the next compatible name.
+            }
+        }
+        return -1;
+    }
+
+    private String componentKey(ComponentName componentName) {
+        return componentName == null ? "" : componentName.flattenToString();
+    }
+
     private void renderWindows() {
         for (int i = 0; i < MAX_WINDOWS; i++) {
             windowViews[i].bind(windowApps[i], i);
         }
+        updateShortcutAppStatuses();
+        requestRunningTaskStatusRefresh();
+        scheduleSideInputProtectionSync();
+    }
+
+    private void updateShortcutAppStatuses() {
         for (AppShortcutView shortcutView : shortcutViews) {
             String instanceKey = shortcutView.getInstanceKeyValue();
-            boolean foreground = findSlot(instanceKey) >= 0;
+            boolean taskPresent = taskBackedAppInstances.contains(instanceKey);
+            boolean foreground = taskPresent && findSlot(instanceKey) >= 0;
             shortcutView.setActive(foreground);
             shortcutView.setAppStatus(foreground
                     ? AppShortcutView.AppStatus.FOREGROUND
-                    : backgroundAppPackages.contains(instanceKey)
+                    : taskPresent
                     ? AppShortcutView.AppStatus.BACKGROUND
                     : AppShortcutView.AppStatus.NONE);
         }
-        scheduleSideInputProtectionSync();
     }
 
     private boolean shouldShieldSideInput(int slot) {
@@ -5338,12 +5540,6 @@ public class MainActivity extends Activity {
         }
         if (sideInputShieldController != null) {
             sideInputShieldController.update();
-        }
-    }
-
-    private void markAppBackgrounded(LauncherApp app) {
-        if (app != null && !TextUtils.isEmpty(app.packageName)) {
-            backgroundAppPackages.add(app.instanceKey());
         }
     }
 
