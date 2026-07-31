@@ -6,6 +6,7 @@ import android.net.LocalSocketAddress;
 import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
+import android.content.ComponentName;
 import android.view.MotionEvent;
 
 import com.sangluo.onestep.MotionEventCodec;
@@ -86,9 +87,14 @@ public final class RootInputBridgeClient implements AutoCloseable {
         }
     }
 
-    public boolean moveTaskToDisplay(String bridgeToken, int taskId, int displayId) {
+    public boolean moveTaskToDisplay(
+            String bridgeToken, int taskId, int displayId, ComponentName component) {
+        if (component == null) {
+            return false;
+        }
         String response = sendRequestOnDedicatedConnection(
-                bridgeToken, "moveTaskToDisplay " + taskId + " " + displayId);
+                bridgeToken, "moveTaskToDisplay " + taskId + " " + displayId
+                        + " " + component.flattenToString());
         if (TextUtils.isEmpty(response)) {
             return false;
         }

@@ -2,6 +2,7 @@ package com.sangluo.onestep;
 
 import android.annotation.SuppressLint;
 import android.app.ActivityManager;
+import android.content.ComponentName;
 import android.content.Context;
 import android.graphics.Rect;
 import android.net.Credentials;
@@ -309,7 +310,7 @@ public final class RootInputBridge {
                 return focusDisplay(parts);
             } else if ("removeTask".equals(parts[0]) && parts.length == 2) {
                 return removeTask(parts);
-            } else if ("moveTaskToDisplay".equals(parts[0]) && parts.length == 3) {
+            } else if ("moveTaskToDisplay".equals(parts[0]) && parts.length == 4) {
                 return moveTaskToDisplay(parts);
             } else if ("key".equals(parts[0]) && parts.length == 3) {
                 injectKey(parts);
@@ -493,17 +494,22 @@ public final class RootInputBridge {
     private String moveTaskToDisplay(String[] parts) {
         int taskId = Integer.parseInt(parts[1]);
         int displayId = Integer.parseInt(parts[2]);
+        ComponentName component = ComponentName.unflattenFromString(parts[3]);
         boolean success = false;
         String failure = "";
         try {
+            if (component == null) {
+                throw new IllegalArgumentException("invalid task component");
+            }
             getMoveRootTaskToDisplayMethod().invoke(
                     getActivityTaskManagerService(), taskId, displayId);
             if (activityManager == null) {
                 throw new IllegalStateException("activity service unavailable");
             }
             activityManager.moveTaskToFront(taskId, 0);
+            refreshActivityOnDisplay(component, displayId);
             success = true;
-        } catch (ReflectiveOperationException | RuntimeException e) {
+        } catch (ReflectiveOperationException | IOException | RuntimeException e) {
             throwIfSystemServiceDead(e);
             failure = describeThrowable(e);
         }
@@ -512,6 +518,40 @@ public final class RootInputBridge {
                 + " success=" + success
                 + (failure.isEmpty() ? "" : " failure=" + failure));
         return "moveTaskToDisplay " + taskId + " " + displayId + " " + success;
+    }
+
+    private static void refreshActivityOnDisplay(ComponentName component, int displayId)
+            throws IOException {
+        Process process = new ProcessBuilder(
+                "/system/bin/am", "start",
+                "--display", String.valueOf(displayId),
+                "-a", "android.intent.action.MAIN",
+                "-c", "android.intent.category.DEFAULT",
+                "-n", component.flattenToString())
+                .redirectErrorStream(true)
+                .start();
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream()))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (output.length() > 0) {
+                    output.append(' ');
+                }
+                output.append(line);
+            }
+        }
+        int exitCode;
+        try {
+            exitCode = process.waitFor();
+        } catch (InterruptedException e) {
+            process.destroy();
+            Thread.currentThread().interrupt();
+            throw new IOException("activity refresh interrupted", e);
+        }
+        if (exitCode != 0) {
+            throw new IOException("activity refresh failed: " + output);
+        }
     }
 
     private Object getActivityTaskManagerService() throws ReflectiveOperationException {

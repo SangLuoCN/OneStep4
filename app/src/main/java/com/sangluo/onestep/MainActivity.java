@@ -1016,7 +1016,7 @@ public class MainActivity extends Activity {
                     && currentMainApp != null && currentMainApp.isHomeEntry();
             if (displayId == Display.DEFAULT_DISPLAY) {
                 handleDefaultDisplaySystemRecents(
-                        rootHost, taskId, mainShowsHostedDesktop);
+                        rootHost, taskId, componentName, mainShowsHostedDesktop);
                 return;
             }
             RootVirtualDisplayHost recentsHost = findRootVirtualDisplayHost(displayId);
@@ -1024,7 +1024,7 @@ public class MainActivity extends Activity {
                 return;
             }
             if (mainShowsHostedDesktop
-                    && rootHost.moveSystemTaskToHostedDisplay(taskId)) {
+                    && rootHost.moveSystemTaskToHostedDisplay(taskId, componentName)) {
                 Log.i(TAG, "Moved system recents from display " + displayId
                         + " into main desktop display " + rootHost.getDisplayId());
                 return;
@@ -1158,7 +1158,8 @@ public class MainActivity extends Activity {
     }
 
     private void handleDefaultDisplaySystemRecents(
-            RootVirtualDisplayHost rootHost, int taskId, boolean moveIntoHostedDesktop) {
+            RootVirtualDisplayHost rootHost, int taskId, String componentName,
+            boolean moveIntoHostedDesktop) {
         if (blockedDefaultRecentsRestorePending) {
             return;
         }
@@ -1167,7 +1168,7 @@ public class MainActivity extends Activity {
         mainHandler.postDelayed(clearBlockedDefaultRecentsRestoreRunnable,
                 BLOCKED_RECENTS_RESTORE_TIMEOUT_MS);
         if (moveIntoHostedDesktop && rootHost != null
-                && rootHost.moveSystemTaskToHostedDisplay(taskId)) {
+                && rootHost.moveSystemTaskToHostedDisplay(taskId, componentName)) {
             Log.i(TAG, "Moved system recents into hosted desktop: task=" + taskId
                     + ", display=" + rootHost.getDisplayId());
             return;

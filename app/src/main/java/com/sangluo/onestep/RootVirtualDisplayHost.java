@@ -1922,10 +1922,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
     }
 
-    boolean moveSystemTaskToHostedDisplay(int taskId) {
-        return taskId > 0 && displayId > DEFAULT_DISPLAY_ID
+    boolean moveSystemTaskToHostedDisplay(int taskId, String componentName) {
+        ComponentName component = ComponentName.unflattenFromString(componentName);
+        return taskId > 0 && displayId > DEFAULT_DISPLAY_ID && component != null
                 && rootInputBridgeClient.moveTaskToDisplay(
-                getRootInputBridgeToken(), taskId, displayId);
+                getRootInputBridgeToken(), taskId, displayId, component);
     }
 
     void dismissHostedSystemRecents() {
