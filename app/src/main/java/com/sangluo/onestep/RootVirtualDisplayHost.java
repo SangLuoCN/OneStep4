@@ -196,7 +196,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         Intent consumeRoutedLaunchIntent(int slot, String packageName);
         boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
                                  Intent intent, String targetPackage);
-        void onSystemTaskEvent(int event, int displayId, int taskId, String packageName);
+        void onSystemTaskEvent(int event, int displayId, int taskId, String packageName,
+                               String componentName);
         void onHostedAppExitedAfterBack(
                 int slot, LauncherApp app, Runnable afterDesktopTakeover);
     }
@@ -1622,7 +1623,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 touchSequenceSuppressed = false;
                 activeTouchTraceId = touchStartedOnMain ? ++touchTraceSequence : 0L;
                 if (touchStartedOnMain) {
-                    focusHostedDisplayAsync(null);
+                    focusDefaultDisplayForSystemNavigation("host touch started");
                     touchTargetDisplayId = displayId;
                     touchTargetDisplayWidth = displayWidth;
                     touchTargetDisplayHeight = displayHeight;

@@ -88,7 +88,7 @@ final class RootTaskStackObserver extends Binder {
         data.enforceInterface(DESCRIPTOR);
         if (code == taskStackChangedTransaction) {
             displayBridge.notifyTaskEvent(
-                    RootVirtualDisplayBridge.TASK_EVENT_STACK_CHANGED, -1, -1, "");
+                    RootVirtualDisplayBridge.TASK_EVENT_STACK_CHANGED, -1, -1, "", "");
             return true;
         }
         if (code == taskMovedToFrontTransaction) {
@@ -106,7 +106,7 @@ final class RootTaskStackObserver extends Binder {
 
     private void readAndNotifyTaskEvent(int event, boolean usesTaskInfo, Parcel data) {
         if (!usesTaskInfo) {
-            displayBridge.notifyTaskEvent(event, -1, data.readInt(), "");
+            displayBridge.notifyTaskEvent(event, -1, data.readInt(), "", "");
             return;
         }
         notifyTaskEvent(event, readTaskInfo(data));
@@ -119,8 +119,9 @@ final class RootTaskStackObserver extends Binder {
         int displayId = readDisplayId(taskInfo);
         ComponentName topActivity = taskInfo.topActivity;
         String packageName = topActivity == null ? "" : topActivity.getPackageName();
+        String componentName = topActivity == null ? "" : topActivity.flattenToShortString();
         displayBridge.notifyTaskEvent(
-                event, displayId, readTaskId(taskInfo), packageName);
+                event, displayId, readTaskId(taskInfo), packageName, componentName);
     }
 
     private static ActivityManager.RunningTaskInfo readTaskInfo(Parcel data) {

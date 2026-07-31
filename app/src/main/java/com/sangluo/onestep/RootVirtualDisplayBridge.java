@@ -531,7 +531,8 @@ public final class RootVirtualDisplayBridge extends Binder {
         return routed;
     }
 
-    void notifyTaskEvent(int event, int displayId, int taskId, String packageName) {
+    void notifyTaskEvent(int event, int displayId, int taskId, String packageName,
+                         String componentName) {
         if (displayId > Display.DEFAULT_DISPLAY && !ownsDisplay(displayId)) {
             return;
         }
@@ -540,7 +541,7 @@ public final class RootVirtualDisplayBridge extends Binder {
             callback = launchCallback;
         }
         if (callback != null) {
-            callback.notifyTaskEvent(event, displayId, taskId, packageName);
+            callback.notifyTaskEvent(event, displayId, taskId, packageName, componentName);
         }
     }
 
@@ -640,7 +641,8 @@ public final class RootVirtualDisplayBridge extends Binder {
             }
         }
 
-        void notifyTaskEvent(int event, int displayId, int taskId, String packageName) {
+        void notifyTaskEvent(int event, int displayId, int taskId, String packageName,
+                             String componentName) {
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
@@ -649,6 +651,7 @@ public final class RootVirtualDisplayBridge extends Binder {
                 data.writeInt(displayId);
                 data.writeInt(taskId);
                 data.writeString(packageName);
+                data.writeString(componentName);
                 callback.transact(TASK_EVENT_CALLBACK_TRANSACTION,
                         data, reply, 0);
                 reply.readException();

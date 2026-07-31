@@ -404,9 +404,10 @@ public class MainActivity extends Activity {
                             sourceDisplayId, sourcePackage, intent, targetPackage);
                 }
                 @Override public void onSystemTaskEvent(
-                        int event, int displayId, int taskId, String packageName) {
+                        int event, int displayId, int taskId, String packageName,
+                        String componentName) {
                     MainActivity.this.onSystemTaskEvent(
-                            event, displayId, taskId, packageName);
+                            event, displayId, taskId, packageName, componentName);
                 }
                 @Override public void onHostedAppExitedAfterBack(
                         int slot, LauncherApp app, Runnable afterDesktopTakeover) {
@@ -970,15 +971,15 @@ public class MainActivity extends Activity {
     }
 
     private void onSystemTaskEvent(
-            int event, int displayId, int taskId, String packageName) {
+            int event, int displayId, int taskId, String packageName, String componentName) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            handleSystemTaskEvent(event, displayId, taskId, packageName);
+            handleSystemTaskEvent(event, displayId, taskId, packageName, componentName);
             return;
         }
         CountDownLatch handled = new CountDownLatch(1);
         mainHandler.post(() -> {
             try {
-                handleSystemTaskEvent(event, displayId, taskId, packageName);
+                handleSystemTaskEvent(event, displayId, taskId, packageName, componentName);
             } finally {
                 handled.countDown();
             }
@@ -991,7 +992,7 @@ public class MainActivity extends Activity {
     }
 
     private void handleSystemTaskEvent(
-            int event, int displayId, int taskId, String packageName) {
+            int event, int displayId, int taskId, String packageName, String componentName) {
         if (activityDestroyed || activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS) {
             return;
         }
@@ -1012,8 +1013,10 @@ public class MainActivity extends Activity {
         boolean systemDesktopMovedToDefaultDisplay = event
                 == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
                 && displayId == Display.DEFAULT_DISPLAY
-                && isBuiltInDesktopPackage(packageName);
+                && isBuiltInDesktopHomeTask(packageName, componentName);
         if (systemDesktopMovedToDefaultDisplay) {
+            Log.i(TAG, "Restore OneStep after system HOME moved desktop to default display: "
+                    + componentName);
             bringOneStepHomeToFront();
             return;
         }
@@ -1041,7 +1044,8 @@ public class MainActivity extends Activity {
                 && rootHost.matchesHostedTask(currentApp, taskId)));
         boolean systemDesktopMovedToFront = event
                 == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
-                && isBuiltInDesktopPackage(packageName);
+                && displayId == rootHost.getDisplayId()
+                && isBuiltInDesktopHomeTask(packageName, componentName);
         if (systemDesktopMovedToFront && rootHost.isHostedSurfaceRevealPending(currentApp)) {
             Log.i(TAG, "Keep secondary desktop concealed while hosted app is launching: slot="
                     + activeMainSlot + ", app=" + currentApp.packageName);
@@ -1152,6 +1156,26 @@ public class MainActivity extends Activity {
         for (LauncherApp desktopApp : builtInDesktopApps) {
             if (desktopApp != null
                     && TextUtils.equals(desktopApp.packageName, packageName)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isBuiltInDesktopHomeTask(String packageName, String componentName) {
+        if (!isBuiltInDesktopPackage(packageName) || TextUtils.isEmpty(componentName)) {
+            return false;
+        }
+        ComponentName taskComponent = ComponentName.unflattenFromString(componentName);
+        if (taskComponent == null) {
+            return false;
+        }
+        if (builtInDesktopApp != null
+                && taskComponent.equals(builtInDesktopApp.componentName)) {
+            return true;
+        }
+        for (LauncherApp desktopApp : builtInDesktopApps) {
+            if (desktopApp != null && taskComponent.equals(desktopApp.componentName)) {
                 return true;
             }
         }

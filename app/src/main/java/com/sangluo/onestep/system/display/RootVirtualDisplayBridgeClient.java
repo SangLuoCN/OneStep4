@@ -217,7 +217,8 @@ public final class RootVirtualDisplayBridgeClient {
     }
 
     public interface TaskEventListener {
-        void onTaskEvent(int event, int displayId, int taskId, String packageName);
+        void onTaskEvent(int event, int displayId, int taskId, String packageName,
+                         String componentName);
     }
 
     private final class LaunchCallbackBinder extends Binder {
@@ -238,10 +239,11 @@ public final class RootVirtualDisplayBridgeClient {
                 int displayId = data.readInt();
                 int taskId = data.readInt();
                 String packageName = data.readString();
+                String componentName = data.dataAvail() > 0 ? data.readString() : "";
                 TaskEventListener listener = taskEventListener;
                 try {
                     if (listener != null) {
-                        listener.onTaskEvent(event, displayId, taskId, packageName);
+                        listener.onTaskEvent(event, displayId, taskId, packageName, componentName);
                     }
                 } catch (RuntimeException e) {
                     Log.w(TAG, "Task-event callback handler failed: "
