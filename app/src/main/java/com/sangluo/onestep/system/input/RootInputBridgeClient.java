@@ -86,6 +86,24 @@ public final class RootInputBridgeClient implements AutoCloseable {
         }
     }
 
+    public boolean moveTaskToDisplay(String bridgeToken, int taskId, int displayId) {
+        String response = sendRequestOnDedicatedConnection(
+                bridgeToken, "moveTaskToDisplay " + taskId + " " + displayId);
+        if (TextUtils.isEmpty(response)) {
+            return false;
+        }
+        try {
+            String[] parts = response.trim().split("\\s+");
+            return parts.length == 4
+                    && "moveTaskToDisplay".equals(parts[0])
+                    && Integer.parseInt(parts[1]) == taskId
+                    && Integer.parseInt(parts[2]) == displayId
+                    && Boolean.parseBoolean(parts[3]);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     public Integer setDisplayImePolicy(String bridgeToken, int displayId, int policy) {
         String command = String.format(Locale.US, "imePolicy %d %d", displayId, policy);
         String response = sendRequestOnDedicatedConnection(bridgeToken, command);

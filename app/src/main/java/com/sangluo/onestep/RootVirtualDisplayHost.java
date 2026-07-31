@@ -1922,6 +1922,16 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
     }
 
+    boolean moveSystemTaskToHostedDisplay(int taskId) {
+        return taskId > 0 && displayId > DEFAULT_DISPLAY_ID
+                && rootInputBridgeClient.moveTaskToDisplay(
+                getRootInputBridgeToken(), taskId, displayId);
+    }
+
+    void dismissHostedSystemRecents() {
+        injectKeyDirectAsync(KeyEvent.KEYCODE_BACK, "dismiss recents display " + displayId);
+    }
+
     boolean focusDefaultDisplayForSystemNavigation(String reason) {
         focusRequestGeneration++;
         rootVirtualDisplayBridgeClient.updateLaunchSource(

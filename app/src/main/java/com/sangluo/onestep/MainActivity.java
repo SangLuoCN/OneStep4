@@ -14,6 +14,7 @@ import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.content.res.Resources;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.PixelFormat;
@@ -171,6 +172,7 @@ public class MainActivity extends Activity {
     private static final long CROSS_APP_ROUTE_RETRY_MS = 60L;
     private static final long DEFAULT_HOME_RESTORE_DELAY_MS = 80L;
     private static final long DEFAULT_NAVIGATION_FOCUS_RESTORE_DELAY_MS = 80L;
+    private static final long BLOCKED_RECENTS_RESTORE_TIMEOUT_MS = 1000L;
     private static final int MAX_PENDING_CROSS_APP_ROUTES = 8;
     private static final int DEFERRED_MEDIA_SESSION_REFRESH = 1;
     private static final int DEFERRED_MEDIA_UI_REFRESH = 1 << 1;
@@ -493,11 +495,16 @@ public class MainActivity extends Activity {
     private int pipTaskId = -1;
     private int pipMonitorGeneration;
     private boolean defaultHomeRestorePending;
+    private boolean blockedDefaultRecentsRestorePending;
+    private boolean systemRecentsComponentResolved;
+    private ComponentName systemRecentsComponent;
     private final Rect pipRestoreBounds = new Rect();
     private final Runnable flushDeferredWindowSwitchWorkRunnable =
             this::flushDeferredWindowSwitchWork;
     private final Runnable showDesktopHomeRunnable = this::showDesktopHomeInMain;
     private final Runnable restoreOneStepHomeRunnable = this::restoreOneStepHomeNow;
+    private final Runnable clearBlockedDefaultRecentsRestoreRunnable =
+            () -> blockedDefaultRecentsRestorePending = false;
     private final Runnable pipMonitorRunnable = this::queryPipStateAsync;
     private final Runnable pipDockBoundsUpdateRunnable = this::requestPipDockFromSlot;
 
@@ -594,6 +601,7 @@ public class MainActivity extends Activity {
         resumeMediaMonitoring();
         startPipMonitoring();
         scheduleSideInputProtectionSync();
+        scheduleDefaultNavigationFocusRestore("OneStep resumed");
     }
 
     @Override
@@ -996,6 +1004,39 @@ public class MainActivity extends Activity {
         if (activityDestroyed || activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS) {
             return;
         }
+        LauncherApp currentMainApp = windowApps[activeMainSlot];
+        EmbeddedAppHost activeHost = embeddedHosts[activeMainSlot];
+        RootVirtualDisplayHost rootHost = activeHost instanceof RootVirtualDisplayHost
+                ? (RootVirtualDisplayHost) activeHost : null;
+        boolean systemRecentsMovedToFront = event
+                == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
+                && isSystemRecentsTask(packageName, componentName);
+        if (systemRecentsMovedToFront) {
+            boolean mainShowsHostedDesktop = rootHost != null
+                    && currentMainApp != null && currentMainApp.isHomeEntry();
+            if (displayId == Display.DEFAULT_DISPLAY) {
+                handleDefaultDisplaySystemRecents(
+                        rootHost, taskId, mainShowsHostedDesktop);
+                return;
+            }
+            RootVirtualDisplayHost recentsHost = findRootVirtualDisplayHost(displayId);
+            if (mainShowsHostedDesktop && displayId == rootHost.getDisplayId()) {
+                return;
+            }
+            if (mainShowsHostedDesktop
+                    && rootHost.moveSystemTaskToHostedDisplay(taskId)) {
+                Log.i(TAG, "Moved system recents from display " + displayId
+                        + " into main desktop display " + rootHost.getDisplayId());
+                return;
+            }
+            Log.i(TAG, "Dismiss system recents outside main desktop: display=" + displayId
+                    + ", mainDesktop=" + mainShowsHostedDesktop);
+            if (recentsHost != null) {
+                recentsHost.dismissHostedSystemRecents();
+            }
+            scheduleDefaultNavigationFocusRestore("hosted recents dismissed");
+            return;
+        }
         if (event == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
                 && displayId > Display.DEFAULT_DISPLAY
                 && findRootVirtualDisplayHost(displayId) != null) {
@@ -1006,6 +1047,13 @@ public class MainActivity extends Activity {
                 && displayId == Display.DEFAULT_DISPLAY
                 && TextUtils.equals(packageName, getPackageName());
         if (oneStepHomeMovedToFront) {
+            if (blockedDefaultRecentsRestorePending) {
+                blockedDefaultRecentsRestorePending = false;
+                mainHandler.removeCallbacks(clearBlockedDefaultRecentsRestoreRunnable);
+                Log.i(TAG, "Keep current main content after blocking default-display recents");
+                scheduleDefaultNavigationFocusRestore("default-display recents blocked");
+                return;
+            }
             Log.i(TAG, "Route default-display HOME through OneStep containers");
             requestDesktopHomeInMain();
             return;
@@ -1020,16 +1068,14 @@ public class MainActivity extends Activity {
             bringOneStepHomeToFront();
             return;
         }
-        EmbeddedAppHost activeHost = embeddedHosts[activeMainSlot];
-        if (!(activeHost instanceof RootVirtualDisplayHost)) {
+        if (rootHost == null) {
             return;
         }
-        RootVirtualDisplayHost rootHost = (RootVirtualDisplayHost) activeHost;
         if (displayId > Display.DEFAULT_DISPLAY
                 && rootHost.getDisplayId() != displayId) {
             return;
         }
-        LauncherApp currentApp = windowApps[activeMainSlot];
+        LauncherApp currentApp = currentMainApp;
         if (currentApp == null || currentApp.isHomeEntry()) {
             return;
         }
@@ -1111,6 +1157,45 @@ public class MainActivity extends Activity {
         mainHandler.postDelayed(restoreOneStepHomeRunnable, DEFAULT_HOME_RESTORE_DELAY_MS);
     }
 
+    private void handleDefaultDisplaySystemRecents(
+            RootVirtualDisplayHost rootHost, int taskId, boolean moveIntoHostedDesktop) {
+        if (blockedDefaultRecentsRestorePending) {
+            return;
+        }
+        blockedDefaultRecentsRestorePending = true;
+        mainHandler.removeCallbacks(clearBlockedDefaultRecentsRestoreRunnable);
+        mainHandler.postDelayed(clearBlockedDefaultRecentsRestoreRunnable,
+                BLOCKED_RECENTS_RESTORE_TIMEOUT_MS);
+        if (moveIntoHostedDesktop && rootHost != null
+                && rootHost.moveSystemTaskToHostedDisplay(taskId)) {
+            Log.i(TAG, "Moved system recents into hosted desktop: task=" + taskId
+                    + ", display=" + rootHost.getDisplayId());
+            return;
+        }
+        Log.i(TAG, moveIntoHostedDesktop
+                ? "Block default-display recents because task migration failed"
+                : "Block default-display recents because main content is not desktop");
+        Intent restoreIntent = new Intent(this, MainActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                ActivityOptions options = ActivityOptions.makeBasic();
+                options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
+                startActivity(restoreIntent, options.toBundle());
+            } else {
+                startActivity(restoreIntent);
+            }
+            overridePendingTransition(0, 0);
+        } catch (ActivityNotFoundException | SecurityException e) {
+            blockedDefaultRecentsRestorePending = false;
+            mainHandler.removeCallbacks(clearBlockedDefaultRecentsRestoreRunnable);
+            Log.e(TAG, "Unable to restore OneStep after blocking system recents", e);
+        }
+    }
+
     private void scheduleDefaultNavigationFocusRestore(String reason) {
         mainHandler.postDelayed(() -> {
             if (!activityDestroyed) {
@@ -1182,6 +1267,42 @@ public class MainActivity extends Activity {
         return false;
     }
 
+    private boolean isSystemRecentsTask(String packageName, String componentName) {
+        if (TextUtils.isEmpty(componentName)) {
+            return false;
+        }
+        ComponentName taskComponent = ComponentName.unflattenFromString(componentName);
+        if (taskComponent == null) {
+            return false;
+        }
+        ComponentName configuredRecents = resolveSystemRecentsComponent();
+        if (configuredRecents != null) {
+            return configuredRecents.equals(taskComponent);
+        }
+        return isBuiltInDesktopPackage(packageName)
+                && taskComponent.getClassName().endsWith("RecentsActivity");
+    }
+
+    private ComponentName resolveSystemRecentsComponent() {
+        if (systemRecentsComponentResolved) {
+            return systemRecentsComponent;
+        }
+        systemRecentsComponentResolved = true;
+        try {
+            Resources systemResources = Resources.getSystem();
+            int resourceId = systemResources.getIdentifier(
+                    "config_recentsComponentName", "string", "android");
+            if (resourceId != 0) {
+                systemRecentsComponent = ComponentName.unflattenFromString(
+                        systemResources.getString(resourceId));
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Unable to resolve system recents component: "
+                    + e.getClass().getSimpleName());
+        }
+        return systemRecentsComponent;
+    }
+
     private boolean shouldHideStatusBarForOneStep() {
         return multiWindowMode && !exitOneStepPending;
     }
@@ -1238,6 +1359,7 @@ public class MainActivity extends Activity {
         mainHandler.removeCallbacks(flushDeferredWindowSwitchWorkRunnable);
         mainHandler.removeCallbacks(showDesktopHomeRunnable);
         mainHandler.removeCallbacks(restoreOneStepHomeRunnable);
+        mainHandler.removeCallbacks(clearBlockedDefaultRecentsRestoreRunnable);
         mainHandler.removeCallbacks(pipMonitorRunnable);
         mainHandler.removeCallbacks(pipDockBoundsUpdateRunnable);
         mainHandler.removeCallbacks(syncSideInputProtectionRunnable);
@@ -4913,7 +5035,7 @@ public class MainActivity extends Activity {
             if (switchGeneration == mainSlotSwitchGeneration
                     && activeMainSlot == newMainSlot) {
                 newRootHost.restoreHostedInputFocus();
-                restoreDefaultDisplayFocus("main slot switched");
+                scheduleDefaultNavigationFocusRestore("main slot switched");
                 refreshAllHostedSensorLandscapeRotations();
             }
             if (mainSlotSwitchPendingSlot == newMainSlot

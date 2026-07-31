@@ -1,6 +1,7 @@
 package com.sangluo.onestep;
 
 import android.annotation.SuppressLint;
+import android.app.ActivityManager;
 import android.content.Context;
 import android.graphics.Rect;
 import android.net.Credentials;
@@ -49,11 +50,13 @@ public final class RootInputBridge {
 
     private final int allowedUid;
     private final String bridgeToken;
+    private final ActivityManager activityManager;
     private final Object inputManager;
     private final Method injectInputEventMethod;
     private Object activityTaskManagerService;
     private Method focusTopTaskMethod;
     private Method removeTaskMethod;
+    private Method moveRootTaskToDisplayMethod;
     private Method getRootTaskInfoMethod;
     private Method setDisplayIdMethod;
     private Object windowManagerService;
@@ -75,6 +78,8 @@ public final class RootInputBridge {
             throws ReflectiveOperationException {
         this.allowedUid = allowedUid;
         this.bridgeToken = bridgeToken;
+        activityManager = (ActivityManager) systemContext.getSystemService(
+                Context.ACTIVITY_SERVICE);
         disableHiddenApiChecks();
         Object resolvedInputManager = null;
         Method resolvedInjectInputEventMethod = null;
@@ -304,6 +309,8 @@ public final class RootInputBridge {
                 return focusDisplay(parts);
             } else if ("removeTask".equals(parts[0]) && parts.length == 2) {
                 return removeTask(parts);
+            } else if ("moveTaskToDisplay".equals(parts[0]) && parts.length == 3) {
+                return moveTaskToDisplay(parts);
             } else if ("key".equals(parts[0]) && parts.length == 3) {
                 injectKey(parts);
             } else if ("imePolicy".equals(parts[0]) && parts.length == 3) {
@@ -483,6 +490,30 @@ public final class RootInputBridge {
         return "removeTask " + taskId + " " + success;
     }
 
+    private String moveTaskToDisplay(String[] parts) {
+        int taskId = Integer.parseInt(parts[1]);
+        int displayId = Integer.parseInt(parts[2]);
+        boolean success = false;
+        String failure = "";
+        try {
+            getMoveRootTaskToDisplayMethod().invoke(
+                    getActivityTaskManagerService(), taskId, displayId);
+            if (activityManager == null) {
+                throw new IllegalStateException("activity service unavailable");
+            }
+            activityManager.moveTaskToFront(taskId, 0);
+            success = true;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            throwIfSystemServiceDead(e);
+            failure = describeThrowable(e);
+        }
+        int priority = success ? Log.INFO : Log.WARN;
+        Log.println(priority, TAG, "Moved task=" + taskId + " to display=" + displayId
+                + " success=" + success
+                + (failure.isEmpty() ? "" : " failure=" + failure));
+        return "moveTaskToDisplay " + taskId + " " + displayId + " " + success;
+    }
+
     private Object getActivityTaskManagerService() throws ReflectiveOperationException {
         if (activityTaskManagerService == null) {
             activityTaskManagerService = RootActivityManagerCompat.getTaskService();
@@ -506,6 +537,15 @@ public final class RootInputBridge {
             removeTaskMethod.setAccessible(true);
         }
         return removeTaskMethod;
+    }
+
+    private Method getMoveRootTaskToDisplayMethod() throws ReflectiveOperationException {
+        if (moveRootTaskToDisplayMethod == null) {
+            moveRootTaskToDisplayMethod = getActivityTaskManagerService().getClass()
+                    .getMethod("moveRootTaskToDisplay", int.class, int.class);
+            moveRootTaskToDisplayMethod.setAccessible(true);
+        }
+        return moveRootTaskToDisplayMethod;
     }
 
     private String getPipStateResponse() {
