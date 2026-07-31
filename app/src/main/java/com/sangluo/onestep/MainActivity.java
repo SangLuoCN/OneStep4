@@ -1305,7 +1305,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean shouldHideStatusBarForOneStep() {
-        return multiWindowMode && !exitOneStepPending;
+        return multiWindowMode && !exitOneStepPending && !statusBarSpacingEnabled;
     }
 
     private synchronized Set<String> getRecordedSensorUidOverrides() {
@@ -3197,6 +3197,7 @@ public class MainActivity extends Activity {
         }
         statusBarSpacingEnabled = enabled;
         settingsStore.saveStatusBarSpacingEnabled(enabled);
+        applyStatusBarForCurrentMode();
         updateSettingsPageViews();
         rebuildTopChromeContent();
         scheduleEmbeddedSlotRefresh();

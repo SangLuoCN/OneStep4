@@ -423,7 +423,7 @@ public final class SettingsPanelController {
         list.addView(topComponentsVisibleItem, topComponentsVisibleLp);
 
         LinearLayout statusBarSpacingItem = createSwitchSettingsItem(
-                "状态栏间距", statusBarSpacingEnabled, this::saveStatusBarSpacingEnabled);
+                "状态栏显示", statusBarSpacingEnabled, this::saveStatusBarSpacingEnabled);
         statusBarSpacingValueView = (TextView) statusBarSpacingItem.getTag();
         statusBarSpacingSwitch = findSwitchInItem(statusBarSpacingItem);
         LinearLayout.LayoutParams statusBarSpacingLp = new LinearLayout.LayoutParams(
