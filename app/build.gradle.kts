@@ -88,6 +88,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
     implementation(libs.androidx.viewpager2)
+    implementation(libs.androidx.recyclerview)
     compileOnly("com.aliucord:Aliuhook:1.1.4")
     compileOnly(project(":xposed-api-stubs"))
     zygiskHookRuntime("com.aliucord:Aliuhook:1.1.4") {

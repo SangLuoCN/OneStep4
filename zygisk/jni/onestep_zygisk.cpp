@@ -35,6 +35,8 @@ constexpr const char *kStatusBarOverlayHookClass =
         "com.sangluo.onestep.hook.OneStepStatusBarOverlayHook";
 constexpr const char *kPrimaryHomeHookClass =
         "com.sangluo.onestep.hook.OneStepPrimaryHomeHook";
+constexpr const char *kRootVirtualDisplayCompatHookClass =
+        "com.sangluo.onestep.hook.OneStepRootVirtualDisplayCompatHook";
 constexpr const char *kDisableSecureWindowHook =
         "hook-config/disable-secure-window";
 constexpr const char *kDisableStatusBarOverlayHook =
@@ -338,6 +340,24 @@ jclass loadPrimaryHomeHookClass(JNIEnv *env, jobject appLoader) {
     return primaryHomeClass;
 }
 
+jclass loadRootVirtualDisplayCompatHookClass(JNIEnv *env, jobject appLoader) {
+    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
+    jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
+            classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (loadClass == nullptr
+            || clearException(env, "ClassLoader.loadClass method for root display compat")) {
+        return nullptr;
+    }
+    jstring className = env->NewStringUTF(kRootVirtualDisplayCompatHookClass);
+    auto compatHookClass = static_cast<jclass>(
+            env->CallObjectMethod(appLoader, loadClass, className));
+    if (compatHookClass == nullptr
+            || clearException(env, "load OneStep root display compat hook class")) {
+        return nullptr;
+    }
+    return compatHookClass;
+}
+
 class OneStepZygiskModule : public zygisk::ModuleBase {
 public:
     void onLoad(zygisk::Api *loadedApi, JNIEnv *loadedEnv) override {
@@ -389,11 +409,19 @@ public:
                         env->NewGlobalRef(localPrimaryHomeClass));
                 LOGI("Primary HOME hook runtime prepared for %s", kAbi);
             }
+            jclass localRootDisplayCompatClass = appLoader == nullptr
+                    ? nullptr : loadRootVirtualDisplayCompatHookClass(env, appLoader);
+            if (localRootDisplayCompatClass != nullptr) {
+                rootDisplayCompatHookClass = static_cast<jclass>(
+                        env->NewGlobalRef(localRootDisplayCompatClass));
+                LOGI("Root display compat hook runtime prepared for %s", kAbi);
+            }
             if (appLoader != nullptr && statusBarOverlayHookEnabled) {
                 appClassLoaderRef = env->NewGlobalRef(appLoader);
             }
             if (hookClass != nullptr || appClassLoaderRef != nullptr
-                    || primaryHomeHookClass != nullptr) {
+                    || primaryHomeHookClass != nullptr
+                    || rootDisplayCompatHookClass != nullptr) {
                 systemClassLoaderRef = env->NewGlobalRef(systemLoader);
             }
         }
@@ -414,6 +442,22 @@ public:
             writeStatusHookDiagnostic("system class loader unavailable");
             closeStatusHookDiagnostic();
             return;
+        }
+        if (rootDisplayCompatHookClass == nullptr) {
+            LOGE("Root display compat hook runtime was not prepared");
+        } else {
+            jmethodID compatBootstrap = env->GetStaticMethodID(
+                    rootDisplayCompatHookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
+            if (compatBootstrap == nullptr
+                    || clearException(env, "find root display compat hook bootstrap")) {
+                LOGE("Root display compat hook bootstrap was unavailable");
+            } else {
+                env->CallStaticVoidMethod(
+                        rootDisplayCompatHookClass, compatBootstrap, systemClassLoaderRef);
+                if (!clearException(env, "run root display compat hook bootstrap")) {
+                    LOGI("Root display compat hook bootstrap completed");
+                }
+            }
         }
         if (!secureWindowHookEnabled) {
             LOGI("Secure-window hook disabled by user");
@@ -493,6 +537,7 @@ private:
     JNIEnv *env = nullptr;
     jclass hookClass = nullptr;
     jclass primaryHomeHookClass = nullptr;
+    jclass rootDisplayCompatHookClass = nullptr;
     jobject appClassLoaderRef = nullptr;
     jobject systemClassLoaderRef = nullptr;
     bool secureWindowHookEnabled = true;

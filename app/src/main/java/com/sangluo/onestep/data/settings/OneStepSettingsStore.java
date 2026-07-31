@@ -6,8 +6,15 @@ import android.content.SharedPreferences;
 import android.net.Uri;
 import android.text.TextUtils;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Set;
 
 /** Owns preference keys, legacy migrations, validation, and persistence. */
@@ -22,6 +29,7 @@ public final class OneStepSettingsStore {
             "top_app_strip_spacing_scale";
     private static final String PREF_TOP_APP_STRIP_VERTICAL_PADDING_SCALE =
             "top_app_strip_vertical_padding_scale";
+    private static final String PREF_TOP_APP_LIST_CONFIG = "top_app_list_config";
     private static final String PREF_TOP_COMPONENTS_VISIBLE = "top_components_visible";
     private static final String PREF_STATUS_BAR_SPACING_ENABLED =
             "status_bar_spacing_enabled";
@@ -128,6 +136,50 @@ public final class OneStepSettingsStore {
 
     public void saveTopAppStripVerticalPaddingScale(int scalePct) {
         preferences.edit().putInt(PREF_TOP_APP_STRIP_VERTICAL_PADDING_SCALE, scalePct).apply();
+    }
+
+    public TopAppListConfig loadTopAppListConfig() {
+        String encoded = preferences.getString(PREF_TOP_APP_LIST_CONFIG, null);
+        if (TextUtils.isEmpty(encoded)) {
+            return TopAppListConfig.unconfigured();
+        }
+        try {
+            JSONObject root = new JSONObject(encoded);
+            return new TopAppListConfig(
+                    true,
+                    readStringArray(root.optJSONArray("order")),
+                    new LinkedHashSet<>(readStringArray(root.optJSONArray("selected"))));
+        } catch (JSONException | RuntimeException e) {
+            return TopAppListConfig.unconfigured();
+        }
+    }
+
+    public void saveTopAppListConfig(List<String> orderedKeys, Set<String> selectedKeys) {
+        JSONArray order = new JSONArray();
+        if (orderedKeys != null) {
+            for (String key : orderedKeys) {
+                if (!TextUtils.isEmpty(key)) {
+                    order.put(key);
+                }
+            }
+        }
+        JSONArray selected = new JSONArray();
+        if (selectedKeys != null) {
+            for (String key : selectedKeys) {
+                if (!TextUtils.isEmpty(key)) {
+                    selected.put(key);
+                }
+            }
+        }
+        try {
+            JSONObject root = new JSONObject()
+                    .put("version", 1)
+                    .put("order", order)
+                    .put("selected", selected);
+            preferences.edit().putString(PREF_TOP_APP_LIST_CONFIG, root.toString()).apply();
+        } catch (JSONException e) {
+            throw new IllegalStateException("Unable to encode top app list", e);
+        }
     }
 
     public void saveTopComponentsVisible(boolean visible) {
@@ -255,5 +307,39 @@ public final class OneStepSettingsStore {
                 : OneStepSettings.oneStepTriggerAreaScaleForSizeDp(preferences.getInt(
                         PREF_CORNER_TRIGGER_SIZE_DP,
                         OneStepSettings.CORNER_TRIGGER_SIZE_DEFAULT_DP));
+    }
+
+    private static List<String> readStringArray(JSONArray array) {
+        if (array == null || array.length() == 0) {
+            return Collections.emptyList();
+        }
+        List<String> values = new ArrayList<>(array.length());
+        for (int index = 0; index < array.length(); index++) {
+            String value = array.optString(index, "");
+            if (!TextUtils.isEmpty(value)) {
+                values.add(value);
+            }
+        }
+        return values;
+    }
+
+    public static final class TopAppListConfig {
+        public final boolean configured;
+        public final List<String> orderedKeys;
+        public final Set<String> selectedKeys;
+
+        TopAppListConfig(boolean configured, List<String> orderedKeys,
+                         Set<String> selectedKeys) {
+            this.configured = configured;
+            this.orderedKeys = Collections.unmodifiableList(
+                    new ArrayList<>(orderedKeys));
+            this.selectedKeys = Collections.unmodifiableSet(
+                    new LinkedHashSet<>(selectedKeys));
+        }
+
+        private static TopAppListConfig unconfigured() {
+            return new TopAppListConfig(
+                    false, Collections.emptyList(), Collections.emptySet());
+        }
     }
 }

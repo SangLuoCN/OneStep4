@@ -39,6 +39,7 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
         Log.i(TAG, "LSPosed backend selected: secure=" + secureWindowEnabled
                 + ", statusbar=" + statusBarEnabled
                 + ", primaryHome=" + primaryHomeEnhancementEnabled);
+        OneStepRootVirtualDisplayCompatHook.bootstrap(loadPackageParam.classLoader);
         if (secureWindowEnabled) {
             OneStepSecureWindowHook.bootstrap(loadPackageParam.classLoader);
         }

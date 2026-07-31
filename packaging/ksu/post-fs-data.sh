@@ -8,6 +8,7 @@ ARM32_PAYLOAD="$PAYLOAD_DIR/armeabi-v7a.so"
 LSPOSED_ACTIVE_MARKER="/data/system/onestep-lsposed-backend-active"
 STANDALONE_ACTIVE_MARKER="/data/system/onestep-standalone-backend-active"
 PRIMARY_HOME_ACTIVE_MARKER="/data/system/onestep-primary-home-hook-active"
+ROOT_DISPLAY_COMPAT_ACTIVE_MARKER="/data/system/onestep-root-display-compat-hook-active"
 
 lsposed_active() {
   for module_prop in /data/adb/modules/*/module.prop; do
@@ -33,7 +34,7 @@ set_hook_property() {
 }
 
 rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER" \
-  "$PRIMARY_HOME_ACTIVE_MARKER"
+  "$PRIMARY_HOME_ACTIVE_MARKER" "$ROOT_DISPLAY_COMPAT_ACTIVE_MARKER"
 set_hook_property onestep.hook.primaryhome_enhancement 0
 if [ -e "$MODDIR/hook-config/disable-secure-window" ]; then
   set_hook_property onestep.hook.secure 0

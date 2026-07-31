@@ -56,6 +56,7 @@ import android.widget.Toast;
 
 import com.sangluo.onestep.data.settings.OneStepSettings;
 import com.sangluo.onestep.data.settings.OneStepSettingsStore;
+import com.sangluo.onestep.data.settings.TopAppListPolicy;
 import com.sangluo.onestep.data.apps.LauncherAppRepository;
 import com.sangluo.onestep.feature.embedding.EmbeddedAppHost;
 import com.sangluo.onestep.feature.embedding.DismissedAppClosePolicy;
@@ -91,6 +92,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -210,6 +212,9 @@ public class MainActivity extends Activity {
     private final Map<String, Intent> routedLaunchIntents = new HashMap<>();
 
     private List<LauncherApp> launcherApps = Collections.emptyList();
+    private List<LauncherApp> orderedTopAppCandidates = Collections.emptyList();
+    private List<LauncherApp> topAppStripApps = Collections.emptyList();
+    private Set<String> selectedTopAppInstanceKeys = Collections.emptySet();
     private List<LauncherApp> builtInDesktopApps = Collections.emptyList();
     private LauncherApp builtInDesktopApp;
     private LauncherAppRepository launcherAppRepository;
@@ -557,6 +562,7 @@ public class MainActivity extends Activity {
         initializeEmbeddedBridgeState();
         launcherAppRepository = new LauncherAppRepository(this);
         launcherApps = launcherAppRepository.loadLauncherApps();
+        reconcileTopAppListConfiguration();
         loadBuiltInDesktopApps();
         setContentView(createDesktop());
         registerLauncherIconChangeReceiver();
@@ -724,6 +730,7 @@ public class MainActivity extends Activity {
         }
 
         launcherApps = refreshedApps;
+        reconcileTopAppListConfiguration();
         Map<String, LauncherApp> refreshedByInstance = new HashMap<>();
         Map<String, LauncherApp> refreshedByPackage = new HashMap<>();
         for (LauncherApp app : refreshedApps) {
@@ -2351,7 +2358,7 @@ public class MainActivity extends Activity {
         scrollView.addView(row, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        for (LauncherApp app : launcherApps) {
+        for (LauncherApp app : topAppStripApps) {
             int iconSizeDp = getTopAppIconSizeDp();
             AppShortcutView shortcut = new AppShortcutView(this, false, iconSizeDp, 0);
             shortcut.setStatusIndicatorEnabled(true);
@@ -2533,6 +2540,42 @@ public class MainActivity extends Activity {
         logRecordingEnabled = settings.logRecordingEnabled;
     }
 
+    private void reconcileTopAppListConfiguration() {
+        OneStepSettingsStore.TopAppListConfig config = settingsStore.loadTopAppListConfig();
+        List<String> availableKeys = new ArrayList<>(launcherApps.size());
+        Map<String, LauncherApp> appsByKey = new HashMap<>();
+        for (LauncherApp app : launcherApps) {
+            String key = app.instanceKey();
+            availableKeys.add(key);
+            appsByKey.put(key, app);
+        }
+        TopAppListPolicy.State state = TopAppListPolicy.reconcile(
+                availableKeys, config.configured, config.orderedKeys, config.selectedKeys);
+        List<LauncherApp> orderedCandidates = new ArrayList<>(state.orderedKeys.size());
+        List<LauncherApp> selectedApps = new ArrayList<>(state.selectedKeys.size());
+        for (String key : state.orderedKeys) {
+            LauncherApp app = appsByKey.get(key);
+            if (app == null) {
+                continue;
+            }
+            orderedCandidates.add(app);
+            if (state.selectedKeys.contains(key)) {
+                selectedApps.add(app);
+            }
+        }
+        orderedTopAppCandidates = orderedCandidates;
+        topAppStripApps = selectedApps;
+        selectedTopAppInstanceKeys = new LinkedHashSet<>(state.selectedKeys);
+    }
+
+    private void saveTopAppListConfiguration(
+            List<String> orderedKeys, Set<String> selectedKeys) {
+        settingsStore.saveTopAppListConfig(orderedKeys, selectedKeys);
+        reconcileTopAppListConfiguration();
+        updateSettingsPageViews();
+        rebuildTopChromeContent();
+    }
+
     private void loadBuiltInDesktopApps() {
         try {
             builtInDesktopApps = launcherAppRepository.loadHomeApps();
@@ -2639,6 +2682,16 @@ public class MainActivity extends Activity {
             @Override public boolean verticalWindowLayout() { return verticalWindowLayout; }
             @Override public boolean logRecordingEnabled() { return logRecordingEnabled; }
             @Override public int sideWindowCount() { return sideWindowCount; }
+            @Override public List<LauncherApp> topAppCandidates() {
+                return new ArrayList<>(orderedTopAppCandidates);
+            }
+            @Override public Set<String> selectedTopAppInstanceKeys() {
+                return new LinkedHashSet<>(selectedTopAppInstanceKeys);
+            }
+            @Override public void saveTopAppList(
+                    List<String> orderedKeys, Set<String> selectedKeys) {
+                MainActivity.this.saveTopAppListConfiguration(orderedKeys, selectedKeys);
+            }
             @Override public List<LauncherApp> builtInDesktopApps() {
                 return new ArrayList<>(builtInDesktopApps);
             }

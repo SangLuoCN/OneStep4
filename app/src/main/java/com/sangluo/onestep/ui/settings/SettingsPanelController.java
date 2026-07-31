@@ -25,6 +25,7 @@ import android.view.ViewGroup;
 import android.view.ViewParent;
 import android.view.Window;
 import android.widget.ArrayAdapter;
+import android.widget.CheckBox;
 import android.widget.CheckedTextView;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -42,13 +43,19 @@ import com.sangluo.onestep.ui.widget.AspectRatioImageView;
 import com.sangluo.onestep.ui.widget.FixedViewportFrameLayout;
 import com.sangluo.onestep.ui.window.OneStepWindowView;
 
+import androidx.recyclerview.widget.ItemTouchHelper;
+import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.RecyclerView;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 import static com.sangluo.onestep.data.settings.OneStepSettings.CORNER_TRIGGER_SENSITIVITY_MAX;
 import static com.sangluo.onestep.data.settings.OneStepSettings.CORNER_TRIGGER_SENSITIVITY_MIN;
@@ -88,6 +95,9 @@ public final class SettingsPanelController {
         boolean verticalWindowLayout();
         boolean logRecordingEnabled();
         int sideWindowCount();
+        List<LauncherApp> topAppCandidates();
+        Set<String> selectedTopAppInstanceKeys();
+        void saveTopAppList(List<String> orderedKeys, Set<String> selectedKeys);
         List<LauncherApp> builtInDesktopApps();
         String builtInDesktopComponentKey();
         void refreshBuiltInDesktopApps();
@@ -143,6 +153,7 @@ public final class SettingsPanelController {
     private TextView topAppIconSizeValueView;
     private TextView topAppStripSpacingValueView;
     private TextView topAppStripVerticalPaddingValueView;
+    private TextView topAppListValueView;
     private TextView topComponentsVisibleValueView;
     private TextView statusBarSpacingValueView;
     private TextView verticalWindowLayoutValueView;
@@ -193,6 +204,8 @@ public final class SettingsPanelController {
     private int hookSettingsRequestGeneration;
     private int sideWindowCount;
     private List<LauncherApp> builtInDesktopApps = Collections.emptyList();
+    private List<LauncherApp> topAppCandidates = Collections.emptyList();
+    private Set<String> selectedTopAppInstanceKeys = Collections.emptySet();
     private String builtInDesktopComponentKey = "";
 
     public SettingsPanelController(Activity activity, Callbacks callbacks) {
@@ -383,6 +396,15 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(86));
         navVerticalMarginLp.topMargin = dp(12);
         list.addView(navVerticalMarginItem, navVerticalMarginLp);
+
+        LinearLayout topAppListItem = createSettingsItem(
+                "应用列表显示", getTopAppListLabel());
+        topAppListValueView = (TextView) topAppListItem.getTag();
+        topAppListItem.setOnClickListener(v -> showTopAppListDialog());
+        LinearLayout.LayoutParams topAppListLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
+        topAppListLp.topMargin = dp(12);
+        list.addView(topAppListItem, topAppListLp);
 
         LinearLayout topIconSizeItem = createSliderSettingsItem("图标栏图标大小",
                 TOP_APP_ICON_SCALE_MIN, TOP_APP_ICON_SCALE_MAX, topAppIconScalePct,
@@ -1119,6 +1141,9 @@ public final class SettingsPanelController {
             cornerTriggerSensitivityValueView.setText(
                     formatPercentValue(cornerTriggerSensitivityPct));
         }
+        if (topAppListValueView != null) {
+            topAppListValueView.setText(getTopAppListLabel());
+        }
         if (topAppIconSizeValueView != null) {
             topAppIconSizeValueView.setText(formatPercentValue(topAppIconScalePct));
         }
@@ -1402,6 +1427,13 @@ public final class SettingsPanelController {
         return sideWindowCount + "个";
     }
 
+    private String getTopAppListLabel() {
+        if (topAppCandidates.isEmpty()) {
+            return "无应用";
+        }
+        return selectedTopAppInstanceKeys.size() + "/" + topAppCandidates.size();
+    }
+
     private String getBuiltInDesktopLabel() {
         for (LauncherApp app : builtInDesktopApps) {
             if (TextUtils.equals(app.componentKey(), builtInDesktopComponentKey)) {
@@ -1464,6 +1496,217 @@ public final class SettingsPanelController {
                     dialog.dismiss();
                 })
                 .setNegativeButton("取消", null));
+    }
+
+    private void showTopAppListDialog() {
+        if (topAppCandidates.isEmpty()) {
+            Toast.makeText(activity, "未找到可显示的系统桌面应用", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        TopAppListAdapter adapter = new TopAppListAdapter(
+                topAppCandidates, selectedTopAppInstanceKeys);
+        RecyclerView recyclerView = new RecyclerView(activity);
+        recyclerView.setLayoutManager(new LinearLayoutManager(activity));
+        recyclerView.setAdapter(adapter);
+        recyclerView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
+        recyclerView.setClipToPadding(false);
+        recyclerView.setPadding(0, dp(4), 0, dp(4));
+        int maxHeight = Math.max(dp(240), Math.min(dp(480),
+                activity.getResources().getDisplayMetrics().heightPixels - dp(180)));
+        recyclerView.setLayoutParams(new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, maxHeight));
+
+        ItemTouchHelper touchHelper = new ItemTouchHelper(new ItemTouchHelper.Callback() {
+            @Override
+            public boolean isLongPressDragEnabled() {
+                return true;
+            }
+
+            @Override
+            public boolean isItemViewSwipeEnabled() {
+                return false;
+            }
+
+            @Override
+            public int getMovementFlags(RecyclerView recyclerView,
+                                        RecyclerView.ViewHolder viewHolder) {
+                return makeMovementFlags(ItemTouchHelper.UP | ItemTouchHelper.DOWN, 0);
+            }
+
+            @Override
+            public boolean onMove(RecyclerView recyclerView,
+                                  RecyclerView.ViewHolder viewHolder,
+                                  RecyclerView.ViewHolder target) {
+                return adapter.moveItem(viewHolder.getBindingAdapterPosition(),
+                        target.getBindingAdapterPosition());
+            }
+
+            @Override
+            public void onSwiped(RecyclerView.ViewHolder viewHolder, int direction) {
+            }
+
+            @Override
+            public void onSelectedChanged(RecyclerView.ViewHolder viewHolder, int actionState) {
+                super.onSelectedChanged(viewHolder, actionState);
+                if (viewHolder != null && actionState == ItemTouchHelper.ACTION_STATE_DRAG) {
+                    viewHolder.itemView.setAlpha(0.72f);
+                    viewHolder.itemView.setElevation(dp(4));
+                }
+            }
+
+            @Override
+            public void clearView(RecyclerView recyclerView,
+                                  RecyclerView.ViewHolder viewHolder) {
+                super.clearView(recyclerView, viewHolder);
+                viewHolder.itemView.setAlpha(1f);
+                viewHolder.itemView.setElevation(0f);
+            }
+        });
+        touchHelper.attachToRecyclerView(recyclerView);
+
+        showRoundedDialog(new AlertDialog.Builder(activity)
+                .setTitle("应用列表显示")
+                .setView(recyclerView)
+                .setNegativeButton("取消", null)
+                .setPositiveButton("保存", (dialog, which) -> {
+                    callbacks.saveTopAppList(adapter.orderedKeys(), adapter.selectedKeys());
+                    syncState();
+                    refresh();
+                }));
+    }
+
+    private final class TopAppListAdapter
+            extends RecyclerView.Adapter<TopAppListAdapter.ViewHolder> {
+        private final List<LauncherApp> apps;
+        private final Set<String> selectedKeys;
+
+        TopAppListAdapter(List<LauncherApp> source, Set<String> selected) {
+            apps = new ArrayList<>(source);
+            selectedKeys = selected == null
+                    ? new LinkedHashSet<>() : new LinkedHashSet<>(selected);
+        }
+
+        @Override
+        public ViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            LinearLayout row = new LinearLayout(activity);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(12), dp(6), dp(8), dp(6));
+            row.setBackground(makePanelBackground(Color.WHITE, 0x12000000, dp(4)));
+
+            ImageView icon = new ImageView(activity);
+            icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            row.addView(icon, new LinearLayout.LayoutParams(dp(40), dp(52)));
+
+            LinearLayout labels = new LinearLayout(activity);
+            labels.setOrientation(LinearLayout.VERTICAL);
+            labels.setGravity(Gravity.CENTER_VERTICAL);
+            TextView title = new TextView(activity);
+            title.setTextColor(0xff222222);
+            title.setTypeface(Typeface.DEFAULT_BOLD);
+            title.setSingleLine(true);
+            setDpTextSize(title, 14);
+            labels.addView(title, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            TextView packageName = new TextView(activity);
+            packageName.setTextColor(0xff888888);
+            packageName.setSingleLine(true);
+            packageName.setEllipsize(TextUtils.TruncateAt.END);
+            setDpTextSize(packageName, 10);
+            labels.addView(packageName, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            LinearLayout.LayoutParams labelsLp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            labelsLp.leftMargin = dp(10);
+            row.addView(labels, labelsLp);
+
+            CheckBox checkBox = new CheckBox(activity);
+            checkBox.setClickable(false);
+            checkBox.setFocusable(false);
+            row.addView(checkBox, new LinearLayout.LayoutParams(dp(48), dp(52)));
+
+            TextView dragHandle = new TextView(activity);
+            dragHandle.setText("≡");
+            dragHandle.setTextColor(0xff888888);
+            dragHandle.setGravity(Gravity.CENTER);
+            dragHandle.setContentDescription("长按拖动排序");
+            setDpTextSize(dragHandle, 24);
+            row.addView(dragHandle, new LinearLayout.LayoutParams(dp(32), dp(52)));
+
+            return new ViewHolder(row, icon, title, packageName, checkBox);
+        }
+
+        @Override
+        public void onBindViewHolder(ViewHolder holder, int position) {
+            LauncherApp app = apps.get(position);
+            holder.icon.setImageDrawable(copyDrawable(app.icon));
+            holder.title.setText(app.label);
+            holder.packageName.setText(app.packageName);
+            holder.checkBox.setChecked(selectedKeys.contains(app.instanceKey()));
+            holder.itemView.setContentDescription(app.label + "，"
+                    + (selectedKeys.contains(app.instanceKey()) ? "已勾选" : "未勾选"));
+            holder.itemView.setOnClickListener(v -> {
+                String key = app.instanceKey();
+                if (!selectedKeys.add(key)) {
+                    selectedKeys.remove(key);
+                }
+                int adapterPosition = holder.getBindingAdapterPosition();
+                if (adapterPosition != RecyclerView.NO_POSITION) {
+                    notifyItemChanged(adapterPosition);
+                }
+            });
+        }
+
+        @Override
+        public int getItemCount() {
+            return apps.size();
+        }
+
+        boolean moveItem(int fromPosition, int toPosition) {
+            if (fromPosition < 0 || toPosition < 0
+                    || fromPosition >= apps.size() || toPosition >= apps.size()
+                    || fromPosition == toPosition) {
+                return false;
+            }
+            LauncherApp moved = apps.remove(fromPosition);
+            apps.add(toPosition, moved);
+            notifyItemMoved(fromPosition, toPosition);
+            return true;
+        }
+
+        List<String> orderedKeys() {
+            List<String> result = new ArrayList<>(apps.size());
+            for (LauncherApp app : apps) {
+                result.add(app.instanceKey());
+            }
+            return result;
+        }
+
+        Set<String> selectedKeys() {
+            Set<String> result = new LinkedHashSet<>();
+            for (LauncherApp app : apps) {
+                if (selectedKeys.contains(app.instanceKey())) {
+                    result.add(app.instanceKey());
+                }
+            }
+            return result;
+        }
+
+        final class ViewHolder extends RecyclerView.ViewHolder {
+            final ImageView icon;
+            final TextView title;
+            final TextView packageName;
+            final CheckBox checkBox;
+
+            ViewHolder(View itemView, ImageView icon, TextView title,
+                       TextView packageName, CheckBox checkBox) {
+                super(itemView);
+                this.icon = icon;
+                this.title = title;
+                this.packageName = packageName;
+                this.checkBox = checkBox;
+            }
+        }
     }
 
     private Drawable copyDrawable(Drawable source) {
@@ -1537,6 +1780,12 @@ public final class SettingsPanelController {
         verticalWindowLayout = callbacks.verticalWindowLayout();
         logRecordingEnabled = callbacks.logRecordingEnabled();
         sideWindowCount = callbacks.sideWindowCount();
+        List<LauncherApp> candidates = callbacks.topAppCandidates();
+        topAppCandidates = candidates == null
+                ? Collections.emptyList() : new ArrayList<>(candidates);
+        Set<String> selectedKeys = callbacks.selectedTopAppInstanceKeys();
+        selectedTopAppInstanceKeys = selectedKeys == null
+                ? Collections.emptySet() : new LinkedHashSet<>(selectedKeys);
         List<LauncherApp> desktopApps = callbacks.builtInDesktopApps();
         builtInDesktopApps = desktopApps == null
                 ? Collections.emptyList() : new ArrayList<>(desktopApps);
