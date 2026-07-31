@@ -147,6 +147,14 @@ final class RootCrossAppLaunchController extends Binder {
             if (source == null) {
                 return true;
             }
+            if (CrossAppLaunchRoutingPolicy.shouldPreserveCallerTask(
+                    intent.getAction(), intent.getFlags())) {
+                displayBridge.consumeArmedRoutingSource(source);
+                Log.i(TAG, "preserved activity-result launch on source display: source="
+                        + source.packageName + " display=" + source.displayId
+                        + " target=" + targetPackage + " action=" + intent.getAction());
+                return true;
+            }
             boolean routed = displayBridge.routeCrossAppLaunch(
                     source.displayId, source.packageName, new Intent(intent), targetPackage);
             if (routed) {

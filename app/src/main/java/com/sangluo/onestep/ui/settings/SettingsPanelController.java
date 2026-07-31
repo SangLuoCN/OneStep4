@@ -176,7 +176,7 @@ public final class SettingsPanelController {
     private boolean verticalWindowLayout;
     private boolean logRecordingEnabled;
     private boolean secureWindowHookEnabled = true;
-    private boolean statusBarOverlayHookEnabled = true;
+    private boolean statusBarOverlayHookEnabled;
     private boolean primaryHomeEnhancementEnabled = true;
     private boolean zygiskModuleInstalled;
     private boolean zygiskPayloadActive;
@@ -331,6 +331,19 @@ public final class SettingsPanelController {
         systemHomeLp.topMargin = dp(12);
         list.addView(systemHomeItem, systemHomeLp);
 
+        LinearLayout primaryHomeEnhancementItem = createSwitchSettingsItem(
+                "主屏桌面增强",
+                "开启且Hook生效时增强主屏及壁纸，否则按普通应用打开桌面",
+                primaryHomeEnhancementEnabled,
+                enabled -> updateZygiskHookSettings(
+                        secureWindowHookEnabled, statusBarOverlayHookEnabled, enabled));
+        primaryHomeEnhancementValueView = (TextView) primaryHomeEnhancementItem.getTag();
+        primaryHomeEnhancementSwitch = findSwitchInItem(primaryHomeEnhancementItem);
+        LinearLayout.LayoutParams primaryHomeEnhancementLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
+        primaryHomeEnhancementLp.topMargin = dp(12);
+        list.addView(primaryHomeEnhancementItem, primaryHomeEnhancementLp);
+
         LinearLayout sideWindowCountItem = createSettingsItem("小窗口数量",
                 getSideWindowCountLabel());
         sideWindowCountValueView = (TextView) sideWindowCountItem.getTag();
@@ -428,7 +441,7 @@ public final class SettingsPanelController {
         list.addView(rootAuthorizationItem, rootAuthorizationLp);
 
         LinearLayout zygiskHookStatusItem = createSettingsItem(
-                "Zygisk状态", "开启后才可使用增强功能", "读取中");
+                "Zygisk状态", "开启后才可使用增强功能", "未启用");
         zygiskHookStatusValueView = (TextView) zygiskHookStatusItem.getTag();
         LinearLayout.LayoutParams zygiskStatusLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(88));
@@ -462,19 +475,6 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
         statusBarOverlayHookLp.topMargin = dp(12);
         list.addView(statusBarOverlayHookItem, statusBarOverlayHookLp);
-
-        LinearLayout primaryHomeEnhancementItem = createSwitchSettingsItem(
-                "主屏桌面增强",
-                "开启且Hook生效时增强主屏及壁纸，否则按普通应用打开桌面",
-                primaryHomeEnhancementEnabled,
-                enabled -> updateZygiskHookSettings(
-                        secureWindowHookEnabled, statusBarOverlayHookEnabled, enabled));
-        primaryHomeEnhancementValueView = (TextView) primaryHomeEnhancementItem.getTag();
-        primaryHomeEnhancementSwitch = findSwitchInItem(primaryHomeEnhancementItem);
-        LinearLayout.LayoutParams primaryHomeEnhancementLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
-        primaryHomeEnhancementLp.topMargin = dp(12);
-        list.addView(primaryHomeEnhancementItem, primaryHomeEnhancementLp);
 
         applyHookSettingsItem = createSettingsItem("应用 Hook 设置", "重启");
         applyHookSettingsItem.setOnClickListener(v -> showHookSettingsRebootDialog());
@@ -1341,26 +1341,9 @@ public final class SettingsPanelController {
 
     private void refreshZygiskHookSettingsViews() {
         if (zygiskHookStatusValueView != null) {
-            if (hookSettingsSaving) {
-                zygiskHookStatusValueView.setText("保存中");
-            } else if (hookSettingsNeedsRoot) {
-                zygiskHookStatusValueView.setText("需要 ROOT");
-            } else if (hookSettingsReadFailed) {
-                zygiskHookStatusValueView.setText("读取失败");
-            } else if (!hookSettingsLoaded) {
-                zygiskHookStatusValueView.setText("读取中");
-            } else if (!zygiskModuleInstalled) {
-                zygiskHookStatusValueView.setText("模块不可用");
-            } else if (lsposedBackendActive) {
-                zygiskHookStatusValueView.setText("LSPosed/Vector 已启用");
-            } else if (lsposedInstalled) {
-                zygiskHookStatusValueView.setText("LSPosed/Vector 待配置");
-            } else if (standaloneBackendActive) {
-                zygiskHookStatusValueView.setText("已启用");
-            } else {
-                zygiskHookStatusValueView.setText(
-                        zygiskPayloadActive ? "待生效" : "未启用");
-            }
+            boolean hookBackendActive = hookSettingsLoaded && zygiskModuleInstalled
+                    && (lsposedBackendActive || standaloneBackendActive);
+            zygiskHookStatusValueView.setText(hookBackendActive ? "已启用" : "未启用");
         }
         if (secureWindowHookValueView != null) {
             secureWindowHookValueView.setText(formatSwitchValue(secureWindowHookEnabled));

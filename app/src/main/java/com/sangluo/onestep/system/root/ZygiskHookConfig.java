@@ -29,9 +29,9 @@ public final class ZygiskHookConfig {
                 + "if [ -n \"$onestep_module\" ] && [ -e \"$onestep_module/"
                 + CONFIG_DIR_NAME + "/" + DISABLE_SECURE_WINDOW
                 + "\" ]; then echo secure=0; else echo secure=1; fi; "
-                + "if [ -n \"$onestep_module\" ] && [ -e \"$onestep_module/"
+                + "if [ -n \"$onestep_module\" ] && [ ! -e \"$onestep_module/"
                 + CONFIG_DIR_NAME + "/" + DISABLE_STATUS_BAR_OVERLAY
-                + "\" ]; then echo statusbar=0; else echo statusbar=1; fi; "
+                + "\" ]; then echo statusbar=1; else echo statusbar=0; fi; "
                 + "if [ -n \"$onestep_module\" ] && [ -e \"$onestep_module/"
                 + CONFIG_DIR_NAME + "/" + DISABLE_PRIMARY_HOME_ENHANCEMENT
                 + "\" ]; then echo primaryhome_enhancement=0; "

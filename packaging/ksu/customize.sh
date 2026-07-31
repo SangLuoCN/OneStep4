@@ -33,6 +33,10 @@ APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 HOOK_CONFIG_DIR="$MODPATH/hook-config"
 PREVIOUS_HOOK_CONFIG_DIR="/data/adb/modules/onestep4_ksu_privapp/hook-config"
+PREVIOUS_HOOK_CONFIG_EXISTS=false
+if [ -d "$PREVIOUS_HOOK_CONFIG_DIR" ]; then
+  PREVIOUS_HOOK_CONFIG_EXISTS=true
+fi
 
 lsposed_active() {
   for module_prop in /data/adb/modules/*/module.prop; do
@@ -54,6 +58,9 @@ for hook_marker in disable-secure-window disable-status-bar-overlay \
     : >"$HOOK_CONFIG_DIR/$hook_marker"
   fi
 done
+if [ "$PREVIOUS_HOOK_CONFIG_EXISTS" != "true" ]; then
+  : >"$HOOK_CONFIG_DIR/disable-status-bar-overlay"
+fi
 if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/disable-primary-home" ]; then
   : >"$HOOK_CONFIG_DIR/disable-primary-home-enhancement"
 fi

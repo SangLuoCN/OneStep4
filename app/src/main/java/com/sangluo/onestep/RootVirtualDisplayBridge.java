@@ -467,6 +467,19 @@ public final class RootVirtualDisplayBridge extends Binder {
         }
     }
 
+    void consumeArmedRoutingSource(RoutingSource source) {
+        if (source == null) {
+            return;
+        }
+        synchronized (launchRoutingLock) {
+            if (source.displayId == routingSourceDisplayId
+                    && source.packageName.equals(routingSourcePackage)
+                    && source.displayId == lastInputDisplayId) {
+                lastInputUptime = 0L;
+            }
+        }
+    }
+
     boolean consumeLaunchBypass(String packageName) {
         synchronized (launchRoutingLock) {
             LaunchBypass bypass = launchBypasses.get(packageName);

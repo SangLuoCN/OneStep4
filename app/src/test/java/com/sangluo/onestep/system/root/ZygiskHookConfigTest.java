@@ -69,6 +69,9 @@ public class ZygiskHookConfigTest {
         assertTrue(command.contains("onestep-standalone-backend-active"));
         assertTrue(command.contains("(lsposed|lspd|vector)"));
         assertTrue(command.contains("disable-primary-home-enhancement"));
+        assertTrue(command.contains(
+                "disable-status-bar-overlay\" ]; then echo statusbar=1; "
+                        + "else echo statusbar=0"));
     }
 
     @Test
