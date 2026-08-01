@@ -31,6 +31,39 @@ public:
     virtual void postServerSpecialize(const ServerSpecializeArgs *) {}
 };
 
+struct AppSpecializeArgs {
+    jint &uid;
+    jint &gid;
+    jintArray &gids;
+    jint &runtime_flags;
+    jobjectArray &rlimits;
+    jint &mount_external;
+    jstring &se_info;
+    jstring &nice_name;
+    jstring &instruction_set;
+    jstring &app_data_dir;
+    jintArray *const fds_to_ignore;
+    jboolean *const is_child_zygote;
+    jboolean *const is_top_app;
+    jobjectArray *const pkg_data_info_list;
+    jobjectArray *const whitelisted_data_info_list;
+    jboolean *const mount_data_dirs;
+    jboolean *const mount_storage_dirs;
+
+    AppSpecializeArgs() = delete;
+};
+
+struct ServerSpecializeArgs {
+    jint &uid;
+    jint &gid;
+    jintArray &gids;
+    jint &runtime_flags;
+    jlong &permitted_capabilities;
+    jlong &effective_capabilities;
+
+    ServerSpecializeArgs() = delete;
+};
+
 namespace internal {
 struct api_table;
 template <class T> void entry_impl(api_table *, JNIEnv *);

@@ -270,6 +270,45 @@ restore_selected_home_when_unlocked() {
   fi
 }
 
+hyperos_third_party_home_selected() {
+  user_id="$1"
+  hyperos_version="$(getprop ro.mi.os.version.name 2>/dev/null)"
+  case "$hyperos_version" in
+    OS*) ;;
+    *) return 1 ;;
+  esac
+
+  resolved_home="$(resolve_home_component "$user_id")"
+  case "$resolved_home" in
+    com.miui.home/*|com.mi.android.globallauncher/*)
+      return 1
+      ;;
+  esac
+  onestep_is_selected_home "$user_id"
+}
+
+restore_hyperos_gesture_navigation() {
+  user_id="$1"
+  marker="$MODDIR/hook-config/enable-hyperos-third-party-gesture"
+  if [ ! -e "$marker" ]; then
+    write_log "HyperOS gesture restore skipped: feature marker is absent"
+    return 0
+  fi
+  if ! hyperos_third_party_home_selected "$user_id"; then
+    write_log "HyperOS gesture restore skipped: OneStep is not the selected third-party HOME"
+    return 0
+  fi
+
+  settings put global force_fsg_nav_bar 1 >/dev/null 2>&1
+  fsg_mode="$(settings get global force_fsg_nav_bar 2>/dev/null)"
+  if [ "$fsg_mode" = "1" ]; then
+    write_log "HyperOS gesture navigation restored for user $user_id"
+    return 0
+  fi
+  write_log "HyperOS gesture navigation restore failed: force=$fsg_mode"
+  return 1
+}
+
 write_log "Waiting for Android boot completion"
 if [ -x "$MODDIR/statusbar-post-fs-data.sh" ]; then
   write_log "Checking optional Zygisk status-bar overlay"
@@ -319,3 +358,4 @@ fi
 
 write_log "OneStep package recovery completed"
 restore_selected_home_when_unlocked "$current_user" "$onestep_home_was_selected"
+restore_hyperos_gesture_navigation "$current_user"

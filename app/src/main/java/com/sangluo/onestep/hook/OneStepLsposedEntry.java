@@ -15,20 +15,47 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
     private static final String TAG = "OneStepLsposed";
     private static final String SYSTEM_FRAMEWORK_PACKAGE = "android";
     private static final String SYSTEM_SERVER_PROCESS = "android";
+    private static final String SETTINGS_PACKAGE = "com.android.settings";
+    private static final String SYSTEM_UI_PACKAGE = "com.android.systemui";
+    private static final String MIUI_HOME_PACKAGE = "com.miui.home";
     private static final String SECURE_WINDOW_PROPERTY = "onestep.hook.secure";
     private static final String STATUS_BAR_PROPERTY = "onestep.hook.statusbar";
     private static final String PRIMARY_HOME_ENHANCEMENT_PROPERTY =
             "onestep.hook.primaryhome_enhancement";
     private static final String ACTIVE_MARKER =
             "/data/system/onestep-lsposed-backend-active";
-    private static final AtomicBoolean STARTED = new AtomicBoolean();
+    private static final AtomicBoolean SYSTEM_SERVER_STARTED = new AtomicBoolean();
+    private static final AtomicBoolean SETTINGS_STARTED = new AtomicBoolean();
+    private static final AtomicBoolean SYSTEM_UI_STARTED = new AtomicBoolean();
+    private static final AtomicBoolean MIUI_HOME_STARTED = new AtomicBoolean();
 
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam loadPackageParam) {
-        if (loadPackageParam == null
-                || !SYSTEM_FRAMEWORK_PACKAGE.equals(loadPackageParam.packageName)
+        if (loadPackageParam == null) {
+            return;
+        }
+        if (SETTINGS_PACKAGE.equals(loadPackageParam.packageName)
+                && SETTINGS_PACKAGE.equals(loadPackageParam.processName)
+                && SETTINGS_STARTED.compareAndSet(false, true)) {
+            HyperOsThirdPartyHomeBypassHook.install(loadPackageParam.classLoader);
+            return;
+        }
+        if (MIUI_HOME_PACKAGE.equals(loadPackageParam.packageName)
+                && MIUI_HOME_PACKAGE.equals(loadPackageParam.processName)
+                && MIUI_HOME_STARTED.compareAndSet(false, true)) {
+            HyperOsGestureNavigationBypassHook.install(loadPackageParam.classLoader);
+            return;
+        }
+        if (SYSTEM_UI_PACKAGE.equals(loadPackageParam.packageName)
+                && SYSTEM_UI_PACKAGE.equals(loadPackageParam.processName)
+                && SYSTEM_UI_STARTED.compareAndSet(false, true)) {
+            HyperOsSystemUiGestureNavigationBypassHook.install(
+                    loadPackageParam.classLoader);
+            return;
+        }
+        if (!SYSTEM_FRAMEWORK_PACKAGE.equals(loadPackageParam.packageName)
                 || !SYSTEM_SERVER_PROCESS.equals(loadPackageParam.processName)
-                || !STARTED.compareAndSet(false, true)) {
+                || !SYSTEM_SERVER_STARTED.compareAndSet(false, true)) {
             return;
         }
         markBackendActive();

@@ -84,6 +84,7 @@ import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedBackExitPolicy;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
+import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
 import com.sangluo.onestep.feature.media.MediaSessionCoordinator;
 import com.sangluo.onestep.hook.OneStepPrimaryHomePolicy;
@@ -1338,6 +1339,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         launchRequestedPackage = "";
         launchRequestedUserId = -1;
         launchRequestedDisplayId = -1;
+        if (!VirtualDisplayHomeKeyPolicy.shouldInjectHomeKey(Build.VERSION.SDK_INT)) {
+            Log.i(TAG, "Skip virtual HOME key on Android 11 display " + displayId);
+            return;
+        }
         injectKeyDirectAsync(KeyEvent.KEYCODE_HOME, "home display " + displayId);
     }
 
@@ -2842,6 +2847,16 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                             getRootInputBridgeToken(), slot, displayName,
                             spec.width, spec.height, spec.densityDpi,
                             holder.getSurface(), flagCandidates);
+            if (result.isStaleSystemServiceFailure()) {
+                Log.w(TAG, "Restart stale root display bridge before retrying slot " + slot);
+                rootVirtualDisplayBridgeClient.close();
+                if (startRootInputBridgeIfNeeded(true, true)) {
+                    result = rootVirtualDisplayBridgeClient.create(
+                            getRootInputBridgeToken(), slot, displayName,
+                            spec.width, spec.height, spec.densityDpi,
+                            holder.getSurface(), flagCandidates);
+                }
+            }
             if (result.isSuccess()) {
                 rootManagedVirtualDisplay = true;
                 displayId = result.displayId;

@@ -18,6 +18,8 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
 
+import com.sangluo.onestep.system.root.SystemServiceFailurePolicy;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -1327,16 +1329,8 @@ public final class RootInputBridge {
     }
 
     private static void throwIfSystemServiceDead(Throwable throwable) {
-        Throwable current = throwable;
-        while (current != null) {
-            String name = current.getClass().getSimpleName();
-            if ("DeadObjectException".equals(name)
-                    || "DeadSystemException".equals(name)
-                    || "DeadSystemRuntimeException".equals(name)) {
-                throw new StaleSystemServiceException(throwable);
-            }
-            Throwable cause = current.getCause();
-            current = cause == current ? null : cause;
+        if (SystemServiceFailurePolicy.isStaleSystemService(throwable)) {
+            throw new StaleSystemServiceException(throwable);
         }
     }
 

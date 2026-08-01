@@ -3,8 +3,11 @@ package com.sangluo.onestep.ui.settings;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
+import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -102,6 +105,9 @@ public final class SettingsPanelController {
         String builtInDesktopComponentKey();
         void refreshBuiltInDesktopApps();
         void saveBuiltInDesktop(LauncherApp app);
+        List<LauncherApp> defaultHomeCandidates();
+        void setDefaultHome(LauncherApp app, DefaultHomeResultCallback callback);
+        void enableHyperOsGestureNavigation(DefaultHomeResultCallback callback);
         void saveOneStepTriggerAreaScale(int value);
         void saveCornerTriggerSensitivity(int value);
         void saveTopNavVerticalMarginScale(int value);
@@ -131,6 +137,10 @@ public final class SettingsPanelController {
 
     public interface RootAuthorizationResultCallback {
         void onResult(RootAuthorizationResult result);
+    }
+
+    public interface DefaultHomeResultCallback {
+        void onResult(boolean success, String message);
     }
 
     public enum RootAuthorizationResult {
@@ -337,12 +347,22 @@ public final class SettingsPanelController {
         list.addView(builtInDesktopItem, builtInDesktopLp);
 
         LinearLayout systemHomeItem = createSettingsItem(
-                "设置为系统桌面", "前往设置");
+                "设置为系统桌面", "选择系统默认桌面");
         systemHomeItem.setOnClickListener(v -> openSystemHomeSettings());
         LinearLayout.LayoutParams systemHomeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
         systemHomeLp.topMargin = dp(12);
         list.addView(systemHomeItem, systemHomeLp);
+
+        if (hasHyperOsThirdPartyHomeRestriction()) {
+            LinearLayout gestureNavigationItem = createSettingsItem(
+                    "全面屏手势", "启用第三方桌面的 HyperOS 系统手势");
+            gestureNavigationItem.setOnClickListener(v -> enableHyperOsGestureNavigation());
+            LinearLayout.LayoutParams gestureNavigationLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
+            gestureNavigationLp.topMargin = dp(12);
+            list.addView(gestureNavigationItem, gestureNavigationLp);
+        }
 
         LinearLayout primaryHomeEnhancementItem = createSwitchSettingsItem(
                 "主屏桌面增强",
@@ -1718,12 +1738,167 @@ public final class SettingsPanelController {
     }
 
     private void openSystemHomeSettings() {
+        if (hasHyperOsThirdPartyHomeRestriction()) {
+            openHyperOsDefaultHomeChooser();
+            return;
+        }
         if (tryOpenSettings(Settings.ACTION_HOME_SETTINGS)
                 || tryOpenSettings(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)
                 || tryOpenSettings(Settings.ACTION_SETTINGS)) {
             return;
         }
         Toast.makeText(activity, "无法打开系统桌面设置", Toast.LENGTH_SHORT).show();
+    }
+
+    private boolean hasHyperOsThirdPartyHomeRestriction() {
+        try {
+            ProviderInfo provider = activity.getPackageManager().resolveContentProvider(
+                    "com.miui.sec.THIRD_DESKTOP", 0);
+            return provider != null
+                    && "com.miui.securitycenter".equals(provider.packageName);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private void openHyperOsDefaultHomeChooser() {
+        if (callbacks.rootAuthorizationGranted()) {
+            rootAuthorizationGranted = true;
+            refreshRootAuthorizationView();
+            showDefaultHomeDialog();
+            return;
+        }
+        if (rootAuthorizationRequestInFlight) {
+            return;
+        }
+        rootAuthorizationRequestInFlight = true;
+        refreshRootAuthorizationView();
+        callbacks.requestRootAuthorization(result -> activity.runOnUiThread(() -> {
+            rootAuthorizationRequestInFlight = false;
+            rootAuthorizationGranted = result == RootAuthorizationResult.GRANTED;
+            refreshRootAuthorizationView();
+            if (rootAuthorizationGranted) {
+                showDefaultHomeDialog();
+            } else if (result == RootAuthorizationResult.KERNEL_SU_ACTION_REQUIRED) {
+                showKernelSuAuthorizationDialog();
+            } else {
+                Toast.makeText(activity, "需要 ROOT 权限才能绕过 HyperOS 桌面限制",
+                        Toast.LENGTH_SHORT).show();
+            }
+        }));
+    }
+
+    private void enableHyperOsGestureNavigation() {
+        if (callbacks.rootAuthorizationGranted()) {
+            rootAuthorizationGranted = true;
+            refreshRootAuthorizationView();
+            runHyperOsGestureNavigationEnable();
+            return;
+        }
+        if (rootAuthorizationRequestInFlight) {
+            return;
+        }
+        rootAuthorizationRequestInFlight = true;
+        refreshRootAuthorizationView();
+        callbacks.requestRootAuthorization(result -> activity.runOnUiThread(() -> {
+            rootAuthorizationRequestInFlight = false;
+            rootAuthorizationGranted = result == RootAuthorizationResult.GRANTED;
+            refreshRootAuthorizationView();
+            if (rootAuthorizationGranted) {
+                runHyperOsGestureNavigationEnable();
+            } else if (result == RootAuthorizationResult.KERNEL_SU_ACTION_REQUIRED) {
+                showKernelSuAuthorizationDialog();
+            } else {
+                Toast.makeText(activity, "需要 ROOT 权限才能启用 HyperOS 第三方桌面手势",
+                        Toast.LENGTH_SHORT).show();
+            }
+        }));
+    }
+
+    private void runHyperOsGestureNavigationEnable() {
+        callbacks.enableHyperOsGestureNavigation((success, message) ->
+                activity.runOnUiThread(() -> Toast.makeText(
+                        activity,
+                        TextUtils.isEmpty(message)
+                                ? success ? "已启用全面屏手势" : "全面屏手势启用失败"
+                                : message,
+                        Toast.LENGTH_SHORT).show()));
+    }
+
+    private void showDefaultHomeDialog() {
+        List<LauncherApp> candidates = callbacks.defaultHomeCandidates();
+        if (candidates == null || candidates.isEmpty()) {
+            Toast.makeText(activity, "未找到可用的桌面应用", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        ComponentName currentHome = resolveCurrentHome();
+        int checkedItem = -1;
+        for (int index = 0; index < candidates.size(); index++) {
+            if (candidates.get(index).componentName.equals(currentHome)) {
+                checkedItem = index;
+                break;
+            }
+        }
+        ArrayAdapter<LauncherApp> adapter = createHomeAppAdapter(candidates);
+        showRoundedDialog(new AlertDialog.Builder(activity)
+                .setTitle("选择系统默认桌面")
+                .setSingleChoiceItems(adapter, checkedItem, (dialog, which) -> {
+                    LauncherApp app = adapter.getItem(which);
+                    dialog.dismiss();
+                    if (app == null) {
+                        return;
+                    }
+                    callbacks.setDefaultHome(app, (success, message) ->
+                            activity.runOnUiThread(() -> Toast.makeText(
+                                    activity,
+                                    TextUtils.isEmpty(message)
+                                            ? success ? "已设置默认桌面" : "设置默认桌面失败"
+                                            : message,
+                                    Toast.LENGTH_SHORT).show()));
+                })
+                .setNegativeButton("取消", null));
+    }
+
+    private ComponentName resolveCurrentHome() {
+        try {
+            Intent homeIntent = new Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_HOME);
+            ResolveInfo resolveInfo = activity.getPackageManager().resolveActivity(
+                    homeIntent, PackageManager.MATCH_DEFAULT_ONLY);
+            return resolveInfo == null || resolveInfo.activityInfo == null
+                    ? null : new ComponentName(
+                    resolveInfo.activityInfo.packageName, resolveInfo.activityInfo.name);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private ArrayAdapter<LauncherApp> createHomeAppAdapter(List<LauncherApp> apps) {
+        return new ArrayAdapter<LauncherApp>(activity,
+                android.R.layout.select_dialog_singlechoice, new ArrayList<>(apps)) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                CheckedTextView row = (CheckedTextView) super.getView(
+                        position, convertView, parent);
+                LauncherApp app = getItem(position);
+                if (app == null) {
+                    return row;
+                }
+                row.setText(TextUtils.concat(app.label, "\n", app.packageName));
+                row.setTextColor(0xff222222);
+                row.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
+                row.setMaxLines(2);
+                row.setCompoundDrawablePadding(dp(12));
+                Drawable icon = copyDrawable(app.icon);
+                if (icon != null) {
+                    int iconSize = dp(36);
+                    icon.setBounds(0, 0, iconSize, iconSize);
+                }
+                row.setCompoundDrawables(icon, null, null, null);
+                row.setMinHeight(dp(64));
+                return row;
+            }
+        };
     }
 
     private boolean tryOpenSettings(String action) {

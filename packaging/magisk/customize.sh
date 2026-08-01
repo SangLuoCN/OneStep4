@@ -31,7 +31,7 @@ lsposed_active() {
 
 mkdir -p "$HOOK_CONFIG_DIR"
 for hook_marker in disable-secure-window disable-status-bar-overlay \
-    disable-primary-home-enhancement; do
+    disable-primary-home-enhancement enable-hyperos-third-party-gesture; do
   if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/$hook_marker" ]; then
     : >"$HOOK_CONFIG_DIR/$hook_marker"
   fi
@@ -66,7 +66,7 @@ esac
 if lsposed_active; then
   rm -rf "$MODPATH/zygisk"
   ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
-  ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”作用域"
+  ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”、“设置”和“系统桌面”作用域"
 elif [ "$SDK_INT" -lt 29 ]; then
   rm -rf "$MODPATH/zygisk"
   ui_print "- 当前 Android API $SDK_INT：Zygisk Hook 仅支持 Android 10 及以上"

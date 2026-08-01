@@ -2641,6 +2641,104 @@ public class MainActivity extends Activity {
         mainHandler.post(this::requestDesktopHomeInMain);
     }
 
+    private List<LauncherApp> loadDefaultHomeCandidates() {
+        if (launcherAppRepository == null) {
+            return Collections.emptyList();
+        }
+        try {
+            return launcherAppRepository.loadDefaultHomeApps();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Loading default HOME candidates failed", e);
+            return Collections.emptyList();
+        }
+    }
+
+    private void setDefaultHomeWithRoot(
+            LauncherApp app, SettingsPanelController.DefaultHomeResultCallback callback) {
+        if (app == null || callback == null) {
+            return;
+        }
+        hookSettingsExecutor.execute(() -> {
+            String targetPackage = mainShellQuote(app.packageName);
+            String targetComponent = mainShellQuote(app.componentKey());
+            int userId = app.userId();
+            String command = "target_package=" + targetPackage + "\n"
+                    + "target_component=" + targetComponent + "\n"
+                    + "user_id=" + userId + "\n"
+                    + "set_output=\"$(cmd package set-home-activity --user \"$user_id\" "
+                    + "\"$target_component\" 2>&1)\"\n"
+                    + "set_status=$?\n"
+                    + "if [ \"$set_status\" -ne 0 ]; then\n"
+                    + "  cmd role add-role-holder --user \"$user_id\" "
+                    + "android.app.role.HOME \"$target_package\" 0 >/dev/null 2>&1\n"
+                    + "fi\n"
+                    + "attempt=0\n"
+                    + "while [ \"$attempt\" -lt 10 ]; do\n"
+                    + "  resolved=\"$(cmd package resolve-activity --brief --user "
+                    + "\"$user_id\" -a android.intent.action.MAIN "
+                    + "-c android.intent.category.HOME 2>&1)\"\n"
+                    + "  case \"$resolved\" in\n"
+                    + "    *\"$target_package/\"*) printf '%s\\n' \"$resolved\"; exit 0 ;;\n"
+                    + "  esac\n"
+                    + "  attempt=$((attempt + 1))\n"
+                    + "  sleep 0.1\n"
+                    + "done\n"
+                    + "printf '%s\\n%s\\n' \"$set_output\" \"$resolved\"\n"
+                    + "exit 1";
+            ShellCommandResult result = runMainPrivilegedCommand(
+                    command, "set default HOME to " + app.componentKey(), true);
+            String message = result.isSuccess()
+                    ? "已将“" + app.label + "”设为默认桌面"
+                    : "设置“" + app.label + "”为默认桌面失败";
+            mainHandler.post(() -> {
+                if (!activityDestroyed) {
+                    callback.onResult(result.isSuccess(), message);
+                }
+            });
+        });
+    }
+
+    private void enableHyperOsGestureNavigation(
+            SettingsPanelController.DefaultHomeResultCallback callback) {
+        if (callback == null) {
+            return;
+        }
+        hookSettingsExecutor.execute(() -> {
+            String command = "marker_written=0\n"
+                    + "for module_dir in /data/adb/modules/onestep40_privapp "
+                    + "/data/adb/modules/onestep4_ksu_privapp; do\n"
+                    + "  if [ -d \"$module_dir\" ] && [ ! -e \"$module_dir/disable\" ] "
+                    + "&& [ ! -e \"$module_dir/remove\" ]; then\n"
+                    + "    mkdir -p \"$module_dir/hook-config\"\n"
+                    + "    : > \"$module_dir/hook-config/enable-hyperos-third-party-gesture\"\n"
+                    + "    chmod 0600 \"$module_dir/hook-config/enable-hyperos-third-party-gesture\"\n"
+                    + "    marker_written=1\n"
+                    + "    break\n"
+                    + "  fi\n"
+                    + "done\n"
+                    + "settings put global force_fsg_nav_bar 1\n"
+                    + "fsg_mode=\"$(settings get global force_fsg_nav_bar 2>/dev/null)\"\n"
+                    + "if [ \"$fsg_mode\" = \"1\" ]; then\n"
+                    + "  printf 'force_fsg_nav_bar=%s\\nmarker=%s\\n' "
+                    + "\"$fsg_mode\" \"$marker_written\"\n"
+                    + "  exit 0\n"
+                    + "fi\n"
+                    + "printf 'force_fsg_nav_bar=%s\\nmarker=%s\\n' "
+                    + "\"$fsg_mode\" \"$marker_written\"\n"
+                    + "exit 1";
+            ShellCommandResult result = runMainPrivilegedCommand(
+                    command, "enable HyperOS gesture navigation", true);
+            String message = result.isSuccess()
+                    ? "已启用 HyperOS 全面屏手势"
+                    : "HyperOS 全面屏手势开关写入失败";
+            mainHandler.post(() -> {
+                if (!activityDestroyed) {
+                    callback.onResult(result.isSuccess(), message);
+                }
+            });
+        });
+    }
+
     private SettingsPanelController createSettingsPanelController() {
         return new SettingsPanelController(this, new SettingsPanelController.Callbacks() {
             @Override public OneStepWindowView activeMainWindowView() {
@@ -2703,6 +2801,18 @@ public class MainActivity extends Activity {
             }
             @Override public void saveBuiltInDesktop(LauncherApp app) {
                 MainActivity.this.saveBuiltInDesktop(app);
+            }
+            @Override public List<LauncherApp> defaultHomeCandidates() {
+                return MainActivity.this.loadDefaultHomeCandidates();
+            }
+            @Override public void setDefaultHome(
+                    LauncherApp app,
+                    SettingsPanelController.DefaultHomeResultCallback callback) {
+                MainActivity.this.setDefaultHomeWithRoot(app, callback);
+            }
+            @Override public void enableHyperOsGestureNavigation(
+                    SettingsPanelController.DefaultHomeResultCallback callback) {
+                MainActivity.this.enableHyperOsGestureNavigation(callback);
             }
             @Override public void saveOneStepTriggerAreaScale(int value) {
                 MainActivity.this.saveOneStepTriggerAreaScale(value);

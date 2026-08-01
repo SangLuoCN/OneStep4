@@ -14,6 +14,7 @@ import android.view.Display;
 import android.view.Surface;
 
 import com.sangluo.onestep.system.display.DisplayOwnerPolicy;
+import com.sangluo.onestep.system.root.SystemServiceFailurePolicy;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -160,9 +161,28 @@ public final class RootVirtualDisplayBridge extends Binder {
             }
         } catch (RuntimeException e) {
             Log.e(TAG, "transaction failed code=" + code, e);
-            reply.writeException(e);
+            String failure = SystemServiceFailurePolicy.describeCauseChain(e);
+            reply.setDataSize(0);
+            reply.setDataPosition(0);
+            if (code == TRANSACTION_CREATE) {
+                writeCreateFailure(reply, failure);
+            } else {
+                // Parcel only marshals a fixed set of exception classes. Unknown runtime
+                // exceptions are otherwise encoded as EX_NONE and disappear at the client.
+                reply.writeException(new IllegalStateException(failure));
+            }
             return true;
         }
+    }
+
+    private static void writeCreateFailure(Parcel reply, String failure) {
+        reply.writeNoException();
+        reply.writeInt(-1);
+        reply.writeInt(0);
+        reply.writeString(failure);
+        reply.writeInt(0);
+        reply.writeString("");
+        reply.writeInt(0);
     }
 
     private void enforceCaller(String requestToken) {
@@ -230,6 +250,9 @@ public final class RootVirtualDisplayBridge extends Binder {
                         failure = "";
                         break;
                     } catch (RuntimeException e) {
+                        if (SystemServiceFailurePolicy.isStaleSystemService(e)) {
+                            throw e;
+                        }
                         displayId = -1;
                         selectedFlags = 0;
                         failure = "flags=" + displayFlags + ":"

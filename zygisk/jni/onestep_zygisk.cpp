@@ -37,6 +37,13 @@ constexpr const char *kPrimaryHomeHookClass =
         "com.sangluo.onestep.hook.OneStepPrimaryHomeHook";
 constexpr const char *kRootVirtualDisplayCompatHookClass =
         "com.sangluo.onestep.hook.OneStepRootVirtualDisplayCompatHook";
+constexpr const char *kHyperOsGestureNavigationHookClass =
+        "com.sangluo.onestep.hook.HyperOsGestureNavigationBypassHook";
+constexpr const char *kHyperOsSystemUiGestureNavigationHookClass =
+        "com.sangluo.onestep.hook.HyperOsSystemUiGestureNavigationBypassHook";
+constexpr const char *kMiuiHomeProcess = "com.miui.home";
+constexpr const char *kSystemUiProcess = "com.android.systemui";
+constexpr const char *kHyperOsVersionProperty = "ro.mi.os.version.name";
 constexpr const char *kDisableSecureWindowHook =
         "hook-config/disable-secure-window";
 constexpr const char *kDisableStatusBarOverlayHook =
@@ -358,6 +365,61 @@ jclass loadRootVirtualDisplayCompatHookClass(JNIEnv *env, jobject appLoader) {
     return compatHookClass;
 }
 
+jclass loadHyperOsGestureNavigationHookClass(JNIEnv *env, jobject appLoader) {
+    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
+    jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
+            classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (loadClass == nullptr
+            || clearException(env, "ClassLoader.loadClass method for HyperOS gesture")) {
+        return nullptr;
+    }
+    jstring className = env->NewStringUTF(kHyperOsGestureNavigationHookClass);
+    auto gestureHookClass = static_cast<jclass>(
+            env->CallObjectMethod(appLoader, loadClass, className));
+    if (gestureHookClass == nullptr
+            || clearException(env, "load HyperOS gesture hook class")) {
+        return nullptr;
+    }
+    return gestureHookClass;
+}
+
+jclass loadHyperOsSystemUiGestureNavigationHookClass(JNIEnv *env, jobject appLoader) {
+    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
+    jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
+            classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (loadClass == nullptr
+            || clearException(env, "ClassLoader.loadClass method for HyperOS SystemUI gesture")) {
+        return nullptr;
+    }
+    jstring className = env->NewStringUTF(kHyperOsSystemUiGestureNavigationHookClass);
+    auto gestureHookClass = static_cast<jclass>(
+            env->CallObjectMethod(appLoader, loadClass, className));
+    if (gestureHookClass == nullptr
+            || clearException(env, "load HyperOS SystemUI gesture hook class")) {
+        return nullptr;
+    }
+    return gestureHookClass;
+}
+
+bool isProcess(JNIEnv *env, jstring niceName, const char *expected) {
+    if (niceName == nullptr || expected == nullptr) {
+        return false;
+    }
+    const char *name = env->GetStringUTFChars(niceName, nullptr);
+    if (name == nullptr || clearException(env, "read app process name")) {
+        return false;
+    }
+    bool matches = strcmp(name, expected) == 0;
+    env->ReleaseStringUTFChars(niceName, name);
+    return matches;
+}
+
+bool isHyperOs() {
+    char version[PROP_VALUE_MAX]{};
+    return __system_property_get(kHyperOsVersionProperty, version) > 0
+            && strncmp(version, "OS", 2) == 0;
+}
+
 class OneStepZygiskModule : public zygisk::ModuleBase {
 public:
     void onLoad(zygisk::Api *loadedApi, JNIEnv *loadedEnv) override {
@@ -365,8 +427,69 @@ public:
         env = loadedEnv;
     }
 
-    void preAppSpecialize(zygisk::AppSpecializeArgs *) override {
-        api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+    void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
+        bool isMiuiHome = args != nullptr
+                && isProcess(env, args->nice_name, kMiuiHomeProcess);
+        bool isSystemUi = args != nullptr
+                && isProcess(env, args->nice_name, kSystemUiProcess);
+        if ((!isMiuiHome && !isSystemUi) || !isHyperOs()) {
+            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
+        if (activeLsposedModuleInstalled()) {
+            LOGI("LSPosed backend selected; skip standalone HyperOS app hook");
+            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
+        int moduleFd = api->getModuleDir();
+        if (moduleFd < 0) {
+            LOGE("module directory unavailable for HyperOS app hook");
+            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+            return;
+        }
+        jobject systemLoader = systemClassLoader(env);
+        jobject aliuhookLoader = systemLoader == nullptr
+                ? nullptr : makeAliuHookClassLoader(env, moduleFd, systemLoader);
+        if (aliuhookLoader != nullptr && initializeAliuHook(env, aliuhookLoader)) {
+            jobject appLoader = makeAppClassLoader(env, aliuhookLoader);
+            jclass localGestureHookClass = nullptr;
+            if (appLoader != nullptr) {
+                localGestureHookClass = isMiuiHome
+                        ? loadHyperOsGestureNavigationHookClass(env, appLoader)
+                        : loadHyperOsSystemUiGestureNavigationHookClass(env, appLoader);
+            }
+            if (localGestureHookClass != nullptr) {
+                appProcessSystemClassLoaderRef = env->NewGlobalRef(systemLoader);
+                hyperOsAppHookClass = static_cast<jclass>(
+                        env->NewGlobalRef(localGestureHookClass));
+                LOGI("HyperOS gesture hook runtime prepared for %s in %s",
+                     kAbi, isMiuiHome ? kMiuiHomeProcess : kSystemUiProcess);
+            }
+        }
+        close(moduleFd);
+        if (hyperOsAppHookClass == nullptr
+                || appProcessSystemClassLoaderRef == nullptr) {
+            api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
+        }
+    }
+
+    void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
+        if (hyperOsAppHookClass == nullptr
+                || appProcessSystemClassLoaderRef == nullptr) {
+            return;
+        }
+        jmethodID bootstrap = env->GetStaticMethodID(
+                hyperOsAppHookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
+        if (bootstrap == nullptr
+                || clearException(env, "find HyperOS gesture hook bootstrap")) {
+            LOGE("HyperOS gesture hook bootstrap was unavailable");
+            return;
+        }
+        env->CallStaticVoidMethod(
+                hyperOsAppHookClass, bootstrap, appProcessSystemClassLoaderRef);
+        if (!clearException(env, "run HyperOS gesture hook bootstrap")) {
+            LOGI("HyperOS gesture hook bootstrap started");
+        }
     }
 
     void preServerSpecialize(zygisk::ServerSpecializeArgs *) override {
@@ -538,8 +661,10 @@ private:
     jclass hookClass = nullptr;
     jclass primaryHomeHookClass = nullptr;
     jclass rootDisplayCompatHookClass = nullptr;
+    jclass hyperOsAppHookClass = nullptr;
     jobject appClassLoaderRef = nullptr;
     jobject systemClassLoaderRef = nullptr;
+    jobject appProcessSystemClassLoaderRef = nullptr;
     bool secureWindowHookEnabled = true;
     bool statusBarOverlayHookEnabled = true;
     bool primaryHomeEnhancementEnabled = true;

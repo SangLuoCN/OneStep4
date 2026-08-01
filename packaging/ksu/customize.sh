@@ -53,7 +53,7 @@ lsposed_active() {
 
 mkdir -p "$HOOK_CONFIG_DIR"
 for hook_marker in disable-secure-window disable-status-bar-overlay \
-    disable-primary-home-enhancement; do
+    disable-primary-home-enhancement enable-hyperos-third-party-gesture; do
   if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/$hook_marker" ]; then
     : >"$HOOK_CONFIG_DIR/$hook_marker"
   fi
@@ -87,7 +87,7 @@ set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
 
 if lsposed_active; then
   ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
-  ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”作用域"
+  ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”、“设置”和“系统桌面”作用域"
 elif [ -d /data/adb/modules/zygisksu ] \
     && [ -f /data/adb/modules/zygisksu/module.prop ] \
     && grep -q '^id=zygisksu$' /data/adb/modules/zygisksu/module.prop \

@@ -9,6 +9,7 @@ import android.util.Log;
 import android.view.Surface;
 
 import com.sangluo.onestep.RootVirtualDisplayBridge;
+import com.sangluo.onestep.system.root.SystemServiceFailurePolicy;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -296,6 +297,10 @@ public final class RootVirtualDisplayBridgeClient {
 
         public boolean isSuccess() {
             return displayId > 0;
+        }
+
+        public boolean isStaleSystemServiceFailure() {
+            return SystemServiceFailurePolicy.isStaleSystemServiceDescription(failure);
         }
     }
 

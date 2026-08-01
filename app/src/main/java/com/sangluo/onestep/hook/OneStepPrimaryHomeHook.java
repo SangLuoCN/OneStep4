@@ -25,8 +25,11 @@ public final class OneStepPrimaryHomeHook {
             "com.android.server.wm.ActivityStartInterceptor";
     private static final String ACTIVITY_RECORD_CLASS =
             "com.android.server.wm.ActivityRecord";
+    private static final String ROOT_WINDOW_CONTAINER_CLASS =
+            "com.android.server.wm.RootWindowContainer";
     private static final String ACTIVE_MARKER =
             "/data/system/onestep-primary-home-hook-active";
+    private static final int START_ABORTED = 102;
     private static final long CLASS_WAIT_TIMEOUT_MS = 120_000L;
     private static final long CLASS_WAIT_INTERVAL_MS = 100L;
 
@@ -57,7 +60,9 @@ public final class OneStepPrimaryHomeHook {
                         ACTIVITY_STARTER_CLASS, fallback);
                 Class<?> activityStartInterceptor = findSystemServerClass(
                         ACTIVITY_START_INTERCEPTOR_CLASS, fallback);
-                install(activityStarter, activityStartInterceptor);
+                Class<?> rootWindowContainer = findSystemServerClass(
+                        ROOT_WINDOW_CONTAINER_CLASS, fallback);
+                install(activityStarter, activityStartInterceptor, rootWindowContainer);
                 return;
             } catch (ClassNotFoundException | NoSuchMethodException e) {
                 lastFailure = e;
@@ -71,7 +76,8 @@ public final class OneStepPrimaryHomeHook {
     }
 
     private static synchronized void install(Class<?> activityStarterClass,
-                                             Class<?> activityStartInterceptorClass)
+                                             Class<?> activityStartInterceptorClass,
+                                             Class<?> rootWindowContainerClass)
             throws NoSuchMethodException {
         if (installed) {
             return;
@@ -119,13 +125,162 @@ public final class OneStepPrimaryHomeHook {
                 }
             }
         });
+        boolean secondaryHomeSuppressionInstalled = false;
+        if (isHyperOs()) {
+            Method startActivityInner = findStartActivityInner(activityStarterClass);
+            XposedBridge.hookMethod(startActivityInner, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        Object targetRecord = param.args.length == 0
+                                ? null : param.args[0];
+                        if (shouldAbortSecondaryLauncherStart(targetRecord, param.args)) {
+                            param.setResult(START_ABORTED);
+                        }
+                    } catch (Throwable t) {
+                        Log.e(TAG, "secondary HOME start decision failed", t);
+                    }
+                }
+            });
+
+            Method startHomeOnTaskDisplayArea = findStartHomeOnTaskDisplayArea(
+                    rootWindowContainerClass);
+            XposedBridge.hookMethod(startHomeOnTaskDisplayArea, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        Object taskDisplayArea = param.args.length < 3
+                                ? null : param.args[2];
+                        int displayId = displayIdOf(taskDisplayArea);
+                        String displayName = displayName(displayId);
+                        if (HyperOsEmbeddedHomePolicy.shouldKeepLauncherAlive(displayName)) {
+                            param.setResult(false);
+                            Log.i(TAG, "Suppress HyperOS automatic secondary HOME start on "
+                                    + displayId + "/" + displayName);
+                        }
+                    } catch (Throwable t) {
+                        Log.e(TAG, "automatic secondary HOME start decision failed", t);
+                    }
+                }
+            });
+            HookBridgeCompat.deoptimizeMethod(startActivityInner);
+            HookBridgeCompat.deoptimizeMethod(startHomeOnTaskDisplayArea);
+            deoptimizeRootHomeStartCallers(rootWindowContainerClass);
+            secondaryHomeSuppressionInstalled = true;
+        }
         HookBridgeCompat.deoptimizeMethod(target);
         deoptimizeSetInitialStateCallers(activityStarterClass);
         HookBridgeCompat.deoptimizeMethod(interceptHome);
         deoptimizeHomeInterceptorCaller(activityStartInterceptorClass);
         installed = true;
         markActive();
-        Log.i(TAG, "installed without changing existing system_server hook policies");
+        Log.i(TAG, "installed without changing existing system_server hook policies; "
+                + "secondaryHomeSuppression=" + secondaryHomeSuppressionInstalled);
+    }
+
+    private static Method findStartActivityInner(Class<?> activityStarterClass)
+            throws NoSuchMethodException {
+        for (Method method : activityStarterClass.getDeclaredMethods()) {
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            if ("startActivityInner".equals(method.getName())
+                    && method.getReturnType() == int.class
+                    && parameterTypes.length > 1
+                    && ACTIVITY_RECORD_CLASS.equals(parameterTypes[0].getName())
+                    && ACTIVITY_RECORD_CLASS.equals(parameterTypes[1].getName())) {
+                method.setAccessible(true);
+                return method;
+            }
+        }
+        throw new NoSuchMethodException(
+                ACTIVITY_STARTER_CLASS + "#startActivityInner(ActivityRecord, ...)");
+    }
+
+    private static Method findStartHomeOnTaskDisplayArea(Class<?> rootWindowContainerClass)
+            throws NoSuchMethodException {
+        for (Method method : rootWindowContainerClass.getDeclaredMethods()) {
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            if ("startHomeOnTaskDisplayArea".equals(method.getName())
+                    && method.getReturnType() == boolean.class
+                    && parameterTypes.length == 5
+                    && parameterTypes[0] == int.class
+                    && "java.lang.String".equals(parameterTypes[1].getName())
+                    && "com.android.server.wm.TaskDisplayArea".equals(
+                    parameterTypes[2].getName())) {
+                method.setAccessible(true);
+                return method;
+            }
+        }
+        throw new NoSuchMethodException(
+                ROOT_WINDOW_CONTAINER_CLASS
+                        + "#startHomeOnTaskDisplayArea(int, String, TaskDisplayArea, ...)");
+    }
+
+    private static boolean shouldAbortSecondaryLauncherStart(Object targetRecord,
+                                                             Object[] arguments)
+            throws ReflectiveOperationException {
+        Object rawIntent = readField(targetRecord, "intent");
+        if (!(rawIntent instanceof Intent)) {
+            return false;
+        }
+        ComponentName component = ((Intent) rawIntent).getComponent();
+        if (component == null) {
+            return false;
+        }
+        int displayId = requestedDisplayId(arguments);
+        String displayName = displayName(displayId);
+        boolean secondaryLauncher = HyperOsEmbeddedHomePolicy.shouldSuppressSecondaryLauncher(
+                component.getPackageName(), component.getClassName(), displayName);
+        if (secondaryLauncher) {
+            Log.i(TAG, "Abort HyperOS SecondaryDisplayLauncher start on "
+                    + displayId + "/" + displayName);
+        }
+        return secondaryLauncher;
+    }
+
+    private static int requestedDisplayId(Object[] arguments)
+            throws ReflectiveOperationException {
+        if (arguments == null) {
+            return -1;
+        }
+        for (Object argument : arguments) {
+            if (argument != null
+                    && "android.app.ActivityOptions".equals(
+                    argument.getClass().getName())) {
+                int displayId = integerValue(
+                        invokeNoArgs(argument, "getLaunchDisplayId"), -1);
+                if (displayId >= 0) {
+                    return displayId;
+                }
+            }
+        }
+        for (Object argument : arguments) {
+            if (argument == null) {
+                continue;
+            }
+            String className = argument.getClass().getName();
+            if ("com.android.server.wm.Task".equals(className)
+                    || "com.android.server.wm.TaskFragment".equals(className)) {
+                int displayId = displayIdOf(argument);
+                if (displayId >= 0) {
+                    return displayId;
+                }
+            }
+        }
+        if (arguments.length > 1 && arguments[1] != null) {
+            int sourceDisplayId = displayIdOf(arguments[1]);
+            if (sourceDisplayId >= 0) {
+                return sourceDisplayId;
+            }
+        }
+        return arguments.length == 0 ? -1 : displayIdOf(arguments[0]);
+    }
+
+    private static int displayIdOf(Object windowContainer)
+            throws ReflectiveOperationException {
+        if (windowContainer == null) {
+            return -1;
+        }
+        return integerValue(invokeNoArgs(windowContainer, "getDisplayId"), -1);
     }
 
     private static boolean shouldPreservePrimaryHome(Object interceptor)
@@ -135,10 +290,8 @@ public final class OneStepPrimaryHomeHook {
             return false;
         }
         Intent intent = (Intent) rawIntent;
-        if (!intent.getBooleanExtra(
-                OneStepPrimaryHomePolicy.EXTRA_EMBEDDED_PRIMARY_HOME, false)) {
-            return false;
-        }
+        boolean markedHome = intent.getBooleanExtra(
+                OneStepPrimaryHomePolicy.EXTRA_EMBEDDED_PRIMARY_HOME, false);
         ComponentName component = intent.getComponent();
         String targetPackage = component == null ? null : component.getPackageName();
         String callingPackage = stringField(interceptor, "mCallingPackage");
@@ -146,22 +299,22 @@ public final class OneStepPrimaryHomeHook {
         int displayId = taskDisplayArea == null
                 ? -1 : integerValue(invokeNoArgs(taskDisplayArea, "getDisplayId"), -1);
         String displayName = displayName(displayId);
-        boolean preserve = OneStepPrimaryHomePolicy.shouldCreateWorkspace(
-                true,
+        boolean preserveMarkedHome = OneStepPrimaryHomePolicy.shouldCreateWorkspace(
+                markedHome,
                 intent.getAction(),
                 intent.hasCategory(Intent.CATEGORY_HOME),
                 callingPackage,
                 targetPackage,
                 displayName);
-        if (preserve) {
+        if (preserveMarkedHome) {
             Log.i(TAG, "preserving marked primary HOME before secondary rewrite: component="
                     + component + ", display=" + displayId + "/" + displayName);
-        } else {
+        } else if (markedHome) {
             Log.w(TAG, "ignored marked HOME before secondary rewrite: caller="
                     + callingPackage + ", target=" + targetPackage
                     + ", display=" + displayId + "/" + displayName);
         }
-        return preserve;
+        return preserveMarkedHome;
     }
 
     private static void deoptimizeSetInitialStateCallers(Class<?> activityStarterClass) {
@@ -189,6 +342,37 @@ public final class OneStepPrimaryHomeHook {
             } catch (Throwable t) {
                 Log.w(TAG, "could not deoptimize ActivityStartInterceptor#intercept", t);
             }
+        }
+    }
+
+    private static void deoptimizeRootHomeStartCallers(Class<?> type) {
+        for (Method method : type.getDeclaredMethods()) {
+            String name = method.getName();
+            if (!(name.contains("startHomeOnDisplay")
+                    || name.contains("startHomeOnEmptyDisplays")
+                    || name.contains("resumeHomeActivity"))) {
+                continue;
+            }
+            try {
+                method.setAccessible(true);
+                HookBridgeCompat.deoptimizeMethod(method);
+            } catch (LinkageError | RuntimeException e) {
+                Log.w(TAG, "could not deoptimize " + type.getName() + "#" + name, e);
+            }
+        }
+    }
+
+    private static boolean isHyperOs() {
+        try {
+            Class<?> properties = Class.forName("android.os.SystemProperties");
+            Method get = properties.getDeclaredMethod(
+                    "get", String.class, String.class);
+            get.setAccessible(true);
+            Object value = get.invoke(null, "ro.mi.os.version.name", "");
+            return value instanceof String && ((String) value).startsWith("OS");
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            Log.w(TAG, "could not read HyperOS version property", e);
+            return false;
         }
     }
 

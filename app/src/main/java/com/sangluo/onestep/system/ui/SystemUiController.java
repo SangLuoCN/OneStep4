@@ -25,6 +25,8 @@ public final class SystemUiController implements AutoCloseable {
     private final BooleanSupplier systemAppInstall;
     private final Runnable backHandler;
     private Dialog defaultDisplayFocusWindow;
+    private Dialog defaultDisplayBackCallbackOwner;
+    private Object defaultDisplayBackCallback;
     private Boolean appliedHideStatusBar;
     private Boolean appliedSystemAppInstall;
 
@@ -141,11 +143,13 @@ public final class SystemUiController implements AutoCloseable {
 
             defaultDisplayFocusWindow = focusWindow;
             focusWindow.setOnDismissListener(dialog -> {
+                unregisterDefaultDisplayBackCallback(focusWindow);
                 if (defaultDisplayFocusWindow == focusWindow) {
                     defaultDisplayFocusWindow = null;
                 }
             });
             focusWindow.show();
+            registerDefaultDisplayBackCallback(focusWindow);
             window.setLayout(1, 1);
             content.requestFocus();
             Log.i(TAG, "Default display key focus anchor shown");
@@ -162,6 +166,7 @@ public final class SystemUiController implements AutoCloseable {
         if (focusWindow == null) {
             return;
         }
+        unregisterDefaultDisplayBackCallback(focusWindow);
         try {
             if (focusWindow.isShowing()) {
                 focusWindow.dismiss();
@@ -170,6 +175,59 @@ public final class SystemUiController implements AutoCloseable {
         } catch (RuntimeException e) {
             Log.w(TAG, "Dismiss default display key focus anchor failed: "
                     + e.getClass().getSimpleName());
+        }
+    }
+
+    private void registerDefaultDisplayBackCallback(Dialog focusWindow) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+            return;
+        }
+        unregisterDefaultDisplayBackCallback(defaultDisplayBackCallbackOwner);
+        try {
+            defaultDisplayBackCallback = Api33Impl.registerBackCallback(
+                    focusWindow, backHandler);
+            defaultDisplayBackCallbackOwner = focusWindow;
+            Log.i(TAG, "Default display predictive-back callback registered");
+        } catch (RuntimeException e) {
+            defaultDisplayBackCallback = null;
+            defaultDisplayBackCallbackOwner = null;
+            Log.w(TAG, "Default display predictive-back registration failed: "
+                    + e.getClass().getSimpleName());
+        }
+    }
+
+    private void unregisterDefaultDisplayBackCallback(Dialog focusWindow) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || focusWindow == null
+                || defaultDisplayBackCallbackOwner != focusWindow
+                || defaultDisplayBackCallback == null) {
+            return;
+        }
+        Object callback = defaultDisplayBackCallback;
+        defaultDisplayBackCallback = null;
+        defaultDisplayBackCallbackOwner = null;
+        try {
+            Api33Impl.unregisterBackCallback(focusWindow, callback);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Default display predictive-back unregister failed: "
+                    + e.getClass().getSimpleName());
+        }
+    }
+
+    private static final class Api33Impl {
+        private Api33Impl() {
+        }
+
+        static Object registerBackCallback(Dialog dialog, Runnable backHandler) {
+            android.window.OnBackInvokedCallback callback = backHandler::run;
+            dialog.getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback);
+            return callback;
+        }
+
+        static void unregisterBackCallback(Dialog dialog, Object callback) {
+            dialog.getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(
+                    (android.window.OnBackInvokedCallback) callback);
         }
     }
 
