@@ -48,4 +48,18 @@ public final class HyperOsEmbeddedHomePolicyTest {
         assertFalse(HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(null));
     }
 
+    @Test
+    public void usesEmbeddedOverviewOnlyWhileOneStepIsDefaultHome() {
+        assertTrue(HyperOsEmbeddedHomePolicy.shouldUseEmbeddedOverviewHome(
+                "OneStepSlot-1/P6581/G1", "com.sangluo.onestep"));
+        assertFalse(HyperOsEmbeddedHomePolicy.shouldUseEmbeddedOverviewHome(
+                "OneStepSlot-1/P6581/G1", "com.miui.home"));
+        assertFalse(HyperOsEmbeddedHomePolicy.shouldUseEmbeddedOverviewHome(
+                "OneStepSlot-1/P6581/G1", "com.example.launcher"));
+        assertFalse(HyperOsEmbeddedHomePolicy.shouldUseEmbeddedOverviewHome(
+                "Built-in display", "com.sangluo.onestep"));
+        assertFalse(HyperOsEmbeddedHomePolicy.shouldUseEmbeddedOverviewHome(
+                "OneStepSlot-1/P6581/G1", null));
+    }
+
 }

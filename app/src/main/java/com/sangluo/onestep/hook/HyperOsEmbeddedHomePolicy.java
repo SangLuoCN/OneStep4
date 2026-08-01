@@ -25,4 +25,10 @@ final class HyperOsEmbeddedHomePolicy {
     static boolean shouldUseLocalOverviewHome(String displayName) {
         return shouldKeepLauncherAlive(displayName);
     }
+
+    static boolean shouldUseEmbeddedOverviewHome(String displayName,
+                                                 String defaultHomePackage) {
+        return shouldKeepLauncherAlive(displayName)
+                && OneStepPrimaryHomePolicy.ONE_STEP_PACKAGE.equals(defaultHomePackage);
+    }
 }

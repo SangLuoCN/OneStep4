@@ -2,8 +2,10 @@ package com.sangluo.onestep.hook;
 
 import android.app.Activity;
 import android.app.ActivityOptions;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
+import android.content.Intent;
 import android.os.Build;
 import android.util.Log;
 import android.view.Display;
@@ -219,11 +221,10 @@ public final class HyperOsGestureNavigationBypassHook {
                     }
                     try {
                         Activity launcher = localOverviewLauncher.get();
-                        if (launcher == null) {
-                            launcher = embeddedLauncher.get();
-                        }
                         String displayName = activityDisplayName(launcher);
-                        if (HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(displayName)) {
+                        String defaultHomePackage = defaultHomePackage(launcher);
+                        if (HyperOsEmbeddedHomePolicy.shouldUseEmbeddedOverviewHome(
+                                displayName, defaultHomePackage)) {
                             param.setResult(true);
                             if (!localOverviewHomeLogged) {
                                 localOverviewHomeLogged = true;
@@ -249,9 +250,10 @@ public final class HyperOsGestureNavigationBypassHook {
                 protected void beforeHookedMethod(MethodHookParam param) {
                     Activity launcher = activityFromViewContext(param.thisObject);
                     String displayName = activityDisplayName(launcher);
+                    String defaultHomePackage = defaultHomePackage(launcher);
                     if (baseLauncherClass.isInstance(launcher)
-                            && HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(
-                            displayName)) {
+                            && HyperOsEmbeddedHomePolicy.shouldUseEmbeddedOverviewHome(
+                            displayName, defaultHomePackage)) {
                         localOverviewLauncher.set(launcher);
                         rememberEmbeddedLauncher(launcher, displayName);
                     }
@@ -369,6 +371,21 @@ public final class HyperOsGestureNavigationBypassHook {
             context = baseContext;
         }
         return null;
+    }
+
+    private static String defaultHomePackage(Context context) {
+        if (context == null) {
+            return null;
+        }
+        try {
+            Intent homeIntent = new Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_HOME);
+            ComponentName component = homeIntent.resolveActivity(
+                    context.getPackageManager());
+            return component == null ? null : component.getPackageName();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private static String activityDisplayName(Object launcher) {

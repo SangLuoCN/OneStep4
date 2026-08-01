@@ -60,6 +60,7 @@ import com.sangluo.onestep.data.settings.TopAppListPolicy;
 import com.sangluo.onestep.data.apps.LauncherAppRepository;
 import com.sangluo.onestep.feature.embedding.EmbeddedAppHost;
 import com.sangluo.onestep.feature.embedding.DismissedAppClosePolicy;
+import com.sangluo.onestep.feature.embedding.DefaultHomeRoutingPolicy;
 import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
@@ -1035,6 +1036,11 @@ public class MainActivity extends Activity {
                 == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
                 && isSystemRecentsTask(packageName, componentName);
         if (systemRecentsMovedToFront) {
+            if (displayId == Display.DEFAULT_DISPLAY && !isOneStepDefaultHome()) {
+                cancelPendingOneStepHomeRestore();
+                Log.i(TAG, "Leave default-display recents to the configured system HOME");
+                return;
+            }
             boolean mainShowsHostedDesktop = rootHost != null
                     && currentMainApp != null && currentMainApp.isHomeEntry();
             if (displayId == Display.DEFAULT_DISPLAY) {
@@ -1086,6 +1092,11 @@ public class MainActivity extends Activity {
                 && displayId == Display.DEFAULT_DISPLAY
                 && isBuiltInDesktopHomeTask(packageName, componentName);
         if (systemDesktopMovedToDefaultDisplay) {
+            if (!isOneStepDefaultHome()) {
+                cancelPendingOneStepHomeRestore();
+                Log.i(TAG, "Keep configured system HOME in front: " + componentName);
+                return;
+            }
             Log.i(TAG, "Restore OneStep after system HOME moved desktop to default display: "
                     + componentName);
             bringOneStepHomeToFront();
@@ -1172,6 +1183,10 @@ public class MainActivity extends Activity {
     }
 
     private void bringOneStepHomeToFront() {
+        if (!isOneStepDefaultHome()) {
+            cancelPendingOneStepHomeRestore();
+            return;
+        }
         if (defaultHomeRestorePending) {
             return;
         }
@@ -1183,6 +1198,11 @@ public class MainActivity extends Activity {
     private void handleDefaultDisplaySystemRecents(
             RootVirtualDisplayHost rootHost, int taskId, String componentName,
             boolean moveIntoHostedDesktop) {
+        if (!isOneStepDefaultHome()) {
+            cancelPendingOneStepHomeRestore();
+            Log.i(TAG, "Do not intercept default-display recents while OneStep is not HOME");
+            return;
+        }
         if (blockedDefaultRecentsRestorePending) {
             return;
         }
@@ -1233,6 +1253,10 @@ public class MainActivity extends Activity {
         if (activityDestroyed) {
             return;
         }
+        if (!isOneStepDefaultHome()) {
+            Log.i(TAG, "Cancel OneStep HOME restore because the default HOME changed");
+            return;
+        }
         Intent homeIntent = new Intent(this, MainActivity.class)
                 .putExtra(EXTRA_SHOW_DESKTOP_HOME, true)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
@@ -1251,6 +1275,28 @@ public class MainActivity extends Activity {
         } catch (ActivityNotFoundException | SecurityException e) {
             Log.e(TAG, "Unable to restore OneStep after system HOME", e);
             requestDesktopHomeInMain();
+        }
+    }
+
+    private void cancelPendingOneStepHomeRestore() {
+        if (!defaultHomeRestorePending) {
+            return;
+        }
+        defaultHomeRestorePending = false;
+        mainHandler.removeCallbacks(restoreOneStepHomeRunnable);
+    }
+
+    private boolean isOneStepDefaultHome() {
+        try {
+            ComponentName defaultHome = new Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_HOME)
+                    .resolveActivity(getPackageManager());
+            String defaultHomePackage = defaultHome == null
+                    ? null : defaultHome.getPackageName();
+            return DefaultHomeRoutingPolicy.shouldInterceptSystemHome(
+                    getPackageName(), defaultHomePackage);
+        } catch (RuntimeException e) {
+            return false;
         }
     }
 
