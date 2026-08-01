@@ -79,6 +79,7 @@ import static com.sangluo.onestep.data.settings.OneStepSettings.sanitizeSideWind
 
 public final class SettingsPanelController {
     private static final long SLIDER_LIVE_UPDATE_INTERVAL_MS = 100L;
+    private static final int TOP_APP_LIST_DIALOG_HEIGHT_DP = 600;
 
     public interface Callbacks {
         OneStepWindowView activeMainWindowView();
@@ -347,7 +348,7 @@ public final class SettingsPanelController {
         list.addView(builtInDesktopItem, builtInDesktopLp);
 
         LinearLayout systemHomeItem = createSettingsItem(
-                "设置为系统桌面", "选择系统默认桌面");
+                "设置为系统桌面", "点击设置");
         systemHomeItem.setOnClickListener(v -> openSystemHomeSettings());
         LinearLayout.LayoutParams systemHomeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
@@ -356,7 +357,7 @@ public final class SettingsPanelController {
 
         if (hasHyperOsThirdPartyHomeRestriction()) {
             LinearLayout gestureNavigationItem = createSettingsItem(
-                    "全面屏手势", "启用第三方桌面的 HyperOS 系统手势");
+                    "全面屏手势", "点击设置");
             gestureNavigationItem.setOnClickListener(v -> enableHyperOsGestureNavigation());
             LinearLayout.LayoutParams gestureNavigationLp = new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
@@ -376,6 +377,15 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
         primaryHomeEnhancementLp.topMargin = dp(12);
         list.addView(primaryHomeEnhancementItem, primaryHomeEnhancementLp);
+
+        LinearLayout topAppListItem = createSettingsItem(
+                "应用列表显示", getTopAppListLabel());
+        topAppListValueView = (TextView) topAppListItem.getTag();
+        topAppListItem.setOnClickListener(v -> showTopAppListDialog());
+        LinearLayout.LayoutParams topAppListLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
+        topAppListLp.topMargin = dp(12);
+        list.addView(topAppListItem, topAppListLp);
 
         LinearLayout sideWindowCountItem = createSettingsItem("小窗口数量",
                 getSideWindowCountLabel());
@@ -416,15 +426,6 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(86));
         navVerticalMarginLp.topMargin = dp(12);
         list.addView(navVerticalMarginItem, navVerticalMarginLp);
-
-        LinearLayout topAppListItem = createSettingsItem(
-                "应用列表显示", getTopAppListLabel());
-        topAppListValueView = (TextView) topAppListItem.getTag();
-        topAppListItem.setOnClickListener(v -> showTopAppListDialog());
-        LinearLayout.LayoutParams topAppListLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
-        topAppListLp.topMargin = dp(12);
-        list.addView(topAppListItem, topAppListLp);
 
         LinearLayout topIconSizeItem = createSliderSettingsItem("图标栏图标大小",
                 TOP_APP_ICON_SCALE_MIN, TOP_APP_ICON_SCALE_MAX, topAppIconScalePct,
@@ -528,6 +529,9 @@ public final class SettingsPanelController {
         refreshZygiskHookSettingsViews();
 
         LinearLayout legalNoticesItem = createSettingsItem("开源许可与第三方声明", "查看");
+        TextView legalNoticesValue = (TextView) legalNoticesItem.getTag();
+        legalNoticesValue.setLayoutParams(new LinearLayout.LayoutParams(dp(64),
+                ViewGroup.LayoutParams.WRAP_CONTENT));
         legalNoticesItem.setOnClickListener(v -> showLegalNoticesPage());
         LinearLayout.LayoutParams legalNoticesLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
@@ -1531,10 +1535,8 @@ public final class SettingsPanelController {
         recyclerView.setOverScrollMode(View.OVER_SCROLL_IF_CONTENT_SCROLLS);
         recyclerView.setClipToPadding(false);
         recyclerView.setPadding(0, dp(4), 0, dp(4));
-        int maxHeight = Math.max(dp(240), Math.min(dp(480),
-                activity.getResources().getDisplayMetrics().heightPixels - dp(180)));
         recyclerView.setLayoutParams(new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, maxHeight));
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         ItemTouchHelper touchHelper = new ItemTouchHelper(new ItemTouchHelper.Callback() {
             @Override
@@ -1584,15 +1586,20 @@ public final class SettingsPanelController {
         });
         touchHelper.attachToRecyclerView(recyclerView);
 
-        showRoundedDialog(new AlertDialog.Builder(activity)
+        AlertDialog dialog = showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("应用列表显示")
                 .setView(recyclerView)
                 .setNegativeButton("取消", null)
-                .setPositiveButton("保存", (dialog, which) -> {
+                .setPositiveButton("保存", (dialogInterface, which) -> {
                     callbacks.saveTopAppList(adapter.orderedKeys(), adapter.selectedKeys());
                     syncState();
                     refresh();
                 }));
+        Window window = dialog.getWindow();
+        if (window != null) {
+            window.setLayout(window.getAttributes().width,
+                    dp(TOP_APP_LIST_DIALOG_HEIGHT_DP));
+        }
     }
 
     private final class TopAppListAdapter
@@ -1613,6 +1620,19 @@ public final class SettingsPanelController {
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(12), dp(6), dp(8), dp(6));
             row.setBackground(makePanelBackground(Color.WHITE, 0x12000000, dp(4)));
+            row.setLayoutParams(new RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            CheckBox checkBox = new CheckBox(activity);
+            checkBox.setClickable(false);
+            checkBox.setFocusable(false);
+            checkBox.setButtonTintList(new ColorStateList(
+                    new int[][]{
+                            new int[]{android.R.attr.state_checked},
+                            new int[]{-android.R.attr.state_checked}
+                    },
+                    new int[]{0xff2f7df6, 0xff8a8a8a}));
+            row.addView(checkBox, new LinearLayout.LayoutParams(dp(40), dp(52)));
 
             ImageView icon = new ImageView(activity);
             icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
@@ -1639,11 +1659,6 @@ public final class SettingsPanelController {
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             labelsLp.leftMargin = dp(10);
             row.addView(labels, labelsLp);
-
-            CheckBox checkBox = new CheckBox(activity);
-            checkBox.setClickable(false);
-            checkBox.setFocusable(false);
-            row.addView(checkBox, new LinearLayout.LayoutParams(dp(48), dp(52)));
 
             TextView dragHandle = new TextView(activity);
             dragHandle.setText("≡");
