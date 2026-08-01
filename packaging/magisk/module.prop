@@ -2,5 +2,5 @@ id=onestep40_privapp
 name=OneStep4
 version=1.0.1
 versionCode=8
-author=sangluo
+author=SangLuo
 description=将 OneStep4 安装为系统特权应用；普通页面无需 Zygisk，启用后支持 FLAG_SECURE 虚拟屏显示增强。

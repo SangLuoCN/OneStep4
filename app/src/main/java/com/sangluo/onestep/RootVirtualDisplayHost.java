@@ -83,6 +83,7 @@ import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedBackExitPolicy;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
+import com.sangluo.onestep.feature.embedding.HostedInputFocusPolicy;
 import com.sangluo.onestep.feature.embedding.HostedSurfaceReusePolicy;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
@@ -2226,6 +2227,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     void depriveHostedInputFocus() {
         focusRequestGeneration++;
+        if (!HostedInputFocusPolicy.shouldUseDemotedFocusWindow(Build.VERSION.SDK_INT)) {
+            destroyHostedInputFocusGuard();
+            Log.i(TAG, "Keep hosted task visible without focus guard: slot=" + slot
+                    + ", display=" + displayId + ", sdk=" + Build.VERSION.SDK_INT);
+            return;
+        }
         Presentation existingWindow = demotedFocusWindow;
         if (existingWindow != null && existingWindow.isShowing()) {
             return;

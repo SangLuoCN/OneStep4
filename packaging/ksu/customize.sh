@@ -1,11 +1,11 @@
 #!/system/bin/sh
 
 if [ "$KSU" != "true" ]; then
-  abort "! This package is only for KernelSU"
+  abort "! 此安装包仅适用于 KernelSU"
 fi
 
 if [ "$BOOTMODE" != "true" ]; then
-  abort "! KernelSU modules must be installed from KernelSU Manager"
+  abort "! KernelSU 模块必须通过 KernelSU 管理器安装"
 fi
 
 ui_print "- OneStep 普通页面无需 ZygiskNext 即可使用"
@@ -18,16 +18,43 @@ case "$ksu_version_code" in
     ;;
 esac
 
-if [ "$ksu_version_code" -ge 30000 ] && [ ! -d /data/adb/metamodule ]; then
-  ui_print "! KernelSU 3.x does not mount module system files by itself"
-  ui_print "! Install and enable meta-overlayfs (or a compatible metamodule), reboot,"
-  abort "! then install the OneStep4 KernelSU module again"
+SDK_INT="$(getprop ro.build.version.sdk)"
+case "$SDK_INT" in
+  ''|*[!0-9]*) SDK_INT=0 ;;
+esac
+
+if [ "$SDK_INT" -ge 37 ]; then
+  if ! printf '%s\n' \
+      'allow priv_app_36 default_android_service service_manager find' \
+      'allow priv_app_36 ksu binder { call transfer }' \
+      'allow ksu priv_app_36 binder { call transfer }' \
+      'allow priv_app_36 ksu unix_stream_socket connectto' \
+      'allow ksu priv_app_36 fd use' \
+      'allow priv_app_36 su binder { call transfer }' \
+      'allow su priv_app_36 binder { call transfer }' \
+      'allow priv_app_36 su unix_stream_socket connectto' \
+      'allow su priv_app_36 fd use' \
+      >>"$MODPATH/sepolicy.rule"; then
+    abort "! 无法写入 Android 17 ROOT 兼容策略"
+  fi
+  ui_print "- 已启用 Android 17 特权应用 ROOT 兼容策略"
 fi
 
-REPLACE="
-/system/priv-app/OneStep4_v5
-/system/priv-app/OneStep4_v6
-"
+if [ "$ksu_version_code" -ge 30000 ] && [ ! -d /data/adb/metamodule ]; then
+  ui_print "! KernelSU 3.x 不会自行挂载模块中的系统文件"
+  ui_print "! 请安装并启用 meta-overlayfs（或兼容的元模块），然后重启"
+  abort "! 重启后请重新安装 OneStep4 KernelSU 模块"
+fi
+
+for replace_path in \
+    /system/priv-app/OneStep4_v5 \
+    /system/priv-app/OneStep4_v6; do
+  if ! mkdir -p "$MODPATH$replace_path" 2>/dev/null \
+      || ! touch "$MODPATH$replace_path/.replace" 2>/dev/null; then
+    abort "! 无法创建旧版本目录替换标记：$replace_path"
+  fi
+done
+REPLACE=""
 
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
@@ -67,11 +94,11 @@ fi
 set_perm_recursive "$HOOK_CONFIG_DIR" 0 0 0700 0600
 
 if [ ! -f "$APK_PATH" ]; then
-  abort "! OneStep4 APK is missing from the module"
+  abort "! 模块中缺少 OneStep4 APK"
 fi
 if [ ! -f "$ZYGISK_PAYLOAD_DIR/arm64-v8a.so" ] \
     || [ ! -f "$ZYGISK_PAYLOAD_DIR/armeabi-v7a.so" ]; then
-  abort "! OneStep4 optional Zygisk payload is incomplete"
+  abort "! 模块中的可选 Zygisk 组件不完整"
 fi
 
 rm -rf "$MODPATH/zygisk"
@@ -102,7 +129,7 @@ else
   ui_print "- ZygiskNext 未启用：以普通页面兼容模式运行"
 fi
 
-ui_print "- KernelSU: ${KSU_VER:-unknown} (${KSU_VER_CODE:-unknown})"
-ui_print "- OneStep4 will be restored for the active Android user after reboot"
+ui_print "- KernelSU 版本：${KSU_VER:-未知}（版本代码：${KSU_VER_CODE:-未知}）"
+ui_print "- 重启后将为当前 Android 用户恢复 OneStep4"
 
 rm -f "$MODPATH/customize.sh"

@@ -2,10 +2,15 @@
 
 PACKAGE_NAME="com.sangluo.onestep"
 VIRTUAL_DISPLAY_ROLE="android.app.role.COMPANION_DEVICE_APP_STREAMING"
-REPLACE="
-/system/priv-app/OneStep4_v5
-/system/priv-app/OneStep4_v6
-"
+for replace_path in \
+    /system/priv-app/OneStep4_v5 \
+    /system/priv-app/OneStep4_v6; do
+  if ! mkdir -p "$MODPATH$replace_path" 2>/dev/null \
+      || ! touch "$MODPATH$replace_path/.replace" 2>/dev/null; then
+    abort "! 无法创建旧版本目录替换标记：$replace_path"
+  fi
+done
+REPLACE=""
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 GLOBAL_ZYGISK_TOGGLE="/data/adb/post-fs-data.d/onestep40-zygisk-toggle.sh"
@@ -63,6 +68,18 @@ SDK_INT="$(getprop ro.build.version.sdk)"
 case "$SDK_INT" in
   ''|*[!0-9]*) SDK_INT=0 ;;
 esac
+if [ "$SDK_INT" -ge 37 ]; then
+  if ! printf '%s\n' \
+      'allow priv_app_36 default_android_service service_manager find' \
+      'allow priv_app_36 magisk binder { call transfer }' \
+      'allow magisk priv_app_36 binder { call transfer }' \
+      'allow priv_app_36 magisk unix_stream_socket connectto' \
+      'allow magisk priv_app_36 fd use' \
+      >>"$MODPATH/sepolicy.rule"; then
+    abort "! 无法写入 Android 17 ROOT 兼容策略"
+  fi
+  ui_print "- 已启用 Android 17 特权应用 ROOT 兼容策略"
+fi
 if lsposed_active; then
   rm -rf "$MODPATH/zygisk"
   ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
@@ -111,15 +128,15 @@ fi
 if pm path "$PACKAGE_NAME" >/dev/null 2>&1; then
   if cmd role get-role-holders --user 0 "$VIRTUAL_DISPLAY_ROLE" 2>/dev/null \
       | grep -qx "$PACKAGE_NAME"; then
-    ui_print "- Trusted virtual display role already granted"
+    ui_print "- 可信虚拟显示角色已授权"
   elif cmd role add-role-holder --user 0 "$VIRTUAL_DISPLAY_ROLE" \
       "$PACKAGE_NAME" 0 >/dev/null 2>&1; then
-    ui_print "- Granted trusted virtual display role"
+    ui_print "- 已授予可信虚拟显示角色"
   else
-    ui_print "- Role grant deferred to OneStep first launch"
+    ui_print "- 暂未授予可信虚拟显示角色，将在首次启动 OneStep 时重试"
   fi
 else
-  ui_print "- Package scan pending; role grant deferred to OneStep first launch"
+  ui_print "- 系统尚未扫描到 OneStep4，将在首次启动时授予可信虚拟显示角色"
 fi
 
 rm -f "$MODPATH/customize.sh"

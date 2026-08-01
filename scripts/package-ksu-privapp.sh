@@ -180,5 +180,5 @@ if unzip -Z1 "$OUT_ZIP" | grep -q '^zygisk/'; then
     exit 1
 fi
 
-echo "APK SHA-256: $APK_SHA256"
-echo "$OUT_ZIP"
+echo "APK SHA-256 校验值：$APK_SHA256"
+echo "KernelSU 模块输出路径：$OUT_ZIP"

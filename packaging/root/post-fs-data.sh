@@ -37,18 +37,18 @@ zygisk_payload_active() {
 
 if [ -e "$DISABLE_STATUS_BAR_HOOK" ]; then
   rm -f "$IDMAP_PATH"
-  write_log "Status-bar hook disabled by user; overlay disabled"
+  write_log "用户已禁用状态栏 Hook，覆盖层同步停用"
   exit 0
 fi
 
 if ! zygisk_payload_active; then
   rm -f "$IDMAP_PATH"
-  write_log "Zygisk payload inactive; status-bar overlay disabled"
+  write_log "Zygisk 组件未激活，状态栏覆盖层已停用"
   exit 0
 fi
 
 if [ ! -f "$OVERLAY_PATH" ] || [ ! -f "$TARGET_PATH" ]; then
-  write_log "Overlay or framework resources missing; status-bar overlay disabled"
+  write_log "缺少覆盖层或系统框架资源，状态栏覆盖层已停用"
   exit 0
 fi
 
@@ -67,21 +67,21 @@ if [ -n "$IDMAP_TOOL" ] && "$IDMAP_TOOL" create \
       --overlay-apk-path "$OVERLAY_PATH" \
       --idmap-path "$IDMAP_PATH" \
       --ignore-overlayable >>"$LOG_FILE" 2>&1; then
-  write_log "Generated display-scoped status-bar idmap with idmap2"
+  write_log "已使用 idmap2 生成限定显示范围的状态栏资源映射"
 elif [ -n "$IDMAP_TOOL" ] && "$IDMAP_TOOL" create \
       --target-apk-path "$TARGET_PATH" \
       --overlay-apk-path "$OVERLAY_PATH" \
       --idmap-path "$IDMAP_PATH" \
       --policy public \
       --policy system >>"$LOG_FILE" 2>&1; then
-  write_log "Generated status-bar idmap with public/system policies"
+  write_log "已使用 public/system 策略生成状态栏资源映射"
 elif [ -x /system/bin/idmap ] && /system/bin/idmap --path \
       "$TARGET_PATH" "$OVERLAY_PATH" "$IDMAP_PATH" >>"$LOG_FILE" 2>&1; then
   IDMAP_TOOL=/system/bin/idmap
-  write_log "Generated display-scoped status-bar idmap with legacy idmap"
+  write_log "已使用旧版 idmap 生成限定显示范围的状态栏资源映射"
 else
   rm -f "$IDMAP_PATH"
-  write_log "Compatible idmap generation unavailable; status-bar overlay disabled"
+  write_log "没有可用的兼容 idmap 生成方式，状态栏覆盖层已停用"
   exit 0
 fi
 
@@ -91,11 +91,11 @@ restorecon "$IDMAP_PATH" >/dev/null 2>&1 || true
 
 if [ "${IDMAP_TOOL##*/}" = idmap2 ] && "$IDMAP_TOOL" dump \
       --idmap-path "$IDMAP_PATH" 2>/dev/null | grep -q 'dimen/status_bar_height'; then
-  write_log "Verified status-bar resource mapping"
+  write_log "状态栏资源映射校验通过"
 elif [ "${IDMAP_TOOL##*/}" = idmap ] && "$IDMAP_TOOL" --inspect \
       "$IDMAP_PATH" >/dev/null 2>&1; then
-  write_log "Verified legacy status-bar idmap structure"
+  write_log "旧版状态栏 idmap 结构校验通过"
 else
   rm -f "$IDMAP_PATH"
-  write_log "idmap verification failed; status-bar overlay disabled"
+  write_log "idmap 校验失败，状态栏覆盖层已停用"
 fi
