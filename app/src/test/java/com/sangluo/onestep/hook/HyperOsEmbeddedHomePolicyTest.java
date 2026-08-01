@@ -40,25 +40,12 @@ public final class HyperOsEmbeddedHomePolicyTest {
     }
 
     @Test
-    public void suppressesOnlyExactHomeLaunchOnOneStepDisplay() {
-        assertTrue(HyperOsEmbeddedHomePolicy.shouldSuppressRedundantHomeLaunch(
-                "android.intent.action.MAIN", true, false, 1,
+    public void treatsOnlyOneStepLauncherAsLocalOverviewHome() {
+        assertTrue(HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(
                 "OneStepSlot-1/P6581/G1"));
-        assertTrue(HyperOsEmbeddedHomePolicy.shouldSuppressRedundantHomeLaunch(
-                "android.intent.action.MAIN", false, true, 1,
-                "OneStepSlot-1/P6581/G1"));
-        assertFalse(HyperOsEmbeddedHomePolicy.shouldSuppressRedundantHomeLaunch(
-                "android.intent.action.VIEW", true, false, 1,
-                "OneStepSlot-1/P6581/G1"));
-        assertFalse(HyperOsEmbeddedHomePolicy.shouldSuppressRedundantHomeLaunch(
-                "android.intent.action.MAIN", false, false, 0,
-                "OneStepSlot-1/P6581/G1"));
-        assertFalse(HyperOsEmbeddedHomePolicy.shouldSuppressRedundantHomeLaunch(
-                "android.intent.action.MAIN", true, false, 2,
-                "OneStepSlot-1/P6581/G1"));
-        assertFalse(HyperOsEmbeddedHomePolicy.shouldSuppressRedundantHomeLaunch(
-                "android.intent.action.MAIN", true, false, 1,
+        assertFalse(HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(
                 "Built-in display"));
+        assertFalse(HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(null));
     }
 
 }

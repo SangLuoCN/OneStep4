@@ -83,6 +83,7 @@ import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedBackExitPolicy;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
+import com.sangluo.onestep.feature.embedding.HostedSurfaceReusePolicy;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
@@ -610,10 +611,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 slot, app.packageName);
         boolean reusingHostedApp = routedLaunchIntent == null
                 && !forceLaunch
-                && displayId == launchRequestedDisplayId
-                && TextUtils.equals(launchRequestedPackage, app.packageName)
-                && launchRequestedUserId == app.userId();
-        if (!reusingHostedApp || hostedTaskId <= 0) {
+                && matchesLaunchRequest(app);
+        boolean keepVisibleDuringValidation =
+                shouldKeepHostedSurfaceVisibleDuringValidation(app);
+        if (HostedSurfaceReusePolicy.shouldBeginReveal(
+                reusingHostedApp, hostedTaskId > 0, hostedSurfaceRevealPending,
+                keepVisibleDuringValidation)) {
             beginHostedSurfaceReveal(app);
         }
         if (!reusingHostedApp && isMainDisplaySlot(slot)) {
@@ -1359,7 +1362,18 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     boolean hasResolvedHostedTask(LauncherApp app) {
         return app != null && hostedTaskId > 0
-                && displayId > DEFAULT_DISPLAY_ID
+                && displayId > DEFAULT_DISPLAY_ID && matchesLaunchRequest(app);
+    }
+
+    boolean shouldKeepHostedSurfaceVisibleDuringValidation(LauncherApp app) {
+        return app != null && hasVirtualDisplay()
+                && HostedSurfaceReusePolicy.shouldKeepVisibleDuringValidation(
+                matchesLaunchRequest(app), isHostedSurfaceRevealPending(app),
+                hostedSurfaceAlpha > 0f);
+    }
+
+    private boolean matchesLaunchRequest(LauncherApp app) {
+        return app != null
                 && displayId == launchRequestedDisplayId
                 && TextUtils.equals(app.packageName, launchRequestedPackage)
                 && launchRequestedUserId == app.userId();

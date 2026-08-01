@@ -3095,7 +3095,9 @@ public class MainActivity extends Activity {
         }
 
         EmbeddedAppHost host = embeddedHosts[desktopSlot];
-        boolean live = host != null && host.restart(desktopApp);
+        // OEM task callbacks can repeat during a recents animation. Reuse the existing desktop
+        // task so its live Surface is never replaced by the blurred placeholder.
+        boolean live = host != null && host.start(desktopApp);
         boolean revealPending = host instanceof RootVirtualDisplayHost
                 && ((RootVirtualDisplayHost) host).isHostedSurfaceRevealPending(desktopApp);
         windowViews[desktopSlot].setLiveAppVisible(live && !revealPending);
@@ -5331,9 +5333,12 @@ public class MainActivity extends Activity {
             return;
         }
         EmbeddedAppHost host = embeddedHosts[slot];
-        boolean resolvedRootTask = host instanceof RootVirtualDisplayHost
-                && ((RootVirtualDisplayHost) host).hasResolvedHostedTask(app);
-        if (host instanceof RootVirtualDisplayHost && !resolvedRootTask) {
+        RootVirtualDisplayHost rootHost = host instanceof RootVirtualDisplayHost
+                ? (RootVirtualDisplayHost) host : null;
+        boolean resolvedRootTask = rootHost != null && rootHost.hasResolvedHostedTask(app);
+        boolean keepHostedSurfaceVisible = rootHost != null
+                && rootHost.shouldKeepHostedSurfaceVisibleDuringValidation(app);
+        if (rootHost != null && !resolvedRootTask && !keepHostedSurfaceVisible) {
             clearHostedAppRevealState(slot);
             windowViews[slot].setLiveAppVisible(false);
         } else {

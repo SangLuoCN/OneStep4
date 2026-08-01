@@ -2,15 +2,15 @@ package com.sangluo.onestep.hook;
 
 import android.app.Activity;
 import android.content.Context;
-import android.content.Intent;
+import android.content.ContextWrapper;
 import android.os.Build;
-import android.os.Bundle;
 import android.util.Log;
 import android.view.Display;
+import android.view.View;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.util.Set;
+import java.lang.ref.WeakReference;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -28,11 +28,18 @@ public final class HyperOsGestureNavigationBypassHook {
             "com.miui.home.launcher.FallbackHomeCompat";
     private static final String BASE_LAUNCHER_CLASS =
             "com.miui.home.launcher.BaseLauncher";
-    private static final String RECENTS_COMMON_STATE_CLASS =
-            "com.miui.home.recents.anim.StateManager$CommonState";
+    private static final String MIUI_HOME_APPLICATION_CLASS =
+            "com.miui.home.launcher.Application";
+    private static final String OVERVIEW_COMPONENT_OBSERVER_CLASS =
+            "com.miui.home.recents.OverviewComponentObserver";
+    private static final String RECENTS_VIEW_CLASS =
+            "com.miui.home.recents.views.RecentsView";
 
     private static boolean loaderHookInstalled;
     private static boolean targetHooksInstalled;
+    private static boolean localOverviewHomeLogged;
+    private static WeakReference<Activity> embeddedLauncher = new WeakReference<>(null);
+    private static final ThreadLocal<Activity> localOverviewLauncher = new ThreadLocal<>();
 
     private HyperOsGestureNavigationBypassHook() {
     }
@@ -114,12 +121,12 @@ public final class HyperOsGestureNavigationBypassHook {
             HookBridgeCompat.deoptimizeMethod(homeCheck);
             HookBridgeCompat.deoptimizeMethod(gestureHostCheck);
             boolean embeddedHomeHookInstalled = installEmbeddedHomeHook(targetClassLoader);
-            boolean recentsHomeExitHookInstalled = installRecentsHomeExitHook(
+            boolean localOverviewHomeHookInstalled = installLocalOverviewHomeHook(
                     targetClassLoader);
             targetHooksInstalled = true;
             Log.i(TAG, "HyperOS third-party HOME gesture bypass installed; embeddedHome="
-                    + embeddedHomeHookInstalled + ", recentsHomeExit="
-                    + recentsHomeExitHookInstalled);
+                    + embeddedHomeHookInstalled + ", localOverviewHome="
+                    + localOverviewHomeHookInstalled);
         } catch (ClassNotFoundException | NoSuchMethodException e) {
             Log.i(TAG, "target MIUI Home gesture restriction is not present");
         } catch (Throwable t) {
@@ -136,8 +143,10 @@ public final class HyperOsGestureNavigationBypassHook {
             XposedBridge.hookMethod(needKillSelf, new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) {
-                    String displayName = launcherDisplayName(param.thisObject);
+                    Object launcher = readField(param.thisObject, "mLauncher");
+                    String displayName = activityDisplayName(launcher);
                     if (HyperOsEmbeddedHomePolicy.shouldKeepLauncherAlive(displayName)) {
+                        rememberEmbeddedLauncher(launcher, displayName);
                         param.setResult(false);
                         Log.i(TAG, "Keep MIUI HOME alive on " + displayName);
                     }
@@ -148,8 +157,19 @@ public final class HyperOsGestureNavigationBypassHook {
             deoptimizeNoArgMethod(fallbackHomeCompat, "startFallbackHomeIfNeed");
             Class<?> baseLauncher = Class.forName(
                     BASE_LAUNCHER_CLASS, false, targetClassLoader);
+            Method onResume = baseLauncher.getDeclaredMethod("onResume");
+            onResume.setAccessible(true);
+            XposedBridge.hookMethod(onResume, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    String displayName = activityDisplayName(param.thisObject);
+                    if (HyperOsEmbeddedHomePolicy.shouldKeepLauncherAlive(displayName)) {
+                        rememberEmbeddedLauncher(param.thisObject, displayName);
+                    }
+                }
+            });
             deoptimizeNoArgMethod(baseLauncher, "onCreateBeforeSetCreatedFlag");
-            deoptimizeNoArgMethod(baseLauncher, "onResume");
+            HookBridgeCompat.deoptimizeMethod(onResume);
             return true;
         } catch (ClassNotFoundException | NoSuchMethodException e) {
             Log.i(TAG, "MIUI Home embedded-launcher guard is not present");
@@ -160,68 +180,116 @@ public final class HyperOsGestureNavigationBypassHook {
         }
     }
 
-    private static boolean installRecentsHomeExitHook(ClassLoader targetClassLoader) {
+    private static boolean installLocalOverviewHomeHook(ClassLoader targetClassLoader) {
         try {
-            Class<?> baseLauncher = Class.forName(
+            Class<?> baseLauncherClass = Class.forName(
                     BASE_LAUNCHER_CLASS, false, targetClassLoader);
-            Method superStartActivity = baseLauncher.getDeclaredMethod(
-                    "superStartActivity", Intent.class, Bundle.class, boolean.class);
-            superStartActivity.setAccessible(true);
-            Method onNewIntent = baseLauncher.getDeclaredMethod(
-                    "onNewIntent", Intent.class);
-            onNewIntent.setAccessible(true);
-            XposedBridge.hookMethod(superStartActivity, new XC_MethodHook() {
+            Class<?> applicationClass = Class.forName(
+                    MIUI_HOME_APPLICATION_CLASS, false, targetClassLoader);
+            Method getLauncher = applicationClass.getDeclaredMethod("getLauncher");
+            getLauncher.setAccessible(true);
+            XposedBridge.hookMethod(getLauncher, new XC_MethodHook() {
                 @Override
-                protected void beforeHookedMethod(MethodHookParam param) {
-                    try {
-                        Intent intent = param.args.length == 0
-                                || !(param.args[0] instanceof Intent)
-                                ? null : (Intent) param.args[0];
-                        String displayName = activityDisplayName(param.thisObject);
-                        if (shouldSuppressRedundantHomeLaunch(intent, displayName)) {
-                            param.setResult(null);
-                            onNewIntent.invoke(param.thisObject, intent);
-                            Log.i(TAG, "Deliver embedded HOME to the current MIUI Launcher on "
-                                    + displayName);
-                        }
-                    } catch (Throwable t) {
-                        Log.e(TAG, "embedded recents HOME delivery failed", t);
+                protected void afterHookedMethod(MethodHookParam param) {
+                    Activity launcher = localOverviewLauncher.get();
+                    if (launcher != null) {
+                        param.setResult(launcher);
                     }
                 }
             });
-            HookBridgeCompat.deoptimizeMethod(superStartActivity);
-            HookBridgeCompat.deoptimizeMethod(onNewIntent);
 
-            Class<?> commonState = Class.forName(
-                    RECENTS_COMMON_STATE_CLASS, false, targetClassLoader);
-            deoptimizeMethodsNamed(commonState, "startActivity");
+            Class<?> observerClass = Class.forName(
+                    OVERVIEW_COMPONENT_OBSERVER_CLASS, false, targetClassLoader);
+            Method isHomeAndOverviewSame = observerClass.getDeclaredMethod(
+                    "isHomeAndOverviewSame");
+            isHomeAndOverviewSame.setAccessible(true);
+            XposedBridge.hookMethod(isHomeAndOverviewSame, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (!Boolean.FALSE.equals(param.getResult())) {
+                        return;
+                    }
+                    try {
+                        Activity launcher = localOverviewLauncher.get();
+                        if (launcher == null) {
+                            launcher = embeddedLauncher.get();
+                        }
+                        String displayName = activityDisplayName(launcher);
+                        if (HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(displayName)) {
+                            param.setResult(true);
+                            if (!localOverviewHomeLogged) {
+                                localOverviewHomeLogged = true;
+                                Log.i(TAG, "Treat MIUI overview as local HOME on "
+                                        + displayName);
+                            }
+                        }
+                    } catch (Throwable t) {
+                        Log.e(TAG, "local overview HOME check failed", t);
+                    }
+                }
+            });
+
+            Class<?> recentsViewClass = Class.forName(
+                    RECENTS_VIEW_CLASS, false, targetClassLoader);
+            Method startHome = recentsViewClass.getDeclaredMethod("startHome");
+            Method exitOverviewState = recentsViewClass.getDeclaredMethod(
+                    "exitOverviewState");
+            startHome.setAccessible(true);
+            exitOverviewState.setAccessible(true);
+            XC_MethodHook localOverviewScope = new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    Activity launcher = activityFromViewContext(param.thisObject);
+                    String displayName = activityDisplayName(launcher);
+                    if (baseLauncherClass.isInstance(launcher)
+                            && HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(
+                            displayName)) {
+                        localOverviewLauncher.set(launcher);
+                        rememberEmbeddedLauncher(launcher, displayName);
+                    }
+                }
+
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    localOverviewLauncher.remove();
+                }
+            };
+            XposedBridge.hookMethod(startHome, localOverviewScope);
+            XposedBridge.hookMethod(exitOverviewState, localOverviewScope);
+
+            HookBridgeCompat.deoptimizeMethod(getLauncher);
+            HookBridgeCompat.deoptimizeMethod(isHomeAndOverviewSame);
+            HookBridgeCompat.deoptimizeMethod(startHome);
+            HookBridgeCompat.deoptimizeMethod(exitOverviewState);
             return true;
         } catch (ClassNotFoundException | NoSuchMethodException e) {
-            Log.i(TAG, "MIUI Home recents HOME exit hook is not present");
+            Log.i(TAG, "MIUI Home local overview HOME hook is not present");
             return false;
         } catch (Throwable t) {
-            Log.e(TAG, "could not install MIUI Home recents HOME exit hook", t);
+            Log.e(TAG, "could not install MIUI Home local overview HOME hook", t);
             return false;
         }
     }
 
-    private static boolean shouldSuppressRedundantHomeLaunch(Intent intent,
-                                                             String displayName) {
-        if (intent == null) {
-            return false;
+    private static Activity activityFromViewContext(Object view) {
+        if (!(view instanceof View)) {
+            return null;
         }
-        Set<String> categories = intent.getCategories();
-        return HyperOsEmbeddedHomePolicy.shouldSuppressRedundantHomeLaunch(
-                intent.getAction(),
-                intent.hasCategory(Intent.CATEGORY_HOME),
-                intent.hasCategory(Intent.CATEGORY_SECONDARY_HOME),
-                categories == null ? 0 : categories.size(),
-                displayName);
-    }
-
-    private static String launcherDisplayName(Object fallbackHomeCompat) {
-        Object launcher = readField(fallbackHomeCompat, "mLauncher");
-        return activityDisplayName(launcher);
+        Context context = ((View) view).getContext();
+        while (context != null) {
+            if (context instanceof Activity) {
+                return (Activity) context;
+            }
+            if (!(context instanceof ContextWrapper)) {
+                return null;
+            }
+            Context baseContext = ((ContextWrapper) context).getBaseContext();
+            if (baseContext == context) {
+                return null;
+            }
+            context = baseContext;
+        }
+        return null;
     }
 
     private static String activityDisplayName(Object launcher) {
@@ -237,6 +305,15 @@ public final class HyperOsGestureNavigationBypassHook {
         } catch (RuntimeException e) {
             return null;
         }
+    }
+
+    private static void rememberEmbeddedLauncher(Object launcher, String displayName) {
+        if (!(launcher instanceof Activity) || embeddedLauncher.get() == launcher) {
+            return;
+        }
+        embeddedLauncher = new WeakReference<>((Activity) launcher);
+        localOverviewHomeLogged = false;
+        Log.i(TAG, "Track embedded MIUI HOME instance on " + displayName);
     }
 
     private static Object readField(Object target, String name) {
@@ -265,20 +342,6 @@ public final class HyperOsGestureNavigationBypassHook {
             HookBridgeCompat.deoptimizeMethod(method);
         } catch (NoSuchMethodException | LinkageError | RuntimeException e) {
             Log.w(TAG, "could not deoptimize " + type.getName() + "#" + name);
-        }
-    }
-
-    private static void deoptimizeMethodsNamed(Class<?> type, String name) {
-        for (Method method : type.getDeclaredMethods()) {
-            if (!name.equals(method.getName())) {
-                continue;
-            }
-            try {
-                method.setAccessible(true);
-                HookBridgeCompat.deoptimizeMethod(method);
-            } catch (LinkageError | RuntimeException e) {
-                Log.w(TAG, "could not deoptimize " + type.getName() + "#" + name, e);
-            }
         }
     }
 
