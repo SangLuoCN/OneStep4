@@ -44,8 +44,9 @@ android {
 
     defaultConfig {
         applicationId = "com.sangluo.onestep"
-        minSdk = 24
+        minSdk = 29
         targetSdk = 36
+        maxSdk = 37
         versionCode = 8
         versionName = "1.0.1"
 

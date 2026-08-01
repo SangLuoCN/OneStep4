@@ -15,7 +15,7 @@ public final class HostedTaskParser {
         String[] lines = stackList.split("\\n");
         for (String rawLine : lines) {
             String line = rawLine.trim();
-            if (line.startsWith("RootTask id=")) {
+            if (isDisplayContainerLine(line)) {
                 rootDisplayId = parseIntAfter(line, "displayId=");
                 continue;
             }
@@ -43,7 +43,7 @@ public final class HostedTaskParser {
         String[] lines = stackList.split("\\n");
         for (String rawLine : lines) {
             String line = rawLine.trim();
-            if (line.startsWith("RootTask id=")) {
+            if (isDisplayContainerLine(line)) {
                 rootDisplayId = parseIntAfter(line, "displayId=");
                 continue;
             }
@@ -72,7 +72,7 @@ public final class HostedTaskParser {
         String[] lines = stackList.split("\\n");
         for (String rawLine : lines) {
             String line = rawLine.trim();
-            if (line.startsWith("RootTask id=")) {
+            if (isDisplayContainerLine(line)) {
                 rootDisplayId = parseIntAfter(line, "displayId=");
                 continue;
             }
@@ -105,7 +105,7 @@ public final class HostedTaskParser {
         String[] lines = stackList.split("\\n");
         for (String rawLine : lines) {
             String line = rawLine.trim();
-            if (line.startsWith("RootTask id=")) {
+            if (isDisplayContainerLine(line)) {
                 rootDisplayId = parseIntAfter(line, "displayId=");
                 continue;
             }
@@ -127,7 +127,7 @@ public final class HostedTaskParser {
         String[] lines = stackList.split("\\n");
         for (String rawLine : lines) {
             String line = rawLine.trim();
-            if (line.startsWith("RootTask id=")) {
+            if (isDisplayContainerLine(line)) {
                 rootDisplayId = parseIntAfter(line, "displayId=");
                 continue;
             }
@@ -151,6 +151,10 @@ public final class HostedTaskParser {
         return !value.isEmpty()
                 && !value.startsWith("null")
                 && !value.startsWith("unknown");
+    }
+
+    private static boolean isDisplayContainerLine(String line) {
+        return line.startsWith("RootTask id=") || line.startsWith("Stack id=");
     }
 
     public static int findTaskActivityCount(String activitiesDump, int targetTaskId) {

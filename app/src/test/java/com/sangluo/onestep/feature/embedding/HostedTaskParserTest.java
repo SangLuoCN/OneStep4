@@ -68,6 +68,28 @@ public class HostedTaskParserTest {
     }
 
     @Test
+    public void parsesAndroid10StackListFormat() {
+        String stackList = "Stack id=2 bounds=[0,0][1080,2400] displayId=0 userId=0\n"
+                + "  taskId=14: com.sangluo.onestep/com.sangluo.onestep.MainActivity "
+                + "visible=true topActivity=ComponentInfo{com.sangluo.onestep/"
+                + "com.sangluo.onestep.MainActivity}\n"
+                + "Stack id=4 bounds=[0,0][1080,2400] displayId=1 userId=0\n"
+                + "  taskId=16: com.google.android.apps.nexuslauncher/"
+                + "com.google.android.apps.nexuslauncher.NexusLauncherActivity "
+                + "visible=true topActivity=ComponentInfo{com.google.android.apps.nexuslauncher/"
+                + "com.google.android.apps.nexuslauncher.NexusLauncherActivity}\n";
+
+        assertEquals(16, HostedTaskParser.findHostedTaskId(
+                stackList, 1, "com.google.android.apps.nexuslauncher"));
+        assertEquals(16, HostedTaskParser.findVisibleHostedTaskIdForComponent(
+                stackList, 1, "com.google.android.apps.nexuslauncher",
+                "com.google.android.apps.nexuslauncher.NexusLauncherActivity"));
+        assertTrue(HostedTaskParser.containsTaskOnDisplay(stackList, 1, 16));
+        assertEquals(-1, HostedTaskParser.findHostedTaskId(
+                stackList, 0, "com.google.android.apps.nexuslauncher"));
+    }
+
+    @Test
     public void tracksTaskIdentityAcrossPackageChangesInsideTheTask() {
         String stackList = "RootTask id=8 displayId=12 userId=0\n"
                 + "  taskId=42 visible=true topActivity=com.other/.Previous\n";

@@ -1,7 +1,7 @@
 #!/system/bin/sh
 
 MODULE_ID="onestep40_privapp"
-MODULE_DIR="/data/adb/modules/$MODULE_ID"
+MODULE_DIR="${ONESTEP_MODULE_DIR:-/data/adb/modules/$MODULE_ID}"
 UPDATE_DIR="/data/adb/modules_update/$MODULE_ID"
 GLOBAL_SCRIPT="/data/adb/post-fs-data.d/onestep40-zygisk-toggle.sh"
 LSPOSED_ACTIVE_MARKER="/data/system/onestep-lsposed-backend-active"
@@ -22,7 +22,8 @@ lsposed_active() {
   return 1
 }
 
-if [ ! -d "$MODULE_DIR" ] && [ -d "$UPDATE_DIR" ]; then
+if [ -z "$ONESTEP_MODULE_DIR" ] && [ ! -d "$MODULE_DIR" ] \
+    && [ -d "$UPDATE_DIR" ]; then
   MODULE_DIR="$UPDATE_DIR"
 fi
 
@@ -38,10 +39,19 @@ PAYLOAD_DIR="$MODULE_DIR/zygisk-payload"
 ARM64_PAYLOAD="$PAYLOAD_DIR/arm64-v8a.so"
 ARM32_PAYLOAD="$PAYLOAD_DIR/armeabi-v7a.so"
 ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"
+SDK_INT="$(getprop ro.build.version.sdk)"
+case "$SDK_INT" in
+  ''|*[!0-9]*) SDK_INT=0 ;;
+esac
 
 rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER" \
   "$PRIMARY_HOME_ACTIVE_MARKER" "$ROOT_DISPLAY_COMPAT_ACTIVE_MARKER"
 resetprop -n onestep.hook.primaryhome_enhancement 0
+if [ "$SDK_INT" -lt 29 ]; then
+  rm -rf "$MODULE_DIR/zygisk"
+  resetprop -n onestep.hook.backend unsupported
+  exit 0
+fi
 if [ -e "$MODULE_DIR/hook-config/disable-secure-window" ]; then
   resetprop -n onestep.hook.secure 0
 else

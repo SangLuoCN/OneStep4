@@ -1,6 +1,7 @@
 package com.sangluo.onestep.hook;
 
 final class RootVirtualDisplayCompatPolicy {
+    static final int ANDROID_10_SDK = 29;
     static final int ANDROID_13_SDK = 33;
     static final int ROOT_UID = 0;
     static final String DISPLAY_MANAGER_SERVICE_CLASS =
@@ -12,7 +13,7 @@ final class RootVirtualDisplayCompatPolicy {
     }
 
     static boolean needsCompatHook(int sdkInt) {
-        return sdkInt <= ANDROID_13_SDK;
+        return sdkInt >= ANDROID_10_SDK && sdkInt <= ANDROID_13_SDK;
     }
 
     static boolean shouldBypassPackageValidation(int sdkInt, int uid) {

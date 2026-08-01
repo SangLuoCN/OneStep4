@@ -83,6 +83,7 @@ cp "$ROOT_DIR/packaging/magisk/update-binary" \
 cp "$ROOT_DIR/packaging/magisk/updater-script" \
     "$WORK_DIR/META-INF/com/google/android/updater-script"
 cp "$ROOT_DIR/packaging/magisk/customize.sh" "$WORK_DIR/customize.sh"
+cp "$ROOT_DIR/packaging/magisk/post-fs-data.sh" "$WORK_DIR/post-fs-data.sh"
 cp "$ROOT_DIR/packaging/magisk/service.sh" "$WORK_DIR/service.sh"
 cp "$ROOT_DIR/packaging/magisk/zygisk-toggle.sh" "$WORK_DIR/zygisk-toggle.sh"
 cp "$ROOT_DIR/packaging/magisk/uninstall.sh" "$WORK_DIR/uninstall.sh"
@@ -124,6 +125,7 @@ awk -v version="$APP_VERSION_NAME" -v version_code="$APP_VERSION_CODE" '
 chmod 0755 "$WORK_DIR/META-INF/com/google/android/update-binary"
 chmod 0644 "$WORK_DIR/META-INF/com/google/android/updater-script"
 chmod 0755 "$WORK_DIR/customize.sh"
+chmod 0755 "$WORK_DIR/post-fs-data.sh"
 chmod 0755 "$WORK_DIR/service.sh"
 chmod 0755 "$WORK_DIR/zygisk-toggle.sh"
 chmod 0755 "$WORK_DIR/uninstall.sh"
@@ -156,6 +158,7 @@ unzip -qq "$OUT_ZIP" \
     "zygisk-payload/arm64-v8a.so" \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
+    "post-fs-data.sh" \
     "service.sh" \
     "zygisk-toggle.sh" \
     "uninstall.sh" \
@@ -172,6 +175,7 @@ for required_entry in \
     "zygisk-payload/arm64-v8a.so" \
     "zygisk-payload/armeabi-v7a.so" \
     "zygisk-runtime/aliuhook.dex" \
+    "post-fs-data.sh" \
     "service.sh" \
     "zygisk-toggle.sh" \
     "uninstall.sh" \

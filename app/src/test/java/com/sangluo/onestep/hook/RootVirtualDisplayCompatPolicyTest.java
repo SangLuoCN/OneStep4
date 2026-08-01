@@ -10,8 +10,9 @@ public class RootVirtualDisplayCompatPolicyTest {
     private static final int SYSTEM_UID = 1000;
 
     @Test
-    public void rootIsExemptOnlyThroughAndroid13() {
-        assertTrue(RootVirtualDisplayCompatPolicy.shouldBypassPackageValidation(24, 0));
+    public void rootIsExemptOnlyFromAndroid10ThroughAndroid13() {
+        assertFalse(RootVirtualDisplayCompatPolicy.shouldBypassPackageValidation(28, 0));
+        assertTrue(RootVirtualDisplayCompatPolicy.shouldBypassPackageValidation(29, 0));
         assertTrue(RootVirtualDisplayCompatPolicy.shouldBypassPackageValidation(33, 0));
         assertFalse(RootVirtualDisplayCompatPolicy.shouldBypassPackageValidation(34, 0));
     }

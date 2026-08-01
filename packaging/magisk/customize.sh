@@ -45,10 +45,17 @@ fi
 set_perm_recursive "$HOOK_CONFIG_DIR" 0 0 0700 0600
 
 ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"
+SDK_INT="$(getprop ro.build.version.sdk)"
+case "$SDK_INT" in
+  ''|*[!0-9]*) SDK_INT=0 ;;
+esac
 if lsposed_active; then
   rm -rf "$MODPATH/zygisk"
   ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
   ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”作用域"
+elif [ "$SDK_INT" -lt 29 ]; then
+  rm -rf "$MODPATH/zygisk"
+  ui_print "- 当前 Android API $SDK_INT：Zygisk Hook 仅支持 Android 10 及以上"
 elif ! echo "$ZYGISK_STATE" | grep -q "value=1"; then
   rm -rf "$MODPATH/zygisk"
   ui_print "- Zygisk 未启用：OneStep 普通页面仍可正常使用"
@@ -67,6 +74,7 @@ chown 0:0 "$GLOBAL_ZYGISK_TOGGLE"
 chmod 0755 "$GLOBAL_ZYGISK_TOGGLE"
 set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
 set_perm "$MODPATH/zygisk-toggle.sh" 0 0 0755
+set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
 

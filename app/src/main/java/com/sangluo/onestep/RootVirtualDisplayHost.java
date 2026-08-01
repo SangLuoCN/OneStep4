@@ -223,7 +223,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX * VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX;
     private static final int VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH_HIDDEN = 1 << 6;
     private static final int VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN = 1 << 7;
-    private static final int DISPLAY_FLAG_TRUSTED_HIDDEN = 1 << 7;
     private static final int DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN = 1 << 14;
     private static final int VIRTUAL_DISPLAY_FLAG_TRUSTED_HIDDEN = 1 << 10;
     private static final int VIRTUAL_DISPLAY_FLAG_OWN_FOCUS_HIDDEN = 1 << 14;
@@ -2927,9 +2926,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 + ", backend=" + (rootManagedVirtualDisplay
                 ? "app-fallback" : "app"));
         int actualDisplayFlags = getDisplayFlagsForDiagnostics(hostedDisplay);
-        if (rootManagedVirtualDisplay
-                && (actualDisplayFlags < 0
-                || (actualDisplayFlags & DISPLAY_FLAG_TRUSTED_HIDDEN) == 0)) {
+        if (!RootVirtualDisplayFlags.hasRequiredTrustedDisplay(
+                Build.VERSION.SDK_INT, rootManagedVirtualDisplay, actualDisplayFlags)) {
             unavailableReason = "root 虚拟显示未获得 trusted 标志";
             Log.e(TAG, unavailableReason + ": display=" + displayId
                     + ", flags=0x" + Integer.toHexString(actualDisplayFlags));
