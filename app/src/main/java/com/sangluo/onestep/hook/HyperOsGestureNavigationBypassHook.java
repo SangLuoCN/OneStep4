@@ -1,6 +1,7 @@
 package com.sangluo.onestep.hook;
 
 import android.app.Activity;
+import android.app.ActivityOptions;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.os.Build;
@@ -34,6 +35,10 @@ public final class HyperOsGestureNavigationBypassHook {
             "com.miui.home.recents.OverviewComponentObserver";
     private static final String RECENTS_VIEW_CLASS =
             "com.miui.home.recents.views.RecentsView";
+    private static final String TASK_VIEW_CLASS =
+            "com.miui.home.recents.views.TaskView";
+    private static final String WINDOW_ELEMENT_CLASS =
+            "com.miui.home.recents.anim.WindowElement";
 
     private static boolean loaderHookInstalled;
     private static boolean targetHooksInstalled;
@@ -123,10 +128,13 @@ public final class HyperOsGestureNavigationBypassHook {
             boolean embeddedHomeHookInstalled = installEmbeddedHomeHook(targetClassLoader);
             boolean localOverviewHomeHookInstalled = installLocalOverviewHomeHook(
                     targetClassLoader);
+            boolean hostedTaskLaunchHookInstalled = installHostedTaskLaunchHook(
+                    targetClassLoader);
             targetHooksInstalled = true;
             Log.i(TAG, "HyperOS third-party HOME gesture bypass installed; embeddedHome="
                     + embeddedHomeHookInstalled + ", localOverviewHome="
-                    + localOverviewHomeHookInstalled);
+                    + localOverviewHomeHookInstalled + ", hostedTaskLaunch="
+                    + hostedTaskLaunchHookInstalled);
         } catch (ClassNotFoundException | NoSuchMethodException e) {
             Log.i(TAG, "target MIUI Home gesture restriction is not present");
         } catch (Throwable t) {
@@ -257,10 +265,19 @@ public final class HyperOsGestureNavigationBypassHook {
             XposedBridge.hookMethod(startHome, localOverviewScope);
             XposedBridge.hookMethod(exitOverviewState, localOverviewScope);
 
+            Class<?> taskViewClass = Class.forName(
+                    TASK_VIEW_CLASS, false, targetClassLoader);
+            Method launchTask = taskViewClass.getDeclaredMethod(
+                    "launchTask", boolean.class, boolean.class, boolean.class,
+                    boolean.class, int.class, int.class);
+            launchTask.setAccessible(true);
+            XposedBridge.hookMethod(launchTask, localOverviewScope);
+
             HookBridgeCompat.deoptimizeMethod(getLauncher);
             HookBridgeCompat.deoptimizeMethod(isHomeAndOverviewSame);
             HookBridgeCompat.deoptimizeMethod(startHome);
             HookBridgeCompat.deoptimizeMethod(exitOverviewState);
+            HookBridgeCompat.deoptimizeMethod(launchTask);
             return true;
         } catch (ClassNotFoundException | NoSuchMethodException e) {
             Log.i(TAG, "MIUI Home local overview HOME hook is not present");
@@ -269,6 +286,68 @@ public final class HyperOsGestureNavigationBypassHook {
             Log.e(TAG, "could not install MIUI Home local overview HOME hook", t);
             return false;
         }
+    }
+
+    private static boolean installHostedTaskLaunchHook(ClassLoader targetClassLoader) {
+        try {
+            Class<?> taskViewClass = Class.forName(
+                    TASK_VIEW_CLASS, false, targetClassLoader);
+            Class<?> windowElementClass = Class.forName(
+                    WINDOW_ELEMENT_CLASS, false, targetClassLoader);
+            int hookedMethods = hookActivityOptionsFactories(
+                    taskViewClass, true) + hookActivityOptionsFactories(
+                    windowElementClass, false);
+            if (hookedMethods == 0) {
+                Log.i(TAG, "MIUI Home hosted task ActivityOptions hooks are not present");
+                return false;
+            }
+            return true;
+        } catch (ClassNotFoundException e) {
+            Log.i(TAG, "MIUI Home hosted task launch classes are not present");
+            return false;
+        } catch (Throwable t) {
+            Log.e(TAG, "could not install MIUI Home hosted task launch hook", t);
+            return false;
+        }
+    }
+
+    private static int hookActivityOptionsFactories(Class<?> type, boolean viewIsReceiver) {
+        int hookedMethods = 0;
+        for (Method method : type.getDeclaredMethods()) {
+            if (!"getActivityOptions".equals(method.getName())
+                    || !ActivityOptions.class.isAssignableFrom(method.getReturnType())) {
+                continue;
+            }
+            method.setAccessible(true);
+            XposedBridge.hookMethod(method, new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (!(param.getResult() instanceof ActivityOptions)) {
+                        return;
+                    }
+                    Object source = viewIsReceiver
+                            ? param.thisObject
+                            : param.args.length == 0 ? null : param.args[0];
+                    if (!(source instanceof View)) {
+                        return;
+                    }
+                    Display display = ((View) source).getDisplay();
+                    String displayName = display == null ? null : display.getName();
+                    if (display == null || display.getDisplayId() == Display.DEFAULT_DISPLAY
+                            || !HyperOsEmbeddedHomePolicy.shouldUseLocalOverviewHome(
+                            displayName)) {
+                        return;
+                    }
+                    ((ActivityOptions) param.getResult()).setLaunchDisplayId(
+                            display.getDisplayId());
+                    Log.i(TAG, "Keep recents task launch on " + displayName
+                            + ", displayId=" + display.getDisplayId());
+                }
+            });
+            HookBridgeCompat.deoptimizeMethod(method);
+            hookedMethods++;
+        }
+        return hookedMethods;
     }
 
     private static Activity activityFromViewContext(Object view) {
