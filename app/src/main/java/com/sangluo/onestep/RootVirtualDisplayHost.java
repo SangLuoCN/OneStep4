@@ -92,6 +92,7 @@ import com.sangluo.onestep.model.PinnedTaskState;
 import com.sangluo.onestep.model.VirtualDisplaySpec;
 import com.sangluo.onestep.system.display.RootVirtualDisplayBridgeClient;
 import com.sangluo.onestep.system.root.PersistentRootShell;
+import com.sangluo.onestep.system.root.RootBridgePolicyCompat;
 import com.sangluo.onestep.system.root.ShellCommandResult;
 import com.sangluo.onestep.system.input.RootInputBridgeClient;
 import com.sangluo.onestep.system.ui.SystemUiController;
@@ -3407,21 +3408,25 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 + " </dev/null >/dev/null 2>&1 &";
         rootInputBridgeClient.close();
         rootVirtualDisplayBridgeClient.close();
-        String policyCommand = "if command -v magiskpolicy >/dev/null 2>&1; then "
-                + "root_context=$(id -Z 2>/dev/null); "
-                + "root_domain=${root_context#u:r:}; root_domain=${root_domain%%:*}; "
-                + "case \"$root_domain\" in ''|*[!a-zA-Z0-9_]*) ;; *) "
-                + "magiskpolicy --live "
-                + "\"allow $root_domain default_android_service service_manager add\" "
-                + shellQuote("allow priv_app default_android_service service_manager find") + " "
-                + "\"allow priv_app $root_domain binder { call transfer }\" "
-                + "\"allow $root_domain priv_app binder { call transfer }\" "
-                + "\"allow priv_app $root_domain unix_stream_socket connectto\" "
-                + "\"allow $root_domain priv_app fd use\" "
-                + "\"allow $root_domain surfaceflinger_service service_manager find\" "
-                + "\"allow $root_domain surfaceflinger binder { call transfer }\" "
-                + "\"allow surfaceflinger $root_domain binder transfer\" "
-                + ">/dev/null 2>&1 || true; esac; fi; ";
+        String policyCommand = "";
+        if (RootBridgePolicyCompat.shouldApplyLivePolicy(Build.VERSION.SDK_INT)) {
+            policyCommand = "if command -v magiskpolicy >/dev/null 2>&1; then "
+                    + "root_context=$(id -Z 2>/dev/null); "
+                    + "root_domain=${root_context#u:r:}; root_domain=${root_domain%%:*}; "
+                    + "case \"$root_domain\" in ''|*[!a-zA-Z0-9_]*) ;; *) "
+                    + "magiskpolicy --live "
+                    + "\"allow $root_domain default_android_service service_manager add\" "
+                    + shellQuote("allow priv_app default_android_service service_manager find")
+                    + " "
+                    + "\"allow priv_app $root_domain binder { call transfer }\" "
+                    + "\"allow $root_domain priv_app binder { call transfer }\" "
+                    + "\"allow priv_app $root_domain unix_stream_socket connectto\" "
+                    + "\"allow $root_domain priv_app fd use\" "
+                    + "\"allow $root_domain surfaceflinger_service service_manager find\" "
+                    + "\"allow $root_domain surfaceflinger binder { call transfer }\" "
+                    + "\"allow surfaceflinger $root_domain binder transfer\" "
+                    + ">/dev/null 2>&1 || true; esac; fi; ";
+        }
         ShellCommandResult rootResult = runRootCommand(
                 cleanupCommand + policyCommand + bridgeCommand);
         if (waitForRootInputBridge(bridgeToken)) {

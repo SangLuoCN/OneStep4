@@ -39,6 +39,20 @@ PAYLOAD_DIR="$MODULE_DIR/zygisk-payload"
 ARM64_PAYLOAD="$PAYLOAD_DIR/arm64-v8a.so"
 ARM32_PAYLOAD="$PAYLOAD_DIR/armeabi-v7a.so"
 ZYGISK_STATE="$(magisk --sqlite "SELECT value FROM settings WHERE key='zygisk';" 2>/dev/null)"
+
+zygisk_enabled() {
+  if [ "$ZYGISK_ENABLED" = "1" ] \
+      || echo "$ZYGISK_STATE" | grep -q "value=1"; then
+    return 0
+  fi
+  for zygote_pid in $(pidof zygote64 zygote 2>/dev/null); do
+    if grep -q '/libzygisk\.so' "/proc/$zygote_pid/maps" 2>/dev/null; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 SDK_INT="$(getprop ro.build.version.sdk)"
 case "$SDK_INT" in
   ''|*[!0-9]*) SDK_INT=0 ;;
@@ -78,7 +92,7 @@ fi
 
 resetprop -n onestep.hook.backend standalone
 
-if ! echo "$ZYGISK_STATE" | grep -q "value=1"; then
+if ! zygisk_enabled; then
   # A top-level zygisk directory makes Magisk ignore the whole module when Zygisk is off.
   rm -rf "$MODULE_DIR/zygisk"
   exit 0
