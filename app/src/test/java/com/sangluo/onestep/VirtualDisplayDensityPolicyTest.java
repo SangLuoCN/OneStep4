@@ -8,37 +8,37 @@ public class VirtualDisplayDensityPolicyTest {
     @Test
     public void phoneFollowsHostDensityInsteadOfFixedLogicalWidth() {
         assertEquals(480, VirtualDisplayDensityPolicy.calculateDensityDpi(
-                1080, 2336, 1080, 2336, 480, false));
+                1080, 2336, 480, false));
     }
 
     @Test
-    public void foldPaneDensityTracksVirtualPixelUpscaling() {
-        assertEquals(475, VirtualDisplayDensityPolicy.calculateDensityDpi(
-                886, 1577, 1080, 1922, 390, false));
+    public void foldPaneUsesHostDensityWithoutFixedPixelUpscaling() {
+        assertEquals(390, VirtualDisplayDensityPolicy.calculateDensityDpi(
+                886, 1577, 390, false));
     }
 
     @Test
     public void densityNeverDropsBelowThreeHundredDpi() {
         assertEquals(300, VirtualDisplayDensityPolicy.calculateDensityDpi(
-                600, 1200, 600, 1200, 160, false));
+                600, 1200, 160, false));
     }
 
     @Test
     public void landscapeTabletExposesTabletLogicalSpace() {
         assertEquals(300, VirtualDisplayDensityPolicy.calculateDensityDpi(
-                1921, 1128, 1921, 1128, 320, true));
+                1921, 1128, 320, true));
     }
 
     @Test
     public void portraitTabletExposesTabletLogicalSpace() {
         assertEquals(319, VirtualDisplayDensityPolicy.calculateDensityDpi(
-                1198, 2088, 1198, 2088, 320, true));
+                1198, 2088, 320, true));
     }
 
     @Test
-    public void qualityUpscalingAlsoScalesTabletDensity() {
+    public void tabletDensityNeverDropsBelowMinimum() {
         assertEquals(300, VirtualDisplayDensityPolicy.calculateDensityDpi(
-                600, 1200, 1080, 2160, 320, true));
+                600, 1200, 320, true));
     }
 
     @Test

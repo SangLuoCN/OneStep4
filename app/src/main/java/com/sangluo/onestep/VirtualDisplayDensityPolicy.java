@@ -10,23 +10,18 @@ public final class VirtualDisplayDensityPolicy {
     }
 
     public static int calculateDensityDpi(
-            int referenceWidth, int referenceHeight,
             int virtualWidth, int virtualHeight,
             int hostDensityDpi, boolean useTabletDensity) {
-        float qualityScale = Math.min(
-                virtualWidth / (float) Math.max(1, referenceWidth),
-                virtualHeight / (float) Math.max(1, referenceHeight));
-        int scaledHostDensityDpi = Math.max(MIN_DENSITY_DPI,
-                Math.round(Math.max(MIN_DENSITY_DPI, hostDensityDpi) * qualityScale));
+        int hostLogicalDensityDpi = Math.max(MIN_DENSITY_DPI, hostDensityDpi);
         if (!useTabletDensity) {
-            return scaledHostDensityDpi;
+            return hostLogicalDensityDpi;
         }
 
         int virtualShortEdge = Math.min(virtualWidth, virtualHeight);
         int maxTabletDensityDpi = Math.max(MIN_DENSITY_DPI,
                 (int) Math.floor(virtualShortEdge * 160f
                         / TABLET_MIN_LOGICAL_SHORT_EDGE_DP));
-        return Math.min(scaledHostDensityDpi, maxTabletDensityDpi);
+        return Math.min(hostLogicalDensityDpi, maxTabletDensityDpi);
     }
 
     public static float calculateTabletPixelScale(

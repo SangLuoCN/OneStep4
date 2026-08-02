@@ -186,7 +186,6 @@ public class MainActivity extends Activity {
     private static final int CORNER_TRIGGER_PREVIEW_HIDE_DELAY_MS = 2000;
     private static final int EXIT_FULLSCREEN_LAYOUT_DELAY_MS = 180;
     private static final int EMBEDDED_LAYOUT_REFRESH_DELAY_MS = 320;
-    private static final int VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX = 1080;
     private static final long POST_ANIMATION_NON_CRITICAL_WORK_DELAY_MS = 64L;
     private static final long CROSS_APP_ROUTE_RETRY_MS = 60L;
     private static final long DEFAULT_HOME_RESTORE_DELAY_MS = 80L;
