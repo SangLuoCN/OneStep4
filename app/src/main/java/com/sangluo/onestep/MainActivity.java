@@ -45,6 +45,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewPropertyAnimator;
 import android.view.ViewParent;
+import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowManager;
@@ -256,7 +257,9 @@ public class MainActivity extends Activity {
         }
     };
     private final Runnable refreshAllEmbeddedSlotLayoutsRunnable =
-            this::refreshAllEmbeddedSlotLayouts;
+            this::runScheduledEmbeddedSlotRefresh;
+    private ViewTreeObserver embeddedLayoutRefreshObserver;
+    private ViewTreeObserver.OnPreDrawListener embeddedLayoutRefreshPreDrawListener;
     private final Runnable syncSideInputProtectionRunnable =
             this::syncSideInputProtection;
     private final Runnable cornerTriggerPreviewHideRunnable = this::hideCornerTriggerPreview;
@@ -1504,6 +1507,7 @@ public class MainActivity extends Activity {
         mainHandler.removeCallbacks(pipDockBoundsUpdateRunnable);
         mainHandler.removeCallbacks(runningTaskMonitorRunnable);
         mainHandler.removeCallbacks(syncSideInputProtectionRunnable);
+        cancelScheduledEmbeddedSlotRefresh();
         if (sideInputShieldController != null) {
             sideInputShieldController.release();
             sideInputShieldController = null;
@@ -4883,8 +4887,50 @@ public class MainActivity extends Activity {
             return;
         }
         workspace.removeCallbacks(refreshAllEmbeddedSlotLayoutsRunnable);
+        removeEmbeddedLayoutRefreshPreDrawListener();
+        workspace.requestLayout();
+        ViewTreeObserver observer = workspace.getViewTreeObserver();
+        if (observer.isAlive()) {
+            embeddedLayoutRefreshObserver = observer;
+            embeddedLayoutRefreshPreDrawListener = new ViewTreeObserver.OnPreDrawListener() {
+                @Override
+                public boolean onPreDraw() {
+                    if (embeddedLayoutRefreshPreDrawListener != this) {
+                        return true;
+                    }
+                    workspace.removeCallbacks(refreshAllEmbeddedSlotLayoutsRunnable);
+                    removeEmbeddedLayoutRefreshPreDrawListener();
+                    refreshAllEmbeddedSlotLayouts();
+                    return true;
+                }
+            };
+            observer.addOnPreDrawListener(embeddedLayoutRefreshPreDrawListener);
+        }
         workspace.postDelayed(refreshAllEmbeddedSlotLayoutsRunnable,
                 EMBEDDED_LAYOUT_REFRESH_DELAY_MS);
+    }
+
+    private void runScheduledEmbeddedSlotRefresh() {
+        removeEmbeddedLayoutRefreshPreDrawListener();
+        refreshAllEmbeddedSlotLayouts();
+    }
+
+    private void cancelScheduledEmbeddedSlotRefresh() {
+        if (workspace != null) {
+            workspace.removeCallbacks(refreshAllEmbeddedSlotLayoutsRunnable);
+        }
+        removeEmbeddedLayoutRefreshPreDrawListener();
+    }
+
+    private void removeEmbeddedLayoutRefreshPreDrawListener() {
+        if (embeddedLayoutRefreshObserver != null
+                && embeddedLayoutRefreshObserver.isAlive()
+                && embeddedLayoutRefreshPreDrawListener != null) {
+            embeddedLayoutRefreshObserver.removeOnPreDrawListener(
+                    embeddedLayoutRefreshPreDrawListener);
+        }
+        embeddedLayoutRefreshObserver = null;
+        embeddedLayoutRefreshPreDrawListener = null;
     }
 
     private void dispatchMainBack() {
