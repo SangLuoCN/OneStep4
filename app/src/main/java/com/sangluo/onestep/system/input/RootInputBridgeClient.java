@@ -53,18 +53,19 @@ public final class RootInputBridgeClient implements AutoCloseable {
                 String.format(Locale.US, "key %d %d", displayId, keyCode));
     }
 
-    public synchronized boolean focusDisplay(String bridgeToken, int displayId) {
+    public synchronized boolean focusHostedDisplay(String bridgeToken, int displayId) {
         String response = sendRequestOnDedicatedConnection(
-                bridgeToken, "focusDisplay " + displayId);
+                bridgeToken, "focusHostedDisplay " + displayId);
         if (TextUtils.isEmpty(response)) {
             return false;
         }
         try {
             String[] parts = response.trim().split("\\s+");
-            return parts.length == 3
-                    && "focusDisplay".equals(parts[0])
+            return parts.length == 4
+                    && "focusHostedDisplay".equals(parts[0])
                     && Integer.parseInt(parts[1]) == displayId
-                    && Boolean.parseBoolean(parts[2]);
+                    && Boolean.parseBoolean(parts[2])
+                    && Boolean.parseBoolean(parts[3]);
         } catch (NumberFormatException e) {
             return false;
         }

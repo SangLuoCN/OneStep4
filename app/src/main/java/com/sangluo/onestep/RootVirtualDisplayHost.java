@@ -186,7 +186,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         View workspace();
         int mainSlotSwitchPendingSlot();
         int activeMainSlot();
-        void cancelDefaultNavigationFocusRestore();
         boolean claimStaleSensorUidOverrideRecovery();
         int latestPhysicalLandscapeRotation();
         boolean hasGrantedSystemEmbeddingPermission();
@@ -1661,10 +1660,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                             isTouchReservedForSystemNavigation(event);
                     if (touchReservedForSystemNavigation) {
                         touchSequenceSuppressed = true;
-                        focusDefaultDisplayForSystemNavigation(
+                        routeDefaultDisplaySystemNavigation(
                                 "physical system gesture started");
                     } else {
-                        callbacks.cancelDefaultNavigationFocusRestore();
                         touchFocusRequestGeneration = ++focusRequestGeneration;
                         syncLaunchRoutingSource();
                     }
@@ -1710,7 +1708,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     return true;
                 }
                 if (touchSequenceSuppressed) {
-                    focusDefaultDisplayForSystemNavigation(
+                    routeDefaultDisplaySystemNavigation(
                             touchReservedForSystemNavigation
                                     ? "physical system gesture completed"
                                     : "host touch dispatch unavailable");
@@ -1725,7 +1723,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     injectMotionDirect(event);
                 }
                 if (touchReservedForSystemNavigation) {
-                    focusDefaultDisplayForSystemNavigation(
+                    routeDefaultDisplaySystemNavigation(
                             "physical system gesture cancelled");
                 }
                 clearTouchState();
@@ -1890,7 +1888,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                             && motion.displayId == displayId
                             && slot == callbacks.activeMainSlot()
                             && !callbacks.isActivityDestroyed();
-                    boolean focused = currentRequest && rootInputBridgeClient.focusDisplay(
+                    boolean focused = currentRequest && rootInputBridgeClient.focusHostedDisplay(
                             getRootInputBridgeToken(), motion.displayId);
                     if (currentRequest && !focused) {
                         Log.w(TAG, "Focus hosted display before touch failed: slot=" + slot
@@ -1981,7 +1979,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         return false;
     }
 
-    void focusHostedDisplayAsync(Runnable onFinished) {
+    void focusHostedDisplayAsync(String reason, Runnable onFinished) {
         final int targetDisplayId = displayId;
         final int requestGeneration = ++focusRequestGeneration;
         syncLaunchRoutingSource();
@@ -1992,11 +1990,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         && slot == callbacks.activeMainSlot()
                         && !callbacks.isActivityDestroyed();
                 boolean focused = currentRequest && targetDisplayId > DEFAULT_DISPLAY_ID
-                        && rootInputBridgeClient.focusDisplay(
+                        && rootInputBridgeClient.focusHostedDisplay(
                         getRootInputBridgeToken(), targetDisplayId);
                 if (currentRequest && !focused) {
                     Log.w(TAG, "Focus promoted display failed: slot=" + slot
-                            + ", display=" + targetDisplayId);
+                            + ", display=" + targetDisplayId + ", reason=" + reason);
                 }
                 if (onFinished != null) {
                     mainHandler.post(onFinished);
@@ -2023,18 +2021,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         injectKeyDirectAsync(KeyEvent.KEYCODE_BACK, "dismiss recents display " + displayId);
     }
 
-    boolean focusDefaultDisplayForSystemNavigation(String reason) {
+    boolean routeDefaultDisplaySystemNavigation(String reason) {
         focusRequestGeneration++;
         rootVirtualDisplayBridgeClient.updateLaunchSource(
                 getRootInputBridgeToken(), DEFAULT_DISPLAY_ID, "", false);
-        if (!rootAvailable) {
-            return false;
-        }
-        boolean focused = rootInputBridgeClient.focusDisplay(
-                getRootInputBridgeToken(), DEFAULT_DISPLAY_ID);
-        Log.println(focused ? Log.INFO : Log.WARN, TAG,
-                "Restore default display focus for " + reason + ": success=" + focused);
-        return focused;
+        Log.i(TAG, "Route default-display system navigation without changing IME focus: "
+                + reason);
+        return rootAvailable;
     }
 
     private void logMotionUnavailable(int targetDisplayId) {

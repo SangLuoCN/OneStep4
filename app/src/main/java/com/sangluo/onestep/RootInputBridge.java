@@ -38,7 +38,7 @@ public final class RootInputBridge {
     private static final int ARG_ALLOWED_UID = 0;
     private static final int ARG_BRIDGE_TOKEN = 1;
     private static final String SOCKET_NAME_PREFIX = "onestep_input_bridge_";
-    public static final String HELLO_RESPONSE_PREFIX = "onestep-input-bridge-v21";
+    public static final String HELLO_RESPONSE_PREFIX = "onestep-input-bridge-v22";
     private static final int ROOT_UID = 0;
     private static final int SHELL_UID = 2000;
     private static final int WINDOWING_MODE_PINNED = 2;
@@ -308,8 +308,8 @@ public final class RootInputBridge {
             } else if ("motion".equals(parts[0])
                     && (parts.length == 7 || parts.length == 15 || parts.length == 16)) {
                 injectMotion(parts);
-            } else if ("focusDisplay".equals(parts[0]) && parts.length == 2) {
-                return focusDisplay(parts);
+            } else if ("focusHostedDisplay".equals(parts[0]) && parts.length == 2) {
+                return focusHostedDisplay(parts);
             } else if ("removeTask".equals(parts[0]) && parts.length == 2) {
                 return removeTask(parts);
             } else if ("moveTaskToDisplay".equals(parts[0]) && parts.length == 4) {
@@ -456,22 +456,39 @@ public final class RootInputBridge {
         return INJECT_INPUT_EVENT_MODE_ASYNC;
     }
 
-    private String focusDisplay(String[] parts) {
+    private String focusHostedDisplay(String[] parts) {
         int displayId = Integer.parseInt(parts[1]);
-        boolean success = false;
-        String failure = "";
-        try {
-            getFocusTopTaskMethod().invoke(getActivityTaskManagerService(), displayId);
-            success = true;
-        } catch (ReflectiveOperationException | RuntimeException e) {
-            throwIfSystemServiceDead(e);
-            failure = describeThrowable(e);
+        if (displayId <= Display.DEFAULT_DISPLAY) {
+            Log.w(TAG, "Refuse hosted focus for non-virtual display=" + displayId);
+            return "focusHostedDisplay " + displayId + " false false";
         }
-        int priority = success ? Log.INFO : Log.WARN;
-        Log.println(priority, TAG, "Focused display=" + displayId
-                + " success=" + success
+        String imePolicyResponse = setDisplayImePolicy(new String[]{
+                "imePolicy", Integer.toString(displayId), "0"
+        });
+        String[] imePolicyParts = imePolicyResponse.trim().split("\\s+");
+        boolean localImePolicy = imePolicyParts.length == 5
+                && Integer.parseInt(imePolicyParts[1]) == displayId
+                && Integer.parseInt(imePolicyParts[2]) == 0
+                && Integer.parseInt(imePolicyParts[3]) == 0
+                && Boolean.parseBoolean(imePolicyParts[4]);
+        boolean focused = false;
+        String failure = "";
+        if (localImePolicy) {
+            try {
+                getFocusTopTaskMethod().invoke(getActivityTaskManagerService(), displayId);
+                focused = true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                throwIfSystemServiceDead(e);
+                failure = describeThrowable(e);
+            }
+        }
+        int priority = localImePolicy && focused ? Log.INFO : Log.WARN;
+        Log.println(priority, TAG, "Focused hosted display=" + displayId
+                + " localImePolicy=" + localImePolicy
+                + " success=" + focused
                 + (failure.isEmpty() ? "" : " failure=" + failure));
-        return "focusDisplay " + displayId + " " + success;
+        return "focusHostedDisplay " + displayId + " "
+                + localImePolicy + " " + focused;
     }
 
     private String removeTask(String[] parts) {

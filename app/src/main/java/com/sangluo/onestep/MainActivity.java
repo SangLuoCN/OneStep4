@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
     private static final long POST_ANIMATION_NON_CRITICAL_WORK_DELAY_MS = 64L;
     private static final long CROSS_APP_ROUTE_RETRY_MS = 60L;
     private static final long DEFAULT_HOME_RESTORE_DELAY_MS = 80L;
-    private static final long DEFAULT_NAVIGATION_FOCUS_RESTORE_DELAY_MS = 80L;
+    private static final long HOSTED_DISPLAY_FOCUS_DELAY_MS = 80L;
     private static final long BLOCKED_RECENTS_RESTORE_TIMEOUT_MS = 1000L;
     private static final int MAX_PENDING_CROSS_APP_ROUTES = 8;
     private static final int DEFERRED_MEDIA_SESSION_REFRESH = 1;
@@ -361,9 +361,6 @@ public class MainActivity extends Activity {
                     return mainSlotSwitchPendingSlot;
                 }
                 @Override public int activeMainSlot() { return activeMainSlot; }
-                @Override public void cancelDefaultNavigationFocusRestore() {
-                    MainActivity.this.cancelDefaultNavigationFocusRestore();
-                }
                 @Override public boolean claimStaleSensorUidOverrideRecovery() {
                     if (staleSensorUidOverridesRecoveryAttempted) {
                         return false;
@@ -517,7 +514,7 @@ public class MainActivity extends Activity {
     private boolean runningTaskQueryFailureLogged;
     private int runningTaskMonitorGeneration;
     private boolean defaultHomeRestorePending;
-    private int defaultNavigationFocusRestoreGeneration;
+    private int hostedDisplayFocusGeneration;
     private boolean blockedDefaultRecentsRestorePending;
     private boolean systemRecentsComponentResolved;
     private ComponentName systemRecentsComponent;
@@ -627,7 +624,7 @@ public class MainActivity extends Activity {
         resumeMediaMonitoring();
         startPipMonitoring();
         scheduleSideInputProtectionSync();
-        scheduleDefaultNavigationFocusRestore("OneStep resumed");
+        scheduleHostedDisplayFocus("OneStep resumed");
     }
 
     @Override
@@ -847,7 +844,7 @@ public class MainActivity extends Activity {
             super.onPause();
             return;
         }
-        restoreDefaultDisplayFocus("OneStep paused");
+        cancelScheduledHostedDisplayFocus();
         activityResumed = false;
         stopRunningTaskMonitoring();
         pauseMediaMonitoring();
@@ -949,20 +946,13 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void restoreDefaultDisplayFocus(String reason) {
+    private void focusActiveHostedDisplay(String reason) {
         RootVirtualDisplayHost activeHost = activeMainSlot >= 0
                 && activeMainSlot < embeddedHosts.length
                 && embeddedHosts[activeMainSlot] instanceof RootVirtualDisplayHost
                 ? (RootVirtualDisplayHost) embeddedHosts[activeMainSlot] : null;
-        if (activeHost != null && activeHost.focusDefaultDisplayForSystemNavigation(reason)) {
-            return;
-        }
-        for (EmbeddedAppHost host : embeddedHosts) {
-            if (host instanceof RootVirtualDisplayHost && host != activeHost
-                    && ((RootVirtualDisplayHost) host)
-                    .focusDefaultDisplayForSystemNavigation(reason)) {
-                return;
-            }
+        if (activeHost != null) {
+            activeHost.focusHostedDisplayAsync(reason, null);
         }
     }
 
@@ -975,7 +965,7 @@ public class MainActivity extends Activity {
         MainActivity defaultActivity = defaultDisplayInstance.get();
         if (defaultActivity != null && !defaultActivity.activityDestroyed
                 && defaultActivity != this) {
-            defaultActivity.restoreDefaultDisplayFocus("virtual HOME redirected");
+            defaultActivity.scheduleHostedDisplayFocus("virtual HOME redirected");
             defaultActivity.suppressEmbeddedStarts = false;
             defaultActivity.requestDesktopHomeInMain();
             finish();
@@ -1070,13 +1060,13 @@ public class MainActivity extends Activity {
             if (recentsHost != null) {
                 recentsHost.dismissHostedSystemRecents();
             }
-            scheduleDefaultNavigationFocusRestore("hosted recents dismissed");
+            scheduleHostedDisplayFocus("hosted recents dismissed");
             return;
         }
         if (event == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
                 && displayId > Display.DEFAULT_DISPLAY
                 && findRootVirtualDisplayHost(displayId) != null) {
-            scheduleDefaultNavigationFocusRestore("hosted task moved to front");
+            scheduleHostedDisplayFocus("hosted task moved to front");
         }
         boolean oneStepHomeMovedToFront = event
                 == RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
@@ -1087,7 +1077,7 @@ public class MainActivity extends Activity {
                 blockedDefaultRecentsRestorePending = false;
                 mainHandler.removeCallbacks(clearBlockedDefaultRecentsRestoreRunnable);
                 Log.i(TAG, "Keep current main content after blocking default-display recents");
-                scheduleDefaultNavigationFocusRestore("default-display recents blocked");
+                scheduleHostedDisplayFocus("default-display recents blocked");
                 return;
             }
             Log.i(TAG, "Route default-display HOME through OneStep containers");
@@ -1247,18 +1237,18 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void scheduleDefaultNavigationFocusRestore(String reason) {
-        final int generation = ++defaultNavigationFocusRestoreGeneration;
+    private void scheduleHostedDisplayFocus(String reason) {
+        final int generation = ++hostedDisplayFocusGeneration;
         mainHandler.postDelayed(() -> {
-            if (!activityDestroyed
-                    && generation == defaultNavigationFocusRestoreGeneration) {
-                restoreDefaultDisplayFocus(reason);
+            if (!activityDestroyed && activityResumed
+                    && generation == hostedDisplayFocusGeneration) {
+                focusActiveHostedDisplay(reason);
             }
-        }, DEFAULT_NAVIGATION_FOCUS_RESTORE_DELAY_MS);
+        }, HOSTED_DISPLAY_FOCUS_DELAY_MS);
     }
 
-    private void cancelDefaultNavigationFocusRestore() {
-        defaultNavigationFocusRestoreGeneration++;
+    private void cancelScheduledHostedDisplayFocus() {
+        hostedDisplayFocusGeneration++;
     }
 
     private void restoreOneStepHomeNow() {
@@ -1428,7 +1418,7 @@ public class MainActivity extends Activity {
             super.onDestroy();
             return;
         }
-        restoreDefaultDisplayFocus("OneStep destroyed");
+        cancelScheduledHostedDisplayFocus();
         unregisterLauncherIconChangeReceiver();
         cancelWindowSurfaceAnimation();
         if (hostedDisplayRotationController != null) {
@@ -5294,8 +5284,8 @@ public class MainActivity extends Activity {
         EmbeddedAppHost newHost = embeddedHosts[newMainSlot];
         if (newHost instanceof RootVirtualDisplayHost) {
             RootVirtualDisplayHost newRootHost = (RootVirtualDisplayHost) newHost;
-            cancelDefaultNavigationFocusRestore();
-            newRootHost.focusHostedDisplayAsync(() -> {
+            cancelScheduledHostedDisplayFocus();
+            newRootHost.focusHostedDisplayAsync("main slot switched", () -> {
                 if (switchGeneration == mainSlotSwitchGeneration
                         && activeMainSlot == newMainSlot) {
                     newRootHost.restoreHostedInputFocus();
