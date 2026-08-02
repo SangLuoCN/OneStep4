@@ -108,10 +108,12 @@ public final class WindowLayoutCalculator {
         int sideLeft = mainOnLeft
                 ? mainLeft + mainWidth * 2 + divider * 2 : 0;
 
-        rects[firstMainSlot] = new Rect(
+        int leftMainSlot = mainOnLeft ? firstMainSlot : secondMainSlot;
+        int rightMainSlot = mainOnLeft ? secondMainSlot : firstMainSlot;
+        rects[leftMainSlot] = new Rect(
                 mainLeft, groupTop, mainLeft + mainWidth, groupTop + contentHeight);
         int secondMainLeft = mainLeft + mainWidth + divider;
-        rects[secondMainSlot] = new Rect(secondMainLeft, groupTop,
+        rects[rightMainSlot] = new Rect(secondMainLeft, groupTop,
                 secondMainLeft + mainWidth, groupTop + contentHeight);
         for (int index = 0; index < shownSideCount; index++) {
             int column = index / sideRows;

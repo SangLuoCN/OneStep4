@@ -15,6 +15,7 @@ import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.graphics.Canvas;
@@ -26,6 +27,7 @@ import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -85,6 +87,7 @@ import com.sangluo.onestep.ui.window.OneStepWindowView;
 import com.sangluo.onestep.ui.window.SideWindowInputShieldController;
 import com.sangluo.onestep.ui.window.WindowAnimationController;
 import com.sangluo.onestep.ui.window.WindowLayoutCalculator;
+import com.sangluo.onestep.ui.window.WindowLayoutModePolicy;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -143,7 +146,6 @@ public class MainActivity extends Activity {
     private static WeakReference<MainActivity> defaultDisplayInstance =
             new WeakReference<>(null);
     private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 2;
-    private static final int DUAL_MAIN_MIN_SMALLEST_WIDTH_DP = 600;
     private static final int REQUEST_PICK_BACKGROUND = 42;
     private static final int REQUEST_EXPORT_LOG_STORAGE = 43;
     private static final int TOP_MEDIA_AREA_MIN_HEIGHT_DP = 116;
@@ -160,6 +162,10 @@ public class MainActivity extends Activity {
     private static final int TOP_NAV_BUTTON_SIZE_DP = 26;
     private static final int TOP_NAV_BUTTON_SPACING_DP = 8;
     private static final int TOP_NAV_ICON_SIZE_DP = 20;
+    private static final int MAIN_PANE_SWAP_BUTTON_WIDTH_DP = 40;
+    private static final int MAIN_PANE_SWAP_BUTTON_HEIGHT_DP = 64;
+    private static final int MAIN_PANE_SWAP_ICON_HORIZONTAL_PADDING_DP = 10;
+    private static final int MAIN_PANE_SWAP_ICON_VERTICAL_PADDING_DP = 12;
     private static final int MEDIA_ROOT_COMMAND_TIMEOUT_SECONDS = 8;
     private static final String[] KERNEL_SU_MANAGER_PACKAGES = {
             "me.weishu.kernelsu",
@@ -454,6 +460,10 @@ public class MainActivity extends Activity {
     private ImageView topNavSettingsControl;
     private ImageView topNavExpandLeftControl;
     private ImageView topNavExpandRightControl;
+    private ImageView mainPaneSwapControl;
+    private WindowManager mainPaneSwapWindowManager;
+    private WindowManager.LayoutParams mainPaneSwapWindowLayoutParams;
+    private boolean mainPaneSwapWindowAttached;
     private BlurredBackgroundView oneStepBackgroundView;
     private HorizontalScrollView topAppStripScrollView;
     private View statusGestureShield;
@@ -466,6 +476,7 @@ public class MainActivity extends Activity {
     private int firstMainSlot;
     private int secondMainSlot = -1;
     private boolean dualMainLayout;
+    private boolean mainPanesSwapped;
     private HostedDisplayRotationController hostedDisplayRotationController;
     private boolean mainOnLeft = true;
     private boolean multiWindowMode;
@@ -1445,6 +1456,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
+        removeMainPaneSwapWindow(true);
         if (sessionLogRecorder != null) {
             sessionLogRecorder.close();
             sessionLogRecorder = null;
@@ -1723,6 +1735,9 @@ public class MainActivity extends Activity {
             });
         }
 
+        mainPaneSwapControl = createMainPaneSwapControl();
+        mainPaneSwapWindowManager = getWindowManager();
+
         setTopChromeVisible(false, false);
         applyWindowLayout(false);
         addCornerTriggers(root);
@@ -1743,6 +1758,11 @@ public class MainActivity extends Activity {
     }
 
     private void applyWindowLayout(boolean animate, Runnable onAnimationFinished) {
+        applyWindowLayout(animate, onAnimationFinished, true);
+    }
+
+    private void applyWindowLayout(boolean animate, Runnable onAnimationFinished,
+                                   boolean allowSurfaceLayerAnimation) {
         if (workspace == null) {
             return;
         }
@@ -1755,6 +1775,7 @@ public class MainActivity extends Activity {
         suspendWindowInputRouting();
         updateScreenContainerBackground();
         ensureWindowChildren();
+        updateMainPaneSwapControl(targetRects);
 
         for (int slot = 0; slot < MAX_WINDOWS; slot++) {
             boolean visible = isWindowSlotEnabled(slot) && !embeddedSlotClosing[slot];
@@ -1765,6 +1786,7 @@ public class MainActivity extends Activity {
         Runnable layoutFinished = () -> {
             restoreWindowInputRoutingAfterLayout();
             configureMainDesktopHomeViewports();
+            keepMainPaneSwapControlOnTop();
             if (onAnimationFinished != null) {
                 onAnimationFinished.run();
             } else {
@@ -1784,7 +1806,7 @@ public class MainActivity extends Activity {
             return;
         }
 
-        animateWindowFrames(targetRects, layoutFinished);
+        animateWindowFrames(targetRects, layoutFinished, allowSurfaceLayerAnimation);
     }
 
     private void configureDesktopHomeViewport(OneStepWindowView windowView) {
@@ -1835,6 +1857,12 @@ public class MainActivity extends Activity {
     }
 
     private Rect[] calculateWindowRects() {
+        int layoutFirstMainSlot = firstMainSlot;
+        int layoutSecondMainSlot = secondMainSlot;
+        if (mainPanesSwapped && secondMainSlot >= 0) {
+            layoutFirstMainSlot = secondMainSlot;
+            layoutSecondMainSlot = firstMainSlot;
+        }
         return WindowLayoutCalculator.calculate(
                 MAX_WINDOWS,
                 workspace.getWidth(),
@@ -1844,12 +1872,153 @@ public class MainActivity extends Activity {
                 multiWindowMode,
                 verticalWindowLayout,
                 activeMainSlot,
-                firstMainSlot,
-                secondMainSlot,
+                layoutFirstMainSlot,
+                layoutSecondMainSlot,
                 sideSlotOrder,
                 getVisibleSideWindowCount(),
                 mainOnLeft,
                 dp(3));
+    }
+
+    private ImageView createMainPaneSwapControl() {
+        ImageView control = new ImageView(this);
+        control.setImageResource(R.drawable.main_pane_swap);
+        control.setPadding(
+                dp(MAIN_PANE_SWAP_ICON_HORIZONTAL_PADDING_DP),
+                dp(MAIN_PANE_SWAP_ICON_VERTICAL_PADDING_DP),
+                dp(MAIN_PANE_SWAP_ICON_HORIZONTAL_PADDING_DP),
+                dp(MAIN_PANE_SWAP_ICON_VERTICAL_PADDING_DP));
+        control.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        control.setContentDescription("交换两个主屏幕");
+        control.setClickable(true);
+        control.setFocusable(true);
+        control.setElevation(dp(32));
+        control.setTranslationZ(dp(32));
+
+        GradientDrawable background = new GradientDrawable();
+        background.setShape(GradientDrawable.RECTANGLE);
+        background.setCornerRadius(dp(MAIN_PANE_SWAP_BUTTON_WIDTH_DP / 2f));
+        background.setColor(0xe629332e);
+        background.setStroke(dp(1), 0xb3ffffff);
+        control.setBackground(new RippleDrawable(
+                ColorStateList.valueOf(0x40ffffff), background, null));
+        control.setVisibility(View.GONE);
+        control.setOnClickListener(v -> swapMainPanePositions());
+        return control;
+    }
+
+    private void updateMainPaneSwapControl(Rect[] targetRects) {
+        if (mainPaneSwapControl == null) {
+            return;
+        }
+        boolean visible = dualMainLayout && multiWindowMode
+                && firstMainSlot >= 0 && secondMainSlot >= 0
+                && firstMainSlot < targetRects.length && secondMainSlot < targetRects.length;
+        if (!visible) {
+            removeMainPaneSwapWindow(false);
+            return;
+        }
+
+        Rect firstRect = targetRects[firstMainSlot];
+        Rect secondRect = targetRects[secondMainSlot];
+        Rect leftRect = firstRect.left <= secondRect.left ? firstRect : secondRect;
+        Rect rightRect = leftRect == firstRect ? secondRect : firstRect;
+        int centerX = (leftRect.right + rightRect.left) / 2;
+        int overlapTop = Math.max(leftRect.top, rightRect.top);
+        int overlapBottom = Math.min(leftRect.bottom, rightRect.bottom);
+        int centerY = (overlapTop + overlapBottom) / 2;
+        int buttonWidth = dp(MAIN_PANE_SWAP_BUTTON_WIDTH_DP);
+        int buttonHeight = dp(MAIN_PANE_SWAP_BUTTON_HEIGHT_DP);
+        int[] workspaceLocation = new int[2];
+        workspace.getLocationOnScreen(workspaceLocation);
+        showOrUpdateMainPaneSwapWindow(
+                workspaceLocation[0] + centerX - buttonWidth / 2,
+                workspaceLocation[1] + centerY - buttonHeight / 2,
+                buttonWidth,
+                buttonHeight);
+    }
+
+    private void showOrUpdateMainPaneSwapWindow(
+            int left, int top, int width, int height) {
+        if (activityDestroyed || rootContainer == null || mainPaneSwapControl == null) {
+            return;
+        }
+        View decorView = getWindow().getDecorView();
+        if (!rootContainer.isAttachedToWindow() || decorView.getWindowToken() == null) {
+            rootContainer.post(() -> {
+                if (!activityDestroyed) {
+                    applyWindowLayout(false);
+                }
+            });
+            return;
+        }
+
+        if (mainPaneSwapWindowLayoutParams == null) {
+            mainPaneSwapWindowLayoutParams = new WindowManager.LayoutParams(
+                    width,
+                    height,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_PANEL,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                            | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                            | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    PixelFormat.TRANSLUCENT);
+            mainPaneSwapWindowLayoutParams.gravity = Gravity.TOP | Gravity.START;
+            mainPaneSwapWindowLayoutParams.setTitle("OneStep main pane swap");
+        }
+        mainPaneSwapWindowLayoutParams.token = decorView.getWindowToken();
+        mainPaneSwapWindowLayoutParams.x = left;
+        mainPaneSwapWindowLayoutParams.y = top;
+        mainPaneSwapWindowLayoutParams.width = width;
+        mainPaneSwapWindowLayoutParams.height = height;
+        mainPaneSwapControl.setVisibility(View.VISIBLE);
+
+        try {
+            if (mainPaneSwapWindowAttached) {
+                mainPaneSwapWindowManager.updateViewLayout(
+                        mainPaneSwapControl, mainPaneSwapWindowLayoutParams);
+            } else {
+                mainPaneSwapWindowManager.addView(
+                        mainPaneSwapControl, mainPaneSwapWindowLayoutParams);
+                mainPaneSwapWindowAttached = true;
+            }
+        } catch (WindowManager.BadTokenException | IllegalArgumentException e) {
+            mainPaneSwapWindowAttached = false;
+            mainPaneSwapControl.setVisibility(View.GONE);
+            Log.w(TAG, "Unable to attach main pane swap window: "
+                    + e.getClass().getSimpleName());
+        }
+    }
+
+    private void removeMainPaneSwapWindow(boolean immediate) {
+        if (!mainPaneSwapWindowAttached || mainPaneSwapWindowManager == null
+                || mainPaneSwapControl == null) {
+            return;
+        }
+        try {
+            if (immediate) {
+                mainPaneSwapWindowManager.removeViewImmediate(mainPaneSwapControl);
+            } else {
+                mainPaneSwapWindowManager.removeView(mainPaneSwapControl);
+            }
+        } catch (IllegalArgumentException ignored) {
+        }
+        mainPaneSwapWindowAttached = false;
+        mainPaneSwapControl.setVisibility(View.GONE);
+    }
+
+    private void keepMainPaneSwapControlOnTop() {
+        if (mainPaneSwapWindowAttached && mainPaneSwapControl != null) {
+            mainPaneSwapControl.invalidate();
+        }
+    }
+
+    private void swapMainPanePositions() {
+        if (!dualMainLayout || !multiWindowMode || secondMainSlot < 0
+                || exitOneStepPending || isWindowAnimationRunning()) {
+            return;
+        }
+        mainPanesSwapped = !mainPanesSwapped;
+        applyWindowLayout(true, null, false);
     }
 
     private boolean hasLaidOutWindowFrames() {
@@ -1865,8 +2034,11 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    private void animateWindowFrames(Rect[] targetRects, Runnable onAnimationFinished) {
-        windowAnimationController.animate(targetRects, onAnimationFinished);
+    private void animateWindowFrames(Rect[] targetRects, Runnable onAnimationFinished,
+                                     boolean allowSurfaceLayerAnimation) {
+        windowAnimationController.animate(
+                targetRects, onAnimationFinished,
+                allowSurfaceLayerAnimation && !mainPaneSwapWindowAttached);
     }
 
     private void cancelWindowSurfaceAnimation() {
@@ -1948,6 +2120,7 @@ public class MainActivity extends Activity {
         activeMainView.setTranslationZ(dp(8));
         activeMainView.setZ(dp(16));
         activeMainView.bringToFront();
+        keepMainPaneSwapControlOnTop();
         workspace.invalidate();
     }
 
@@ -2259,6 +2432,7 @@ public class MainActivity extends Activity {
     private void enterOneStepMode(boolean sideFromLeft) {
         suppressEmbeddedStarts = false;
         mainOnLeft = !sideFromLeft;
+        mainPanesSwapped = false;
         updateTopNavigationControls();
         multiWindowMode = false;
         applyWindowLayout(false);
@@ -5070,6 +5244,12 @@ public class MainActivity extends Activity {
             activateMainPane(slot, true);
             return;
         }
+        if (dualMainLayout) {
+            int middleMainSlot = getMiddleMainSlot();
+            if (middleMainSlot < 0 || !activateMainPane(middleMainSlot, false)) {
+                return;
+            }
+        }
         switchMainSlot(slot, true);
     }
 
@@ -5525,11 +5705,17 @@ public class MainActivity extends Activity {
 
     private boolean shouldUseDualMainLayout(Configuration configuration) {
         return configuration != null
-                && configuration.smallestScreenWidthDp >= DUAL_MAIN_MIN_SMALLEST_WIDTH_DP;
+                && WindowLayoutModePolicy.shouldUseDualMain(
+                        configuration.smallestScreenWidthDp,
+                        configuration.screenWidthDp,
+                        configuration.screenHeightDp);
     }
 
     private void applyOneStepRotationPolicy(Configuration configuration) {
-        int requestedOrientation = shouldUseDualMainLayout(configuration)
+        boolean largeScreen = configuration != null
+                && WindowLayoutModePolicy.isLargeScreen(
+                        configuration.smallestScreenWidthDp);
+        int requestedOrientation = largeScreen
                 ? ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
                 : ActivityInfo.SCREEN_ORIENTATION_NOSENSOR;
         if (getRequestedOrientation() != requestedOrientation) {
@@ -5543,6 +5729,7 @@ public class MainActivity extends Activity {
             return false;
         }
         dualMainLayout = shouldUseDualMain;
+        mainPanesSwapped = false;
         if (shouldUseDualMain) {
             firstMainSlot = activeMainSlot;
             secondMainSlot = chooseSecondMainSlot();
@@ -5677,6 +5864,13 @@ public class MainActivity extends Activity {
             return firstMainSlot;
         }
         return -1;
+    }
+
+    private int getMiddleMainSlot() {
+        if (!dualMainLayout || secondMainSlot < 0) {
+            return activeMainSlot;
+        }
+        return mainPanesSwapped ? firstMainSlot : secondMainSlot;
     }
 
     private boolean isMainPaneSlot(int slot) {

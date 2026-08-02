@@ -8,7 +8,6 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.SystemClock;
 import android.util.Log;
-import android.view.AttachedSurfaceControl;
 import android.view.SurfaceControl;
 import android.view.View;
 import android.view.ViewGroup;
@@ -60,6 +59,11 @@ public final class WindowAnimationController {
     }
 
     public void animate(Rect[] targetRects, Runnable onAnimationFinished) {
+        animate(targetRects, onAnimationFinished, true);
+    }
+
+    public void animate(Rect[] targetRects, Runnable onAnimationFinished,
+                        boolean allowSurfaceLayerAnimation) {
         int animationGeneration = ++generation;
         running = true;
         int changingWindowCount = 0;
@@ -75,7 +79,8 @@ public final class WindowAnimationController {
             return;
         }
         callbacks.beginCriticalSection();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (allowSurfaceLayerAnimation
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             List<WindowSurfaceAnimationTarget> surfaceTargets =
                     collectWindowSurfaceAnimationTargets(targetRects, changingWindowCount);
             if (!surfaceTargets.isEmpty()) {
@@ -349,14 +354,9 @@ public final class WindowAnimationController {
         for (WindowSurfaceAnimationTarget target : targets) {
             target.host.resetWindowSurfaceAnimation(transaction);
         }
-        AttachedSurfaceControl rootSurfaceControl = workspace().getRootSurfaceControl();
-        if (rootSurfaceControl != null
-                && rootSurfaceControl.applyTransactionOnDraw(transaction)) {
-            workspace().invalidate();
-            return;
-        }
         transaction.apply();
         transaction.close();
+        workspace().invalidate();
     }
 
     private final class WindowSurfaceAnimationTarget {
