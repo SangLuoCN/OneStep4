@@ -28,4 +28,25 @@ public class VirtualDisplayDensityPolicyTest {
         assertEquals(288, VirtualDisplayDensityPolicy.calculateDensityDpi(
                 600, 1200, 1080, 2160, 320, true));
     }
+
+    @Test
+    public void landscapeTabletExpandsPixelsWithoutChangingDensity() {
+        float scale = VirtualDisplayDensityPolicy.calculateTabletPixelScale(
+                1921, 1128, 300, true);
+
+        assertEquals(2555, Math.round(1921 * scale));
+        assertEquals(1500, Math.round(1128 * scale));
+    }
+
+    @Test
+    public void phoneDoesNotExpandVirtualDisplayPixels() {
+        assertEquals(1f, VirtualDisplayDensityPolicy.calculateTabletPixelScale(
+                1921, 1128, 300, false), 0f);
+    }
+
+    @Test
+    public void roomyTabletDoesNotExpandVirtualDisplayPixels() {
+        assertEquals(1f, VirtualDisplayDensityPolicy.calculateTabletPixelScale(
+                2560, 1600, 300, true), 0f);
+    }
 }

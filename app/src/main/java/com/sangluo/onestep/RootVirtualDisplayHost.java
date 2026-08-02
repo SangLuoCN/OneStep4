@@ -3102,6 +3102,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 virtualHeight,
                 owner.getResources().getDisplayMetrics().densityDpi,
                 useTabletDensity);
+        float tabletPixelScale = VirtualDisplayDensityPolicy.calculateTabletPixelScale(
+                virtualWidth, virtualHeight, densityDpi, useTabletDensity);
+        if (tabletPixelScale > 1f) {
+            virtualWidth = Math.max(1, Math.round(virtualWidth * tabletPixelScale));
+            virtualHeight = Math.max(1, Math.round(virtualHeight * tabletPixelScale));
+        }
         return new VirtualDisplaySpec(virtualWidth, virtualHeight, densityDpi);
     }
 

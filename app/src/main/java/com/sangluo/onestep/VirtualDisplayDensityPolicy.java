@@ -5,6 +5,7 @@ public final class VirtualDisplayDensityPolicy {
     private static final int MIN_DENSITY_DPI = 120;
     private static final int PHONE_LOGICAL_WIDTH_DP = 393;
     private static final int TABLET_MIN_LOGICAL_SHORT_EDGE_DP = 600;
+    private static final int TABLET_TARGET_LOGICAL_SHORT_EDGE_DP = 800;
 
     private VirtualDisplayDensityPolicy() {
     }
@@ -28,5 +29,18 @@ public final class VirtualDisplayDensityPolicy {
                 (int) Math.floor(virtualShortEdge * 160f
                         / TABLET_MIN_LOGICAL_SHORT_EDGE_DP));
         return Math.min(scaledHostDensityDpi, maxTabletDensityDpi);
+    }
+
+    public static float calculateTabletPixelScale(
+            int virtualWidth, int virtualHeight,
+            int densityDpi, boolean useTabletDensity) {
+        if (!useTabletDensity) {
+            return 1f;
+        }
+        int virtualShortEdge = Math.min(virtualWidth, virtualHeight);
+        float logicalShortEdgeDp = virtualShortEdge * 160f
+                / Math.max(MIN_DENSITY_DPI, densityDpi);
+        return Math.max(1f, TABLET_TARGET_LOGICAL_SHORT_EDGE_DP
+                / Math.max(1f, logicalShortEdgeDp));
     }
 }
