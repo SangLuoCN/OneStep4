@@ -12,6 +12,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -141,7 +142,8 @@ public class MainActivity extends Activity {
             "com.sangluo.onestep.extra.DEFAULT_DISPLAY_RELAY_ATTEMPTED";
     private static WeakReference<MainActivity> defaultDisplayInstance =
             new WeakReference<>(null);
-    private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 1;
+    private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 2;
+    private static final int DUAL_MAIN_MIN_SMALLEST_WIDTH_DP = 600;
     private static final int REQUEST_PICK_BACKGROUND = 42;
     private static final int REQUEST_EXPORT_LOG_STORAGE = 43;
     private static final int TOP_MEDIA_AREA_MIN_HEIGHT_DP = 116;
@@ -345,6 +347,13 @@ public class MainActivity extends Activity {
                 @Override public boolean isMainDisplaySlot(int slot) {
                     return MainActivity.this.isMainDisplaySlot(slot);
                 }
+                @Override public boolean isMainPaneSlot(int slot) {
+                    return MainActivity.this.isMainPaneSlot(slot);
+                }
+                @Override public boolean isDualMainLayout() { return dualMainLayout; }
+                @Override public boolean activateMainSlot(int slot) {
+                    return MainActivity.this.activateMainPane(slot, false);
+                }
                 @Override public boolean isActivityDestroyed() { return activityDestroyed; }
                 @Override public boolean isWindowFrameAnimationRunning() {
                     return isWindowAnimationRunning();
@@ -454,6 +463,9 @@ public class MainActivity extends Activity {
     private View leftCornerTriggerPreview;
     private View rightCornerTriggerPreview;
     private volatile int activeMainSlot;
+    private int firstMainSlot;
+    private int secondMainSlot = -1;
+    private boolean dualMainLayout;
     private HostedDisplayRotationController hostedDisplayRotationController;
     private boolean mainOnLeft = true;
     private boolean multiWindowMode;
@@ -543,6 +555,7 @@ public class MainActivity extends Activity {
             redirectHomeToDefaultDisplay();
             return;
         }
+        applyOneStepRotationPolicy(getResources().getConfiguration());
         defaultDisplayInstance = new WeakReference<>(this);
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         Window hostWindow = getWindow();
@@ -631,7 +644,17 @@ public class MainActivity extends Activity {
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
         if (!nonDefaultDisplayHomeRelay) {
+            applyOneStepRotationPolicy(newConfig);
             requestLauncherIconRefresh("configuration changed");
+            boolean mainPaneCountChanged = reconcileMainPaneCount(newConfig);
+            if (workspace != null) {
+                workspace.post(() -> {
+                    applyWindowLayout(false);
+                    if (mainPaneCountChanged) {
+                        configureMainPaneImePolicies();
+                    }
+                });
+            }
         }
     }
 
@@ -1099,6 +1122,14 @@ public class MainActivity extends Activity {
             bringOneStepHomeToFront();
             return;
         }
+        RootVirtualDisplayHost eventHost = findRootVirtualDisplayHost(displayId);
+        int eventSlot = eventHost == null ? activeMainSlot : eventHost.getSlot();
+        if (eventHost != null && isMainPaneSlot(eventSlot)) {
+            rootHost = eventHost;
+            currentMainApp = windowApps[eventSlot];
+        } else {
+            eventSlot = activeMainSlot;
+        }
         if (rootHost == null) {
             return;
         }
@@ -1139,6 +1170,10 @@ public class MainActivity extends Activity {
             return;
         }
         if (hostedTaskRemovalStarted) {
+            if (eventSlot != activeMainSlot) {
+                clearInactiveMainAfterTaskRemoval(eventSlot, currentApp);
+                return;
+            }
             Log.i(TAG, "Take over desktop when hosted task removal starts: slot="
                     + activeMainSlot + ", task=" + taskId
                     + ", app=" + currentApp.packageName);
@@ -1152,6 +1187,21 @@ public class MainActivity extends Activity {
         if (displayId <= Display.DEFAULT_DISPLAY) {
             rootHost.checkHostedTaskAfterSystemTaskChange();
         }
+    }
+
+    private void clearInactiveMainAfterTaskRemoval(int slot, LauncherApp removedApp) {
+        if (!isMainPaneSlot(slot) || slot == activeMainSlot || removedApp == null
+                || windowApps[slot] == null
+                || !removedApp.isSameInstance(windowApps[slot])) {
+            return;
+        }
+        embeddedSyncGenerations[slot]++;
+        windowApps[slot] = null;
+        clearHostedAppRevealState(slot);
+        windowViews[slot].setLiveAppVisible(false);
+        renderWindows();
+        Log.i(TAG, "Cleared inactive main pane after hosted task removal: slot=" + slot
+                + ", app=" + removedApp.packageName);
     }
 
     private void handleHostedHomeRequest(
@@ -1604,6 +1654,24 @@ public class MainActivity extends Activity {
         workspace.setBackgroundColor(Color.TRANSPARENT);
         workspace.setClipChildren(true);
         workspace.setClipToPadding(true);
+        workspace.addOnLayoutChangeListener((view, left, top, right, bottom,
+                                             oldLeft, oldTop, oldRight, oldBottom) -> {
+            int width = right - left;
+            int height = bottom - top;
+            int oldWidth = oldRight - oldLeft;
+            int oldHeight = oldBottom - oldTop;
+            if (activityDestroyed || oldWidth <= 0 || oldHeight <= 0
+                    || width <= 0 || height <= 0
+                    || (width == oldWidth && height == oldHeight)) {
+                return;
+            }
+            view.post(() -> {
+                if (!activityDestroyed && view == workspace
+                        && view.getWidth() == width && view.getHeight() == height) {
+                    applyWindowLayout(false);
+                }
+            });
+        });
         root.addView(workspace, matchFrame());
 
         screenContainerBackground = new View(this);
@@ -1626,6 +1694,9 @@ public class MainActivity extends Activity {
         root.addView(topChromeContainer, topChromeLp);
 
         activeMainSlot = 0;
+        firstMainSlot = activeMainSlot;
+        dualMainLayout = shouldUseDualMainLayout(getResources().getConfiguration());
+        secondMainSlot = dualMainLayout ? 1 : -1;
         multiWindowMode = false;
         initializeSideSlotOrder();
 
@@ -1633,13 +1704,17 @@ public class MainActivity extends Activity {
             final int slot = i;
             windowViews[i] = new OneStepWindowView(
                     this, i == activeMainSlot, makeWindowPlaceholderBorder(), windowViewCallbacks);
+            windowViews[i].setMainWindowMode(isMainPaneSlot(i));
             windowViews[i].setOnClickListener(v -> {
-                if (!isMainDisplaySlot(slot)) {
+                if (isMainPaneSlot(slot)) {
+                    activateMainPane(slot, true);
+                } else {
                     swapWithMain(slot);
                 }
             });
             windowViews[i].setOnLongClickListener(v -> {
-                if (isMainDisplaySlot(slot)) {
+                if (isMainPaneSlot(slot)) {
+                    activateMainPane(slot, true);
                     syncEmbeddedSlot(slot);
                 } else {
                     swapWithMain(slot);
@@ -1657,7 +1732,7 @@ public class MainActivity extends Activity {
     private void initializeSideSlotOrder() {
         sideSlotOrder.clear();
         for (int slot = 0; slot < MAX_WINDOWS; slot++) {
-            if (slot != activeMainSlot) {
+            if (!isMainPaneSlot(slot)) {
                 sideSlotOrder.add(slot);
             }
         }
@@ -1684,17 +1759,18 @@ public class MainActivity extends Activity {
         for (int slot = 0; slot < MAX_WINDOWS; slot++) {
             boolean visible = isWindowSlotEnabled(slot) && !embeddedSlotClosing[slot];
             windowViews[slot].setVisibility(visible ? View.VISIBLE : View.INVISIBLE);
-            windowViews[slot].setMainWindowMode(slot == activeMainSlot);
+            windowViews[slot].setMainWindowMode(isMainPaneSlot(slot));
         }
 
         Runnable layoutFinished = () -> {
             restoreWindowInputRoutingAfterLayout();
-            configureDesktopHomeViewport(windowViews[activeMainSlot]);
+            configureMainDesktopHomeViewports();
             if (onAnimationFinished != null) {
                 onAnimationFinished.run();
             } else {
                 refreshAllEmbeddedSlotLayouts();
             }
+            scheduleEmbeddedSlotRefresh();
         };
 
         if (!animate || !hasLaidOutWindowFrames()) {
@@ -1721,6 +1797,14 @@ public class MainActivity extends Activity {
             return;
         }
         windowView.updateDesktopHomeViewport(viewportWidth, viewportHeight);
+    }
+
+    private void configureMainDesktopHomeViewports() {
+        configureDesktopHomeViewport(windowViews[activeMainSlot]);
+        int otherMainSlot = getOtherMainSlot(activeMainSlot);
+        if (otherMainSlot >= 0) {
+            configureDesktopHomeViewport(windowViews[otherMainSlot]);
+        }
     }
 
     private void ensureWindowChildren() {
@@ -1760,6 +1844,8 @@ public class MainActivity extends Activity {
                 multiWindowMode,
                 verticalWindowLayout,
                 activeMainSlot,
+                firstMainSlot,
+                secondMainSlot,
                 sideSlotOrder,
                 getVisibleSideWindowCount(),
                 mainOnLeft,
@@ -1849,11 +1935,19 @@ public class MainActivity extends Activity {
             sideView.setZ(0f);
             sideView.bringToFront();
         }
-        OneStepWindowView mainView = windowViews[activeMainSlot];
-        mainView.setElevation(dp(8));
-        mainView.setTranslationZ(dp(8));
-        mainView.setZ(dp(16));
-        mainView.bringToFront();
+        int otherMainSlot = getOtherMainSlot(activeMainSlot);
+        if (otherMainSlot >= 0) {
+            OneStepWindowView otherMainView = windowViews[otherMainSlot];
+            otherMainView.setElevation(dp(4));
+            otherMainView.setTranslationZ(dp(4));
+            otherMainView.setZ(dp(8));
+            otherMainView.bringToFront();
+        }
+        OneStepWindowView activeMainView = windowViews[activeMainSlot];
+        activeMainView.setElevation(dp(8));
+        activeMainView.setTranslationZ(dp(8));
+        activeMainView.setZ(dp(16));
+        activeMainView.bringToFront();
         workspace.invalidate();
     }
 
@@ -1862,11 +1956,11 @@ public class MainActivity extends Activity {
     }
 
     private int getEnabledWindowCount() {
-        return 1 + getVisibleSideWindowCount();
+        return (secondMainSlot >= 0 ? 2 : 1) + getVisibleSideWindowCount();
     }
 
     private boolean isWindowSlotEnabled(int slot) {
-        if (slot == activeMainSlot) {
+        if (isMainPaneSlot(slot)) {
             return true;
         }
         int sideIndex = sideSlotOrder.indexOf(slot);
@@ -3301,6 +3395,10 @@ public class MainActivity extends Activity {
         if (isDisplayedMainDesktopSlot(activeMainSlot)) {
             return activeMainSlot;
         }
+        int otherMainSlot = getOtherMainSlot(activeMainSlot);
+        if (otherMainSlot >= 0 && isDisplayedMainDesktopSlot(otherMainSlot)) {
+            return otherMainSlot;
+        }
         for (int slot : sideSlotOrder) {
             if (isWindowSlotEnabled(slot) && isDisplayedMainDesktopSlot(slot)) {
                 return slot;
@@ -4088,11 +4186,28 @@ public class MainActivity extends Activity {
         int emptySideSlot = findEmptySideSlot();
         boolean mainOccupied = windowApps[activeMainSlot] != null;
         int mainDesktopSlot = findDisplayedMainDesktopSlot();
+        if (mainDesktopSlot >= 0 && mainDesktopSlot != activeMainSlot
+                && isMainPaneSlot(mainDesktopSlot)) {
+            activateMainPane(mainDesktopSlot, false);
+            if (isDesktopHomeSlot(mainDesktopSlot)) {
+                replaceDesktopHomeWithApp(app);
+            } else {
+                replaceAppInSlot(mainDesktopSlot, app);
+            }
+            return;
+        }
+        int emptyMainSlot = findEmptyInactiveMainSlot();
         AppLaunchPlacement placement = AppLaunchPlacement.decide(
-                activeMainSlot, mainOccupied, emptySideSlot, mainDesktopSlot);
+                activeMainSlot, mainOccupied, emptyMainSlot, emptySideSlot, mainDesktopSlot);
         switch (placement.action) {
             case START_IN_MAIN:
                 startAppInSlot(placement.targetSlot, app);
+                break;
+            case START_IN_EMPTY_MAIN:
+                if (activateMainPane(placement.targetSlot, false)) {
+                    startAppInSlot(placement.targetSlot, app);
+                    scheduleHostedDisplayFocus("app started in empty main pane");
+                }
                 break;
             case START_IN_SIDE_AND_PROMOTE:
                 stageAppForMainPromotion(placement.targetSlot, app);
@@ -4568,8 +4683,7 @@ public class MainActivity extends Activity {
             return;
         }
         for (int slot = 0; slot < MAX_WINDOWS; slot++) {
-            if (windowApps[slot] == null || windowViews[slot] == null
-                    || embeddedSlotClosing[slot]) {
+            if (windowViews[slot] == null || embeddedSlotClosing[slot]) {
                 continue;
             }
             EmbeddedAppHost host = embeddedHosts[slot];
@@ -4952,11 +5066,15 @@ public class MainActivity extends Activity {
                 || embeddedSlotClosing[slot]) {
             return;
         }
+        if (isMainPaneSlot(slot)) {
+            activateMainPane(slot, true);
+            return;
+        }
         switchMainSlot(slot, true);
     }
 
     private void dismissSideWindow(int slot) {
-        if (slot < 0 || slot >= MAX_WINDOWS || slot == activeMainSlot
+        if (slot < 0 || slot >= MAX_WINDOWS || isMainPaneSlot(slot)
                 || (windowApps[slot] == null && !isInternalSettingsSlot(slot)
                 && !isDesktopHomeSlot(slot))
                 || embeddedSlotClosing[slot]) {
@@ -5010,7 +5128,7 @@ public class MainActivity extends Activity {
             animator.translationX(direction * (windowView.getWidth() + dp(24)));
         }
         animator.withEndAction(() -> {
-            if (activityDestroyed || slot == activeMainSlot || !isInternalSettingsSlot(slot)) {
+            if (activityDestroyed || isMainPaneSlot(slot) || !isInternalSettingsSlot(slot)) {
                 return;
             }
             hideInternalSettingsPage();
@@ -5037,7 +5155,7 @@ public class MainActivity extends Activity {
             animator.translationX(direction * (windowView.getWidth() + dp(24)));
         }
         animator.withEndAction(() -> {
-            if (activityDestroyed || slot == activeMainSlot || !isDesktopHomeSlot(slot)) {
+            if (activityDestroyed || isMainPaneSlot(slot) || !isDesktopHomeSlot(slot)) {
                 return;
             }
             windowView.hideDesktopHome();
@@ -5089,7 +5207,7 @@ public class MainActivity extends Activity {
         mainHandler.post(() -> {
             if (activityDestroyed || slot < 0 || slot >= MAX_WINDOWS
                     || !embeddedSlotClosing[slot]
-                    || slot == activeMainSlot || embeddedHosts[slot] != dismissedHost
+                    || isMainPaneSlot(slot) || embeddedHosts[slot] != dismissedHost
                     || windowApps[slot] != dismissedApp) {
                 return;
             }
@@ -5138,6 +5256,11 @@ public class MainActivity extends Activity {
     }
 
     private void switchMainSlot(int newMainSlot, boolean animate) {
+        if (newMainSlot >= 0 && newMainSlot < MAX_WINDOWS
+                && newMainSlot != activeMainSlot && isMainPaneSlot(newMainSlot)) {
+            activateMainPane(newMainSlot, true);
+            return;
+        }
         if (newMainSlot < 0 || newMainSlot >= MAX_WINDOWS
                 || newMainSlot == activeMainSlot || embeddedSlotClosing[newMainSlot]
                 || isWindowAnimationRunning() || mainSlotSwitchPendingSlot >= 0
@@ -5342,6 +5465,13 @@ public class MainActivity extends Activity {
             return false;
         }
         sideSlotOrder.set(sideIndex, oldMainSlot);
+        if (oldMainSlot == firstMainSlot) {
+            firstMainSlot = newMainSlot;
+        } else if (oldMainSlot == secondMainSlot) {
+            secondMainSlot = newMainSlot;
+        } else {
+            return false;
+        }
         activeMainSlot = newMainSlot;
         EmbeddedAppHost oldHost = embeddedHosts[oldMainSlot];
         if (oldHost instanceof RootVirtualDisplayHost) {
@@ -5351,7 +5481,9 @@ public class MainActivity extends Activity {
         if (newHost instanceof RootVirtualDisplayHost) {
             ((RootVirtualDisplayHost) newHost).syncLaunchRoutingSource();
         }
-        mainOnLeft = !mainOnLeft;
+        if (!dualMainLayout) {
+            mainOnLeft = !mainOnLeft;
+        }
         updateTopNavigationControls();
         applyWindowLayout(animate, () -> {
             startPendingMainAppAfterPromotion(newMainSlot);
@@ -5389,6 +5521,166 @@ public class MainActivity extends Activity {
         if (host != null) {
             host.refreshContainerSize();
         }
+    }
+
+    private boolean shouldUseDualMainLayout(Configuration configuration) {
+        return configuration != null
+                && configuration.smallestScreenWidthDp >= DUAL_MAIN_MIN_SMALLEST_WIDTH_DP;
+    }
+
+    private void applyOneStepRotationPolicy(Configuration configuration) {
+        int requestedOrientation = shouldUseDualMainLayout(configuration)
+                ? ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+                : ActivityInfo.SCREEN_ORIENTATION_NOSENSOR;
+        if (getRequestedOrientation() != requestedOrientation) {
+            setRequestedOrientation(requestedOrientation);
+        }
+    }
+
+    private boolean reconcileMainPaneCount(Configuration configuration) {
+        boolean shouldUseDualMain = shouldUseDualMainLayout(configuration);
+        if (shouldUseDualMain == dualMainLayout) {
+            return false;
+        }
+        dualMainLayout = shouldUseDualMain;
+        if (shouldUseDualMain) {
+            firstMainSlot = activeMainSlot;
+            secondMainSlot = chooseSecondMainSlot();
+            sideSlotOrder.remove(Integer.valueOf(secondMainSlot));
+        } else {
+            int demotedMainSlot = activeMainSlot == firstMainSlot
+                    ? secondMainSlot : firstMainSlot;
+            firstMainSlot = activeMainSlot;
+            secondMainSlot = -1;
+            if (demotedMainSlot >= 0) {
+                sideSlotOrder.remove(Integer.valueOf(demotedMainSlot));
+                sideSlotOrder.add(0, demotedMainSlot);
+            }
+        }
+        normalizeSideSlotOrder();
+        for (int slot = 0; slot < windowViews.length; slot++) {
+            if (windowViews[slot] != null) {
+                windowViews[slot].setMainWindowMode(isMainPaneSlot(slot));
+            }
+        }
+        scheduleSideInputProtectionSync();
+        return true;
+    }
+
+    private int chooseSecondMainSlot() {
+        int visibleSideCount = Math.min(sideWindowCount, sideSlotOrder.size());
+        for (int index = 0; index < visibleSideCount; index++) {
+            int slot = sideSlotOrder.get(index);
+            if (hasWindowContent(slot)) {
+                return slot;
+            }
+        }
+        for (int slot : sideSlotOrder) {
+            if (hasWindowContent(slot)) {
+                return slot;
+            }
+        }
+        return sideSlotOrder.isEmpty() ? -1 : sideSlotOrder.get(0);
+    }
+
+    private boolean hasWindowContent(int slot) {
+        return slot >= 0 && slot < MAX_WINDOWS
+                && (windowApps[slot] != null || isInternalSettingsSlot(slot)
+                || isDesktopHomeSlot(slot) || isPendingMainAppStartSlot(slot)
+                || isPendingInternalSettingsSlot(slot) || isPendingDesktopHomeSlot(slot));
+    }
+
+    private void normalizeSideSlotOrder() {
+        LinkedHashSet<Integer> normalized = new LinkedHashSet<>();
+        for (int slot : sideSlotOrder) {
+            if (slot >= 0 && slot < MAX_WINDOWS && !isMainPaneSlot(slot)) {
+                normalized.add(slot);
+            }
+        }
+        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
+            if (!isMainPaneSlot(slot)) {
+                normalized.add(slot);
+            }
+        }
+        sideSlotOrder.clear();
+        sideSlotOrder.addAll(normalized);
+    }
+
+    private void configureMainPaneImePolicies() {
+        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
+            if (!isMainPaneSlot(slot) || windowApps[slot] == null
+                    || !(embeddedHosts[slot] instanceof RootVirtualDisplayHost)) {
+                continue;
+            }
+            ((RootVirtualDisplayHost) embeddedHosts[slot]).checkDisplayImeLocalPolicy(
+                    "slot assigned to large-screen main pane", () -> { }, () -> { });
+        }
+    }
+
+    private boolean activateMainPane(int slot, boolean requestHostedFocus) {
+        if (activityDestroyed || !isMainPaneSlot(slot)) {
+            return false;
+        }
+        if (slot == activeMainSlot) {
+            if (requestHostedFocus) {
+                scheduleHostedDisplayFocus("active main pane selected");
+            }
+            return true;
+        }
+        if (isWindowAnimationRunning() || mainSlotSwitchPendingSlot >= 0
+                || mainContentReplacementPendingSlot >= 0) {
+            return false;
+        }
+        int oldMainSlot = activeMainSlot;
+        EmbeddedAppHost oldHost = embeddedHosts[oldMainSlot];
+        if (oldHost instanceof RootVirtualDisplayHost) {
+            ((RootVirtualDisplayHost) oldHost).depriveHostedInputFocus();
+        }
+        activeMainSlot = slot;
+        EmbeddedAppHost newHost = embeddedHosts[slot];
+        if (newHost instanceof RootVirtualDisplayHost) {
+            ((RootVirtualDisplayHost) newHost).restoreHostedInputFocus();
+        }
+        syncLaunchRoutingSource(oldMainSlot);
+        syncLaunchRoutingSource(slot);
+        if (workspace != null) {
+            applyWindowZOrder();
+        }
+        updateTopNavigationControls();
+        scheduleSideInputProtectionSync();
+        LauncherApp activeApp = windowApps[slot];
+        if (activeApp != null && routedLaunchIntents.containsKey(activeApp.packageName)) {
+            syncEmbeddedSlot(slot);
+        }
+        if (requestHostedFocus) {
+            scheduleHostedDisplayFocus("main pane selected");
+        }
+        refreshAllHostedSensorLandscapeRotations();
+        return true;
+    }
+
+    private void syncLaunchRoutingSource(int slot) {
+        if (slot >= 0 && slot < embeddedHosts.length
+                && embeddedHosts[slot] instanceof RootVirtualDisplayHost) {
+            ((RootVirtualDisplayHost) embeddedHosts[slot]).syncLaunchRoutingSource();
+        }
+    }
+
+    private int getOtherMainSlot(int slot) {
+        if (secondMainSlot < 0) {
+            return -1;
+        }
+        if (slot == firstMainSlot) {
+            return secondMainSlot;
+        }
+        if (slot == secondMainSlot) {
+            return firstMainSlot;
+        }
+        return -1;
+    }
+
+    private boolean isMainPaneSlot(int slot) {
+        return slot >= 0 && (slot == firstMainSlot || slot == secondMainSlot);
     }
 
     private boolean isMainDisplaySlot(int slot) {
@@ -5749,7 +6041,7 @@ public class MainActivity extends Activity {
     private boolean shouldShieldSideInput(int slot) {
         return activityResumed && !activityDestroyed
                 && slot >= 0 && slot < MAX_WINDOWS
-                && slot != activeMainSlot
+                && !isMainPaneSlot(slot)
                 && isWindowSlotEnabled(slot)
                 && !embeddedSlotClosing[slot]
                 && (windowApps[slot] != null
@@ -5827,6 +6119,15 @@ public class MainActivity extends Activity {
             }
         }
         return -1;
+    }
+
+    private int findEmptyInactiveMainSlot() {
+        int otherMainSlot = getOtherMainSlot(activeMainSlot);
+        if (otherMainSlot < 0 || embeddedSlotClosing[otherMainSlot]
+                || hasWindowContent(otherMainSlot)) {
+            return -1;
+        }
+        return otherMainSlot;
     }
 
     private FrameLayout.LayoutParams matchFrame() {

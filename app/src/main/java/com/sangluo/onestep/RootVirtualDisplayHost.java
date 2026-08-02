@@ -179,6 +179,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         int embeddedStartEpoch();
         boolean shouldRunEmbeddedStart(int startEpoch);
         boolean isMainDisplaySlot(int slot);
+        boolean isMainPaneSlot(int slot);
+        boolean isDualMainLayout();
+        boolean activateMainSlot(int slot);
         boolean isActivityDestroyed();
         boolean isWindowFrameAnimationRunning();
         boolean isMultiWindowMode();
@@ -215,7 +218,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int LONG_PRESS_SWAP_MS = 450;
     private static final int DEFAULT_DISPLAY_ID = 0;
     private static final int PHONE_LOGICAL_WIDTH_DP = 393;
-    private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 1;
+    private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 2;
     private static final int WINDOW_SURFACE_RESTING_LAYER_BASE = -10_000;
     private static final int ROOT_INPUT_BRIDGE_CONNECT_LOG_THROTTLE_MS = 2000;
     private static final int ROOT_INPUT_BRIDGE_START_THROTTLE_MS = 800;
@@ -229,6 +232,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX = 1080;
     private static final int VIRTUAL_DISPLAY_MIN_AREA_PX =
             VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX * VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX;
+    private static final float VIRTUAL_DISPLAY_ASPECT_RATIO_TOLERANCE = 0.005f;
     private static final int VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH_HIDDEN = 1 << 6;
     private static final int VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN = 1 << 7;
     private static final int DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN = 1 << 14;
@@ -300,6 +304,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private int displayWidth;
     private int displayHeight;
     private int displayDensityDpi;
+    private boolean displayUsesDualMainLayout;
     private int lastViewWidth;
     private int lastViewHeight;
     private float touchDownX;
@@ -627,7 +632,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 keepVisibleDuringValidation)) {
             beginHostedSurfaceReveal(app);
         }
-        if (!reusingHostedApp && isMainDisplaySlot(slot)) {
+        if (!reusingHostedApp && callbacks.isMainPaneSlot(slot)) {
             ensureDisplayImeLocalPolicyAsync("main display app launch " + app.packageName);
         }
         return continueHostedAppStart(app, launcherIntent, routedLaunchIntent,
@@ -1057,10 +1062,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (callbacks.isWindowFrameAnimationRunning()) {
             return;
         }
-        if (viewWidth == lastViewWidth && viewHeight == lastViewHeight) {
-            return;
-        }
-        keepVirtualDisplaySurfaceSize(surfaceView.getHolder(), viewWidth, viewHeight);
+        refreshVirtualDisplaySize(surfaceView.getHolder(), viewWidth, viewHeight);
     }
 
     @Override
@@ -1517,7 +1519,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 return;
             }
             if (viewWidth != lastViewWidth || viewHeight != lastViewHeight) {
-                keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
+                refreshVirtualDisplaySize(holder, viewWidth, viewHeight);
             }
         }
         if (appToStart != null && displayId >= 0) {
@@ -1571,7 +1573,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 touchDownTime = event.getEventTime();
                 touchDownWallTime = toWallTimeMillis(touchDownTime);
                 touchMoved = false;
-                touchStartedOnMain = isMainDisplaySlot(slot);
+                touchStartedOnMain = callbacks.isMainPaneSlot(slot)
+                        && callbacks.activateMainSlot(slot);
                 touchReservedForSystemNavigation = false;
                 touchSequenceSuppressed = false;
                 touchFocusRequestGeneration = 0;
@@ -2934,6 +2937,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         displayWidth = spec.width;
         displayHeight = spec.height;
         displayDensityDpi = spec.densityDpi;
+        displayUsesDualMainLayout = callbacks.isDualMainLayout();
         displayId = hostedDisplay.getDisplayId();
         surfaceDetached = false;
         unavailableReason = "";
@@ -2981,7 +2985,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 ? "" : ", homeSupportFallback=" + homeSupportFailure));
         configureNativeDisplayOrientationAsync(displayId, "initialize virtual display");
         ensureRootInputBridgeStarted();
-        if (isMainDisplaySlot(slot)) {
+        if (callbacks.isMainPaneSlot(slot)) {
             ensureDisplayImeLocalPolicyAsync("initialize virtual display");
         }
     }
@@ -3010,12 +3014,45 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 + ", exitCode=" + result.exitCode);
     }
 
-    private void keepVirtualDisplaySurfaceSize(SurfaceHolder holder,
-                                               int viewWidth, int viewHeight) {
+    private void refreshVirtualDisplaySize(SurfaceHolder holder,
+                                           int viewWidth, int viewHeight) {
         if (!hasVirtualDisplay() || displayId < 0) {
             createVirtualDisplay(holder, viewWidth, viewHeight);
             return;
         }
+        boolean targetDualMainLayout = callbacks.isDualMainLayout();
+        boolean leavingDualMainLayout = displayUsesDualMainLayout
+                && !targetDualMainLayout;
+        if (!targetDualMainLayout && !leavingDualMainLayout) {
+            keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
+            return;
+        }
+        Rect layoutReferenceRect = getReferenceRenderRect();
+        if (!hasMatchingAspectRatio(viewWidth, viewHeight,
+                layoutReferenceRect.width(), layoutReferenceRect.height())) {
+            keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
+            return;
+        }
+        VirtualDisplaySpec targetSpec = leavingDualMainLayout
+                ? makeWorkspaceVirtualDisplaySpec() : makeTargetVirtualDisplaySpec();
+        if (!hasMatchingAspectRatio(displayWidth, displayHeight,
+                targetSpec.width, targetSpec.height)
+                && resizeVirtualDisplay(targetSpec)) {
+            displayUsesDualMainLayout = targetDualMainLayout;
+            holder.setFixedSize(displayWidth, displayHeight);
+            lastViewWidth = viewWidth;
+            lastViewHeight = viewHeight;
+            return;
+        }
+        if (hasMatchingAspectRatio(displayWidth, displayHeight,
+                targetSpec.width, targetSpec.height)) {
+            displayUsesDualMainLayout = targetDualMainLayout;
+        }
+        keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
+    }
+
+    private void keepVirtualDisplaySurfaceSize(SurfaceHolder holder,
+                                               int viewWidth, int viewHeight) {
         Rect surfaceFrame = holder.getSurfaceFrame();
         if (surfaceFrame == null
                 || surfaceFrame.width() != displayWidth
@@ -3027,12 +3064,26 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private VirtualDisplaySpec makeVirtualDisplaySpec() {
-        // A display resize is an app configuration change. Keep the creation spec so video
-        // surfaces survive main/side/fullscreen container transitions.
         if (displayWidth > 0 && displayHeight > 0 && displayDensityDpi > 0) {
             return new VirtualDisplaySpec(displayWidth, displayHeight, displayDensityDpi);
         }
-        Rect referenceRect = getReferenceRenderRect();
+        return makeTargetVirtualDisplaySpec();
+    }
+
+    private VirtualDisplaySpec makeTargetVirtualDisplaySpec() {
+        return makeVirtualDisplaySpecForRect(getReferenceRenderRect());
+    }
+
+    private VirtualDisplaySpec makeWorkspaceVirtualDisplaySpec() {
+        View workspace = callbacks.workspace();
+        if (workspace == null || workspace.getWidth() <= 0 || workspace.getHeight() <= 0) {
+            return makeTargetVirtualDisplaySpec();
+        }
+        return makeVirtualDisplaySpecForRect(
+                new Rect(0, 0, workspace.getWidth(), workspace.getHeight()));
+    }
+
+    private VirtualDisplaySpec makeVirtualDisplaySpecForRect(Rect referenceRect) {
         // Every slot represents the same phone screen. Deriving the mode from each slot's
         // rounded view size made main/side swaps oscillate by a few pixels and relaunch apps.
         int virtualWidth = Math.max(1, referenceRect.width());
@@ -3045,6 +3096,57 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         int densityDpi = Math.max(120,
                 Math.round(virtualWidth * 160f / PHONE_LOGICAL_WIDTH_DP));
         return new VirtualDisplaySpec(virtualWidth, virtualHeight, densityDpi);
+    }
+
+    private boolean resizeVirtualDisplay(VirtualDisplaySpec spec) {
+        if (spec == null || !hasVirtualDisplay() || displayId <= DEFAULT_DISPLAY_ID) {
+            return false;
+        }
+        int oldWidth = displayWidth;
+        int oldHeight = displayHeight;
+        boolean resized;
+        if (rootManagedVirtualDisplay) {
+            resized = rootVirtualDisplayBridgeClient.resize(
+                    getRootInputBridgeToken(), slot,
+                    spec.width, spec.height, spec.densityDpi);
+        } else {
+            try {
+                virtualDisplay.resize(spec.width, spec.height, spec.densityDpi);
+                resized = true;
+            } catch (RuntimeException e) {
+                resized = false;
+                Log.w(TAG, "Virtual display resize failed for slot " + slot
+                        + ": " + e.getClass().getSimpleName());
+            }
+        }
+        if (!resized) {
+            Log.w(TAG, "Virtual display kept old aspect after resize rejection: slot=" + slot
+                    + ", display=" + displayId
+                    + ", current=" + oldWidth + "x" + oldHeight
+                    + ", requested=" + spec.width + "x" + spec.height);
+            return false;
+        }
+        displayWidth = spec.width;
+        displayHeight = spec.height;
+        displayDensityDpi = spec.densityDpi;
+        Log.i(TAG, "Virtual display resized to match container aspect: slot=" + slot
+                + ", display=" + displayId
+                + ", old=" + oldWidth + "x" + oldHeight
+                + ", new=" + displayWidth + "x" + displayHeight
+                + ", densityDpi=" + displayDensityDpi);
+        return true;
+    }
+
+    private static boolean hasMatchingAspectRatio(int firstWidth, int firstHeight,
+                                                  int secondWidth, int secondHeight) {
+        if (firstWidth <= 0 || firstHeight <= 0 || secondWidth <= 0 || secondHeight <= 0) {
+            return false;
+        }
+        float firstAspect = firstWidth / (float) firstHeight;
+        float secondAspect = secondWidth / (float) secondHeight;
+        return Math.abs(firstAspect - secondAspect)
+                / Math.max(0.0001f, secondAspect)
+                <= VIRTUAL_DISPLAY_ASPECT_RATIO_TOLERANCE;
     }
 
     private boolean ensureVirtualDisplaySurfaceReady(SurfaceHolder holder,
@@ -3076,8 +3178,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return new Rect(0, 0, width, height);
         }
         int activeMainSlot = callbacks.activeMainSlot();
-        if (!callbacks.isMultiWindowMode()
-                || activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS) {
+        if (activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS) {
             return new Rect(0, 0, workspace.getWidth(), workspace.getHeight());
         }
         Rect[] rects = callbacks.calculateWindowRects();
@@ -3159,6 +3260,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         displayWidth = 0;
         displayHeight = 0;
         displayDensityDpi = 0;
+        displayUsesDualMainLayout = false;
         lastViewWidth = 0;
         lastViewHeight = 0;
         surfaceDetached = false;

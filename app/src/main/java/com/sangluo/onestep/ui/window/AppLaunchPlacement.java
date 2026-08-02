@@ -4,6 +4,7 @@ package com.sangluo.onestep.ui.window;
 public final class AppLaunchPlacement {
     public enum Action {
         START_IN_MAIN,
+        START_IN_EMPTY_MAIN,
         START_IN_SIDE_AND_PROMOTE,
         REPLACE_SIDE_AND_PROMOTE,
         REPLACE_MAIN
@@ -24,6 +25,12 @@ public final class AppLaunchPlacement {
 
     public static AppLaunchPlacement decide(int activeMainSlot, boolean mainOccupied,
                                             int emptySideSlot, int mainDesktopSlot) {
+        return decide(activeMainSlot, mainOccupied, -1, emptySideSlot, mainDesktopSlot);
+    }
+
+    public static AppLaunchPlacement decide(int activeMainSlot, boolean mainOccupied,
+                                            int emptyMainSlot, int emptySideSlot,
+                                            int mainDesktopSlot) {
         if (mainDesktopSlot >= 0) {
             return new AppLaunchPlacement(
                     mainDesktopSlot == activeMainSlot
@@ -32,6 +39,9 @@ public final class AppLaunchPlacement {
         }
         if (!mainOccupied) {
             return new AppLaunchPlacement(Action.START_IN_MAIN, activeMainSlot);
+        }
+        if (emptyMainSlot >= 0) {
+            return new AppLaunchPlacement(Action.START_IN_EMPTY_MAIN, emptyMainSlot);
         }
         if (emptySideSlot >= 0) {
             return new AppLaunchPlacement(

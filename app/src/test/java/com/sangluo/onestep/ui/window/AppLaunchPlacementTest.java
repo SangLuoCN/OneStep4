@@ -22,6 +22,14 @@ public class AppLaunchPlacementTest {
     }
 
     @Test
+    public void emptySecondMainReceivesNewAppBeforeSidePromotion() {
+        AppLaunchPlacement placement = AppLaunchPlacement.decide(0, true, 1, 3, -1);
+
+        assertEquals(AppLaunchPlacement.Action.START_IN_EMPTY_MAIN, placement.action);
+        assertEquals(1, placement.targetSlot);
+    }
+
+    @Test
     public void fullLayoutReplacesCurrentMain() {
         AppLaunchPlacement placement = AppLaunchPlacement.decide(1, true, -1);
 

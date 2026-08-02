@@ -42,7 +42,7 @@ public final class WindowAnimationController {
     }
 
     private static final String TAG = "OneStep40";
-    private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 1;
+    private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 2;
     private static final int WINDOW_FRAME_SWITCH_ANIMATION_MS = 200;
     private static final int WINDOW_SURFACE_ANIMATION_LAYER_BASE = 10_000;
     private static final long POST_ANIMATION_ROLE_REFRESH_DELAY_MS = 48L;
