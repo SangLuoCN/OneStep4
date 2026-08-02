@@ -38,6 +38,42 @@ public class AppLaunchPlacementTest {
     }
 
     @Test
+    public void occupiedEdgeMainUsesEmptyMiddleMainBeforeSideSlot() {
+        AppLaunchPlacement placement = AppLaunchPlacement.decide(
+                0, true, 1, 3, -1, 1);
+
+        assertEquals(AppLaunchPlacement.Action.START_IN_EMPTY_MAIN, placement.action);
+        assertEquals(1, placement.targetSlot);
+    }
+
+    @Test
+    public void activeEmptyMiddleMainReceivesNewAppDirectly() {
+        AppLaunchPlacement placement = AppLaunchPlacement.decide(
+                1, false, -1, 3, -1, 1);
+
+        assertEquals(AppLaunchPlacement.Action.START_IN_MAIN, placement.action);
+        assertEquals(1, placement.targetSlot);
+    }
+
+    @Test
+    public void occupiedMiddleMainMovesToEmptySideBeforeShowingNewApp() {
+        AppLaunchPlacement placement = AppLaunchPlacement.decide(
+                0, true, -1, 3, -1, 1);
+
+        assertEquals(AppLaunchPlacement.Action.START_IN_SIDE_AND_PROMOTE, placement.action);
+        assertEquals(3, placement.targetSlot);
+    }
+
+    @Test
+    public void occupiedMiddleMainIsReplacedOnlyWhenSideScreensAreFull() {
+        AppLaunchPlacement placement = AppLaunchPlacement.decide(
+                0, true, -1, -1, -1, 1);
+
+        assertEquals(AppLaunchPlacement.Action.REPLACE_MAIN, placement.action);
+        assertEquals(1, placement.targetSlot);
+    }
+
+    @Test
     public void displayedMainDesktopReplacesEmptySideSlotPriority() {
         AppLaunchPlacement placement = AppLaunchPlacement.decide(0, true, 3, 2);
 

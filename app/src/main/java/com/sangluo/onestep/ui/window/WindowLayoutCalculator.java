@@ -6,8 +6,6 @@ import java.util.List;
 
 /** Calculates main and side-window frames without owning or mutating any views. */
 public final class WindowLayoutCalculator {
-    private static final float PHONE_VIEWPORT_ASPECT_RATIO = 393f / 850f;
-
     private WindowLayoutCalculator() {
     }
 
@@ -61,8 +59,7 @@ public final class WindowLayoutCalculator {
                                           int visibleSideCount, boolean mainOnLeft,
                                           int hiddenMargin) {
         if (!multiWindowMode) {
-            rects[activeMainSlot] = fitAspectRect(
-                    0, 0, workspaceWidth, workspaceHeight, PHONE_VIEWPORT_ASPECT_RATIO);
+            rects[activeMainSlot] = new Rect(0, 0, workspaceWidth, workspaceHeight);
             int inactiveMainSlot = activeMainSlot == firstMainSlot
                     ? secondMainSlot : firstMainSlot;
             rects[inactiveMainSlot] = hiddenRect(
@@ -147,19 +144,6 @@ public final class WindowLayoutCalculator {
         int baseSize = totalSize / count;
         int remainder = totalSize % count;
         return Math.max(1, baseSize + (index < remainder ? 1 : 0));
-    }
-
-    private static Rect fitAspectRect(int left, int top, int width, int height, float aspect) {
-        int fittedWidth = Math.max(1, Math.min(width, Math.round(height * aspect)));
-        int fittedHeight = Math.max(1, Math.min(height, Math.round(fittedWidth / aspect)));
-        if (fittedHeight > height) {
-            fittedHeight = height;
-            fittedWidth = Math.max(1, Math.round(fittedHeight * aspect));
-        }
-        int fittedLeft = left + Math.max(0, (width - fittedWidth) / 2);
-        int fittedTop = top + Math.max(0, (height - fittedHeight) / 2);
-        return new Rect(fittedLeft, fittedTop,
-                fittedLeft + fittedWidth, fittedTop + fittedHeight);
     }
 
     private static void calculateHorizontal(Rect[] rects, int workspaceWidth,

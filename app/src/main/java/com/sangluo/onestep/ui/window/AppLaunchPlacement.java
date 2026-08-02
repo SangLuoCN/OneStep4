@@ -31,6 +31,26 @@ public final class AppLaunchPlacement {
     public static AppLaunchPlacement decide(int activeMainSlot, boolean mainOccupied,
                                             int emptyMainSlot, int emptySideSlot,
                                             int mainDesktopSlot) {
+        return decide(activeMainSlot, mainOccupied, emptyMainSlot, emptySideSlot,
+                mainDesktopSlot, -1);
+    }
+
+    public static AppLaunchPlacement decide(int activeMainSlot, boolean mainOccupied,
+                                            int emptyMainSlot, int emptySideSlot,
+                                            int mainDesktopSlot, int preferredMainSlot) {
+        if (preferredMainSlot >= 0) {
+            if (preferredMainSlot == activeMainSlot && !mainOccupied) {
+                return new AppLaunchPlacement(Action.START_IN_MAIN, preferredMainSlot);
+            }
+            if (preferredMainSlot != emptyMainSlot && emptySideSlot >= 0) {
+                return new AppLaunchPlacement(
+                        Action.START_IN_SIDE_AND_PROMOTE, emptySideSlot);
+            }
+            return new AppLaunchPlacement(
+                    preferredMainSlot == emptyMainSlot
+                            ? Action.START_IN_EMPTY_MAIN : Action.REPLACE_MAIN,
+                    preferredMainSlot);
+        }
         if (mainDesktopSlot >= 0) {
             return new AppLaunchPlacement(
                     mainDesktopSlot == activeMainSlot

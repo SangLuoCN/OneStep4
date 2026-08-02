@@ -6,9 +6,21 @@ import org.junit.Test;
 
 public class VirtualDisplayDensityPolicyTest {
     @Test
-    public void phoneKeepsCompactLogicalWidth() {
-        assertEquals(440, VirtualDisplayDensityPolicy.calculateDensityDpi(
-                1080, 2336, 1080, 2336, 440, false));
+    public void phoneFollowsHostDensityInsteadOfFixedLogicalWidth() {
+        assertEquals(480, VirtualDisplayDensityPolicy.calculateDensityDpi(
+                1080, 2336, 1080, 2336, 480, false));
+    }
+
+    @Test
+    public void foldPaneDensityTracksVirtualPixelUpscaling() {
+        assertEquals(475, VirtualDisplayDensityPolicy.calculateDensityDpi(
+                886, 1577, 1080, 1922, 390, false));
+    }
+
+    @Test
+    public void densityNeverDropsBelowThreeHundredDpi() {
+        assertEquals(300, VirtualDisplayDensityPolicy.calculateDensityDpi(
+                600, 1200, 600, 1200, 160, false));
     }
 
     @Test
@@ -25,7 +37,7 @@ public class VirtualDisplayDensityPolicyTest {
 
     @Test
     public void qualityUpscalingAlsoScalesTabletDensity() {
-        assertEquals(288, VirtualDisplayDensityPolicy.calculateDensityDpi(
+        assertEquals(300, VirtualDisplayDensityPolicy.calculateDensityDpi(
                 600, 1200, 1080, 2160, 320, true));
     }
 
