@@ -17,6 +17,7 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.graphics.PixelFormat;
@@ -58,6 +59,7 @@ import android.view.ViewOutlineProvider;
 import android.view.ViewPropertyAnimator;
 import android.view.ViewParent;
 import android.view.Window;
+import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -86,6 +88,7 @@ import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.embedding.HostedInputFocusPolicy;
 import com.sangluo.onestep.feature.embedding.HostedSurfaceReusePolicy;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
+import com.sangluo.onestep.feature.embedding.HostedTouchFocusPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
 import com.sangluo.onestep.feature.media.MediaSessionCoordinator;
@@ -183,6 +186,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         View workspace();
         int mainSlotSwitchPendingSlot();
         int activeMainSlot();
+        void cancelDefaultNavigationFocusRestore();
         boolean claimStaleSensorUidOverrideRecovery();
         int latestPhysicalLandscapeRotation();
         boolean hasGrantedSystemEmbeddingPermission();
@@ -272,6 +276,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private final Object inputDispatchLock = new Object();
     private final ArrayDeque<PendingMotionEvent> pendingMotionEvents = new ArrayDeque<>();
     private final Matrix touchCoordinateTransform = new Matrix();
+    private final int[] rootViewLocationOnScreen = new int[2];
     private final RootInputBridgeClient rootInputBridgeClient =
             new RootInputBridgeClient();
     private final RootVirtualDisplayBridgeClient rootVirtualDisplayBridgeClient =
@@ -311,7 +316,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private long activeTouchTraceId;
     private boolean touchMoved;
     private boolean touchStartedOnMain;
+    private boolean touchReservedForSystemNavigation;
     private boolean touchSequenceSuppressed;
+    private int touchFocusRequestGeneration;
     private boolean skipActivityOptionsLaunch;
     private Boolean suCommandAvailable;
     private String launchRequestedPackage = "";
@@ -1610,12 +1617,15 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         final int actionMasked;
         final MotionEvent event;
         final long traceId;
+        final int focusRequestGeneration;
 
-        PendingMotionEvent(int displayId, MotionEvent event, long traceId) {
+        PendingMotionEvent(int displayId, MotionEvent event, long traceId,
+                           int focusRequestGeneration) {
             this.displayId = displayId;
             this.event = event;
             actionMasked = event.getActionMasked();
             this.traceId = traceId;
+            this.focusRequestGeneration = focusRequestGeneration;
         }
 
         void recycle() {
@@ -1640,10 +1650,24 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 touchDownWallTime = toWallTimeMillis(touchDownTime);
                 touchMoved = false;
                 touchStartedOnMain = isMainDisplaySlot(slot);
+                touchReservedForSystemNavigation = false;
                 touchSequenceSuppressed = false;
+                touchFocusRequestGeneration = 0;
                 activeTouchTraceId = touchStartedOnMain ? ++touchTraceSequence : 0L;
                 if (touchStartedOnMain) {
-                    focusDefaultDisplayForSystemNavigation("host touch started");
+                    // Physical edge gestures must stay on display 0. Ordinary content taps keep
+                    // the hosted display focused so its editor remains the active IME client.
+                    touchReservedForSystemNavigation =
+                            isTouchReservedForSystemNavigation(event);
+                    if (touchReservedForSystemNavigation) {
+                        touchSequenceSuppressed = true;
+                        focusDefaultDisplayForSystemNavigation(
+                                "physical system gesture started");
+                    } else {
+                        callbacks.cancelDefaultNavigationFocusRestore();
+                        touchFocusRequestGeneration = ++focusRequestGeneration;
+                        syncLaunchRoutingSource();
+                    }
                     touchTargetDisplayId = displayId;
                     touchTargetDisplayWidth = displayWidth;
                     touchTargetDisplayHeight = displayHeight;
@@ -1686,19 +1710,24 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     return true;
                 }
                 if (touchSequenceSuppressed) {
-                    focusDefaultDisplayForSystemNavigation("host touch completed");
+                    focusDefaultDisplayForSystemNavigation(
+                            touchReservedForSystemNavigation
+                                    ? "physical system gesture completed"
+                                    : "host touch dispatch unavailable");
                     clearTouchState();
                     return true;
                 }
                 injectMotionDirect(event);
-                focusDefaultDisplayForSystemNavigation("host touch completed");
                 clearTouchState();
                 return true;
             case MotionEvent.ACTION_CANCEL:
                 if (touchStartedOnMain && !touchSequenceSuppressed) {
                     injectMotionDirect(event);
                 }
-                focusDefaultDisplayForSystemNavigation("host touch cancelled");
+                if (touchReservedForSystemNavigation) {
+                    focusDefaultDisplayForSystemNavigation(
+                            "physical system gesture cancelled");
+                }
                 clearTouchState();
                 return true;
             default:
@@ -1708,7 +1737,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     private void clearTouchState() {
         touchStartedOnMain = false;
+        touchReservedForSystemNavigation = false;
         touchSequenceSuppressed = false;
+        touchFocusRequestGeneration = 0;
         activeTouchTraceId = 0L;
         touchTargetDisplayId = -1;
         touchTargetDisplayWidth = 0;
@@ -1723,6 +1754,27 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         float dy = y - touchDownY;
         float touchSlop = dp(8);
         return dx * dx + dy * dy > touchSlop * touchSlop;
+    }
+
+    private boolean isTouchReservedForSystemNavigation(MotionEvent event) {
+        WindowInsets windowInsets = surfaceView.getRootWindowInsets();
+        View rootView = surfaceView.getRootView();
+        if (windowInsets == null || rootView == null
+                || rootView.getWidth() <= 0 || rootView.getHeight() <= 0) {
+            return false;
+        }
+        Insets gestureInsets = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                ? windowInsets.getInsets(WindowInsets.Type.systemGestures())
+                : windowInsets.getSystemGestureInsets();
+        rootView.getLocationOnScreen(rootViewLocationOnScreen);
+        int windowLeft = rootViewLocationOnScreen[0];
+        int windowTop = rootViewLocationOnScreen[1];
+        return HostedTouchFocusPolicy.shouldReserveForSystemNavigation(
+                event.getRawX(), event.getRawY(),
+                windowLeft, windowTop,
+                windowLeft + rootView.getWidth(), windowTop + rootView.getHeight(),
+                gestureInsets.left, gestureInsets.top,
+                gestureInsets.right, gestureInsets.bottom);
     }
 
     private void injectMotionDirect(MotionEvent event) {
@@ -1740,7 +1792,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         logTouchTraceHost(traceId, targetDisplayId, actionMasked, downTime,
                 eventTime, x, y, transformedEvent.getPointerCount());
         boolean sent = sendMotionThroughRootBridge(
-                targetDisplayId, transformedEvent, traceId);
+                targetDisplayId, transformedEvent, traceId,
+                actionMasked == MotionEvent.ACTION_DOWN
+                        ? touchFocusRequestGeneration : 0);
         if (!sent) {
             if (actionMasked == MotionEvent.ACTION_DOWN) {
                 touchSequenceSuppressed = true;
@@ -1777,9 +1831,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     private boolean sendMotionThroughRootBridge(int targetDisplayId,
                                                  MotionEvent transformedEvent,
-                                                 long traceId) {
+                                                 long traceId,
+                                                 int focusGeneration) {
         PendingMotionEvent motion = new PendingMotionEvent(
-                targetDisplayId, transformedEvent, traceId);
+                targetDisplayId, transformedEvent, traceId, focusGeneration);
         synchronized (inputDispatchLock) {
             if (inputDispatchClosed) {
                 motion.recycle();
@@ -1827,6 +1882,21 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             }
             boolean sent;
             try {
+                if (motion.focusRequestGeneration > 0) {
+                    // Run focus and DOWN on the same serial queue. A separate focus request can
+                    // otherwise overtake asynchronous motion injection and strand the IME on 0.
+                    boolean currentRequest = motion.focusRequestGeneration
+                            == focusRequestGeneration
+                            && motion.displayId == displayId
+                            && slot == callbacks.activeMainSlot()
+                            && !callbacks.isActivityDestroyed();
+                    boolean focused = currentRequest && rootInputBridgeClient.focusDisplay(
+                            getRootInputBridgeToken(), motion.displayId);
+                    if (currentRequest && !focused) {
+                        Log.w(TAG, "Focus hosted display before touch failed: slot=" + slot
+                                + ", display=" + motion.displayId);
+                    }
+                }
                 sent = rootInputBridgeClient.sendMotion(
                         getRootInputBridgeToken(), motion.displayId,
                         motion.event, motion.traceId);

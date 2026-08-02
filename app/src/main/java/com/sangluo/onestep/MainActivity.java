@@ -361,6 +361,9 @@ public class MainActivity extends Activity {
                     return mainSlotSwitchPendingSlot;
                 }
                 @Override public int activeMainSlot() { return activeMainSlot; }
+                @Override public void cancelDefaultNavigationFocusRestore() {
+                    MainActivity.this.cancelDefaultNavigationFocusRestore();
+                }
                 @Override public boolean claimStaleSensorUidOverrideRecovery() {
                     if (staleSensorUidOverridesRecoveryAttempted) {
                         return false;
@@ -514,6 +517,7 @@ public class MainActivity extends Activity {
     private boolean runningTaskQueryFailureLogged;
     private int runningTaskMonitorGeneration;
     private boolean defaultHomeRestorePending;
+    private int defaultNavigationFocusRestoreGeneration;
     private boolean blockedDefaultRecentsRestorePending;
     private boolean systemRecentsComponentResolved;
     private ComponentName systemRecentsComponent;
@@ -1244,11 +1248,17 @@ public class MainActivity extends Activity {
     }
 
     private void scheduleDefaultNavigationFocusRestore(String reason) {
+        final int generation = ++defaultNavigationFocusRestoreGeneration;
         mainHandler.postDelayed(() -> {
-            if (!activityDestroyed) {
+            if (!activityDestroyed
+                    && generation == defaultNavigationFocusRestoreGeneration) {
                 restoreDefaultDisplayFocus(reason);
             }
         }, DEFAULT_NAVIGATION_FOCUS_RESTORE_DELAY_MS);
+    }
+
+    private void cancelDefaultNavigationFocusRestore() {
+        defaultNavigationFocusRestoreGeneration++;
     }
 
     private void restoreOneStepHomeNow() {
@@ -5284,16 +5294,18 @@ public class MainActivity extends Activity {
         EmbeddedAppHost newHost = embeddedHosts[newMainSlot];
         if (newHost instanceof RootVirtualDisplayHost) {
             RootVirtualDisplayHost newRootHost = (RootVirtualDisplayHost) newHost;
-            if (switchGeneration == mainSlotSwitchGeneration
-                    && activeMainSlot == newMainSlot) {
-                newRootHost.restoreHostedInputFocus();
-                scheduleDefaultNavigationFocusRestore("main slot switched");
-                refreshAllHostedSensorLandscapeRotations();
-            }
-            if (mainSlotSwitchPendingSlot == newMainSlot
-                    && mainSlotSwitchPendingOldSlot == oldMainSlot) {
-                clearPendingMainSlotSwitch();
-            }
+            cancelDefaultNavigationFocusRestore();
+            newRootHost.focusHostedDisplayAsync(() -> {
+                if (switchGeneration == mainSlotSwitchGeneration
+                        && activeMainSlot == newMainSlot) {
+                    newRootHost.restoreHostedInputFocus();
+                    refreshAllHostedSensorLandscapeRotations();
+                }
+                if (mainSlotSwitchPendingSlot == newMainSlot
+                        && mainSlotSwitchPendingOldSlot == oldMainSlot) {
+                    clearPendingMainSlotSwitch();
+                }
+            });
             return;
         }
         clearPendingMainSlotSwitch();
