@@ -83,6 +83,7 @@ import com.sangluo.onestep.feature.embedding.DeviceOrientationMapper;
 import com.sangluo.onestep.feature.embedding.DismissedAppClosePolicy;
 import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
+import com.sangluo.onestep.feature.embedding.HostedBackDispatchPolicy;
 import com.sangluo.onestep.feature.embedding.HostedBackExitPolicy;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.embedding.HostedInputFocusPolicy;
@@ -1071,93 +1072,15 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         int targetDisplayId = displayId;
         int targetTaskId = hostedTaskId;
         int generation = ++backExitCheckGeneration;
-        if (app != null && !app.isHomeEntry() && isMainDisplaySlot(slot)) {
-            if (rootAvailable) {
-                inspectTaskBeforeBack(app, targetDisplayId, targetTaskId, generation);
-                return;
-            }
+        if (HostedBackDispatchPolicy.shouldDispatchBeforeExitCheck(
+                app != null, app != null && app.isHomeEntry(), isMainDisplaySlot(slot))) {
+            // A single Activity can still own a Fragment, WebView, or Compose back stack.
+            // Always let the hosted app consume Back before deciding whether its task exited.
             injectBackAndScheduleExitCheck(
                     app, targetDisplayId, targetTaskId, generation);
             return;
         }
         injectKeyDirectAsync(KeyEvent.KEYCODE_BACK, "back display " + displayId);
-    }
-
-    private void inspectTaskBeforeBack(LauncherApp app, int targetDisplayId,
-                                       int targetTaskId, int generation) {
-        try {
-            rootExecutor.execute(() -> {
-                int resolvedTaskId = targetTaskId;
-                if (resolvedTaskId <= 0) {
-                    ShellCommandResult stackList = runPrivilegedCommand(
-                            TASK_STACK_LIST_COMMAND,
-                            "resolve task before back", false);
-                    if (stackList.exitCode == 0 && !TextUtils.isEmpty(stackList.output)) {
-                        resolvedTaskId = HostedTaskParser.findHostedTaskId(
-                                stackList.output, targetDisplayId, app.packageName);
-                    }
-                }
-                ShellCommandResult activities = runPrivilegedCommand(
-                        "dumpsys activity activities", "inspect task before back", false);
-                int activityCount = activities.exitCode == 0
-                        && !TextUtils.isEmpty(activities.output) && resolvedTaskId > 0
-                        ? HostedTaskParser.findTaskActivityCount(
-                        activities.output, resolvedTaskId) : -1;
-                int inspectedTaskId = resolvedTaskId;
-                mainHandler.post(() -> finishTaskInspectionBeforeBack(
-                        app, targetDisplayId, inspectedTaskId, generation, activityCount));
-            });
-        } catch (RuntimeException e) {
-            injectBackAndScheduleExitCheck(app, targetDisplayId, targetTaskId, generation);
-        }
-    }
-
-    private void finishTaskInspectionBeforeBack(LauncherApp app, int targetDisplayId,
-                                                int targetTaskId, int generation,
-                                                int activityCount) {
-        if (!isCurrentBackExitCheck(app, targetDisplayId, generation)) {
-            return;
-        }
-        if (activityCount == 1) {
-            hostedTaskId = -1;
-            launchRequestedPackage = "";
-            launchRequestedUserId = -1;
-            launchRequestedDisplayId = -1;
-            callbacks.onHostedAppExitedAfterBack(slot, app,
-                    () -> removeLastHostedTaskAfterDesktopTakeover(
-                            app, targetDisplayId, targetTaskId));
-            return;
-        }
-        if (activityCount == 0) {
-            hostedTaskId = -1;
-            launchRequestedPackage = "";
-            launchRequestedUserId = -1;
-            launchRequestedDisplayId = -1;
-            callbacks.onHostedAppExitedAfterBack(slot, app, null);
-            return;
-        }
-        injectBackAndScheduleExitCheck(app, targetDisplayId, targetTaskId, generation);
-    }
-
-    private void removeLastHostedTaskAfterDesktopTakeover(
-            LauncherApp app, int targetDisplayId, int targetTaskId) {
-        try {
-            rootExecutor.execute(() -> {
-                boolean removed = startRootInputBridgeIfNeeded(false)
-                        && rootInputBridgeClient.removeTask(
-                        getRootInputBridgeToken(), targetTaskId);
-                if (removed) {
-                    Log.i(TAG, "Removed last hosted app task after desktop takeover: package="
-                            + app.packageName + ", taskId=" + targetTaskId);
-                    return;
-                }
-                Log.w(TAG, "Remove last hosted app task failed; fall back to Back: package="
-                        + app.packageName + ", taskId=" + targetTaskId);
-                sendKeyThroughDirectBridge(targetDisplayId, KeyEvent.KEYCODE_BACK);
-            });
-        } catch (RuntimeException e) {
-            sendKeyThroughDirectBridge(targetDisplayId, KeyEvent.KEYCODE_BACK);
-        }
     }
 
     private void injectBackAndScheduleExitCheck(LauncherApp app, int targetDisplayId,

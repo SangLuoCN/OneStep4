@@ -14,10 +14,12 @@ import android.util.Log;
 import android.view.Display;
 import android.view.InputDevice;
 import android.view.InputEvent;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
 
+import com.sangluo.onestep.feature.embedding.HostedBackDispatchPolicy;
 import com.sangluo.onestep.system.root.SystemServiceFailurePolicy;
 
 import java.io.BufferedReader;
@@ -34,11 +36,12 @@ import java.util.Locale;
 public final class RootInputBridge {
     private static final String TAG = "OneStepInputBridge";
     private static final int INJECT_INPUT_EVENT_MODE_ASYNC = 0;
+    private static final int INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH = 2;
     private static final int VIRTUAL_TOUCH_DEVICE_ID = 0;
     private static final int ARG_ALLOWED_UID = 0;
     private static final int ARG_BRIDGE_TOKEN = 1;
     private static final String SOCKET_NAME_PREFIX = "onestep_input_bridge_";
-    public static final String HELLO_RESPONSE_PREFIX = "onestep-input-bridge-v22";
+    public static final String HELLO_RESPONSE_PREFIX = "onestep-input-bridge-v24";
     private static final int ROOT_UID = 0;
     private static final int SHELL_UID = 2000;
     private static final int WINDOWING_MODE_PINNED = 2;
@@ -58,6 +61,7 @@ public final class RootInputBridge {
     private final Method injectInputEventMethod;
     private Object activityTaskManagerService;
     private Method focusTopTaskMethod;
+    private Method startBackNavigationMethod;
     private Method removeTaskMethod;
     private Method moveRootTaskToDisplayMethod;
     private Method getRootTaskInfoMethod;
@@ -587,6 +591,17 @@ public final class RootInputBridge {
             focusTopTaskMethod.setAccessible(true);
         }
         return focusTopTaskMethod;
+    }
+
+    private Method getStartBackNavigationMethod() throws ReflectiveOperationException {
+        if (startBackNavigationMethod == null) {
+            startBackNavigationMethod = getActivityTaskManagerService().getClass().getMethod(
+                    "startBackNavigation",
+                    Class.forName("android.os.RemoteCallback"),
+                    Class.forName("android.window.BackAnimationAdapter"));
+            startBackNavigationMethod.setAccessible(true);
+        }
+        return startBackNavigationMethod;
     }
 
     private Method getRemoveTaskMethod() throws ReflectiveOperationException {
@@ -1199,29 +1214,111 @@ public final class RootInputBridge {
         }
     }
 
+    private boolean dispatchBackNavigation(int displayId) {
+        if (displayId <= Display.DEFAULT_DISPLAY) {
+            return false;
+        }
+        String focusResponse = focusHostedDisplay(new String[]{
+                "focusHostedDisplay", Integer.toString(displayId)
+        });
+        String[] focusParts = focusResponse.trim().split("\\s+");
+        boolean focused = focusParts.length == 4
+                && Integer.parseInt(focusParts[1]) == displayId
+                && Boolean.parseBoolean(focusParts[2])
+                && Boolean.parseBoolean(focusParts[3]);
+        if (!focused) {
+            Log.w(TAG, "Back navigation focus failed for display=" + displayId);
+            return false;
+        }
+
+        Object navigationInfo = null;
+        boolean triggered = false;
+        try {
+            navigationInfo = getStartBackNavigationMethod().invoke(
+                    getActivityTaskManagerService(), null, null);
+            if (navigationInfo == null) {
+                Log.w(TAG, "Back navigation unavailable for display=" + displayId);
+                return false;
+            }
+            Method getTypeMethod = navigationInfo.getClass().getMethod("getType");
+            Method getCallbackMethod = navigationInfo.getClass().getMethod(
+                    "getOnBackInvokedCallback");
+            int type = (Integer) getTypeMethod.invoke(navigationInfo);
+            Object callback = getCallbackMethod.invoke(navigationInfo);
+            if (callback == null) {
+                Log.w(TAG, "Back navigation has no callback: display=" + displayId
+                        + ", type=" + type);
+                return false;
+            }
+            Class<?> callbackInterface = Class.forName(
+                    "android.window.IOnBackInvokedCallback");
+            Method setTriggerBackMethod = findOptionalMethod(
+                    callbackInterface, "setTriggerBack", boolean.class);
+            if (setTriggerBackMethod != null) {
+                setTriggerBackMethod.invoke(callback, true);
+            }
+            Method onBackInvokedMethod = callbackInterface.getMethod("onBackInvoked");
+            onBackInvokedMethod.setAccessible(true);
+            onBackInvokedMethod.invoke(callback);
+            triggered = true;
+            Log.i(TAG, "Dispatched back navigation display=" + displayId
+                    + " type=" + type + " callback=true");
+            return true;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            throwIfSystemServiceDead(e);
+            Log.w(TAG, "Dispatch back navigation failed: display=" + displayId
+                    + " failure=" + describeThrowable(e));
+            return false;
+        } finally {
+            if (navigationInfo != null) {
+                try {
+                    Method finishMethod = navigationInfo.getClass().getMethod(
+                            "onBackNavigationFinished", boolean.class);
+                    finishMethod.setAccessible(true);
+                    finishMethod.invoke(navigationInfo, triggered);
+                } catch (ReflectiveOperationException | RuntimeException e) {
+                    Log.w(TAG, "Finish back navigation failed: display=" + displayId
+                            + " failure=" + describeThrowable(e));
+                }
+            }
+        }
+    }
+
     private void injectKey(String[] parts) throws ReflectiveOperationException {
         int displayId = Integer.parseInt(parts[1]);
         int keyCode = Integer.parseInt(parts[2]);
+        if (HostedBackDispatchPolicy.shouldTrySystemNavigation(displayId, keyCode)
+                && dispatchBackNavigation(displayId)) {
+            return;
+        }
         int source = InputDevice.SOURCE_KEYBOARD;
-        int deviceId = getInputDeviceId(source);
-        long now = SystemClock.uptimeMillis();
-        injectKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0,
-                0, deviceId, 0, 0, source), displayId);
-        injectKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0,
-                0, deviceId, 0, 0, source), displayId);
+        int flags = KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_VIRTUAL_HARD_KEY;
+        long downTime = SystemClock.uptimeMillis();
+        boolean downAccepted = injectKeyEvent(new KeyEvent(
+                downTime, downTime, KeyEvent.ACTION_DOWN, keyCode, 0,
+                0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0, flags, source), displayId);
+        long upTime = SystemClock.uptimeMillis();
+        boolean upAccepted = injectKeyEvent(new KeyEvent(
+                downTime, upTime, KeyEvent.ACTION_UP, keyCode, 0,
+                0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0, flags, source), displayId);
+        Log.println(downAccepted && upAccepted ? Log.INFO : Log.WARN, TAG,
+                "Injected system key display=" + displayId + " keyCode=" + keyCode
+                        + " downAccepted=" + downAccepted
+                        + " upAccepted=" + upAccepted);
     }
 
-    private void injectKeyEvent(KeyEvent event, int displayId)
+    private boolean injectKeyEvent(KeyEvent event, int displayId)
             throws ReflectiveOperationException {
         getSetDisplayIdMethod().invoke(event, displayId);
         event.setSource(InputDevice.SOURCE_KEYBOARD);
         RootVirtualDisplayBridge.noteVirtualInput(displayId);
         Object result = injectInputEventMethod.invoke(inputManager, event,
-                INJECT_INPUT_EVENT_MODE_ASYNC);
+                INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH);
         if (Boolean.FALSE.equals(result)) {
             Log.w(TAG, "key inject returned false display=" + displayId
                     + " keyCode=" + event.getKeyCode());
         }
+        return !Boolean.FALSE.equals(result);
     }
 
     private Method getSetDisplayIdMethod() throws ReflectiveOperationException {
@@ -1230,17 +1327,6 @@ public final class RootInputBridge {
             setDisplayIdMethod.setAccessible(true);
         }
         return setDisplayIdMethod;
-    }
-
-    private int getInputDeviceId(int source) {
-        int[] deviceIds = InputDevice.getDeviceIds();
-        for (int deviceId : deviceIds) {
-            InputDevice device = InputDevice.getDevice(deviceId);
-            if (device != null && device.supportsSource(source)) {
-                return deviceId;
-            }
-        }
-        return 0;
     }
 
     private String motionActionName(int action) {
