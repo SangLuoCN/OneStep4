@@ -357,6 +357,10 @@ public class MainActivity extends Activity {
                     return MainActivity.this.isMainPaneSlot(slot);
                 }
                 @Override public boolean isDualMainLayout() { return dualMainLayout; }
+                @Override public boolean isLargeScreenDevice() {
+                    return WindowLayoutModePolicy.isLargeScreen(
+                            getResources().getConfiguration().smallestScreenWidthDp);
+                }
                 @Override public boolean activateMainSlot(int slot) {
                     return MainActivity.this.activateMainPane(slot, false);
                 }

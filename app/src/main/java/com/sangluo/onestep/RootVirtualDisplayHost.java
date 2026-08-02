@@ -181,6 +181,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         boolean isMainDisplaySlot(int slot);
         boolean isMainPaneSlot(int slot);
         boolean isDualMainLayout();
+        boolean isLargeScreenDevice();
         boolean activateMainSlot(int slot);
         boolean isActivityDestroyed();
         boolean isWindowFrameAnimationRunning();
@@ -217,7 +218,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int ROOT_COMMAND_TIMEOUT_SECONDS = 8;
     private static final int LONG_PRESS_SWAP_MS = 450;
     private static final int DEFAULT_DISPLAY_ID = 0;
-    private static final int PHONE_LOGICAL_WIDTH_DP = 393;
     private static final int MAX_WINDOWS = MAX_SIDE_WINDOWS + 2;
     private static final int WINDOW_SURFACE_RESTING_LAYER_BASE = -10_000;
     private static final int ROOT_INPUT_BRIDGE_CONNECT_LOG_THROTTLE_MS = 2000;
@@ -3023,10 +3023,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         boolean targetDualMainLayout = callbacks.isDualMainLayout();
         boolean leavingDualMainLayout = displayUsesDualMainLayout
                 && !targetDualMainLayout;
-        if (!targetDualMainLayout && !leavingDualMainLayout) {
-            keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
-            return;
-        }
         Rect layoutReferenceRect = getReferenceRenderRect();
         if (!hasMatchingAspectRatio(viewWidth, viewHeight,
                 layoutReferenceRect.width(), layoutReferenceRect.height())) {
@@ -3034,9 +3030,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return;
         }
         VirtualDisplaySpec targetSpec = leavingDualMainLayout
+                && !callbacks.isMultiWindowMode()
                 ? makeWorkspaceVirtualDisplaySpec() : makeTargetVirtualDisplaySpec();
-        if (!hasMatchingAspectRatio(displayWidth, displayHeight,
-                targetSpec.width, targetSpec.height)
+        boolean targetAspectMatches = hasMatchingAspectRatio(
+                displayWidth, displayHeight, targetSpec.width, targetSpec.height);
+        boolean targetDensityMatches = displayDensityDpi == targetSpec.densityDpi;
+        if ((!targetAspectMatches || !targetDensityMatches)
                 && resizeVirtualDisplay(targetSpec)) {
             displayUsesDualMainLayout = targetDualMainLayout;
             holder.setFixedSize(displayWidth, displayHeight);
@@ -3044,8 +3043,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             lastViewHeight = viewHeight;
             return;
         }
-        if (hasMatchingAspectRatio(displayWidth, displayHeight,
-                targetSpec.width, targetSpec.height)) {
+        if (targetAspectMatches && targetDensityMatches) {
             displayUsesDualMainLayout = targetDualMainLayout;
         }
         keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
@@ -3084,17 +3082,26 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private VirtualDisplaySpec makeVirtualDisplaySpecForRect(Rect referenceRect) {
-        // Every slot represents the same phone screen. Deriving the mode from each slot's
+        // Every slot represents the same logical screen. Deriving the mode from each slot's
         // rounded view size made main/side swaps oscillate by a few pixels and relaunch apps.
-        int virtualWidth = Math.max(1, referenceRect.width());
-        int virtualHeight = Math.max(1, referenceRect.height());
+        int referenceWidth = Math.max(1, referenceRect.width());
+        int referenceHeight = Math.max(1, referenceRect.height());
+        int virtualWidth = referenceWidth;
+        int virtualHeight = referenceHeight;
         float qualityScale = calculateMinimumQualityScale(virtualWidth, virtualHeight);
         if (qualityScale > 1f) {
             virtualWidth = Math.max(1, Math.round(virtualWidth * qualityScale));
             virtualHeight = Math.max(1, Math.round(virtualHeight * qualityScale));
         }
-        int densityDpi = Math.max(120,
-                Math.round(virtualWidth * 160f / PHONE_LOGICAL_WIDTH_DP));
+        boolean useTabletDensity = callbacks.isLargeScreenDevice()
+                && !callbacks.isDualMainLayout();
+        int densityDpi = VirtualDisplayDensityPolicy.calculateDensityDpi(
+                referenceWidth,
+                referenceHeight,
+                virtualWidth,
+                virtualHeight,
+                owner.getResources().getDisplayMetrics().densityDpi,
+                useTabletDensity);
         return new VirtualDisplaySpec(virtualWidth, virtualHeight, densityDpi);
     }
 

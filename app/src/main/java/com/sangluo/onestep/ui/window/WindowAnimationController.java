@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.SystemClock;
 import android.util.Log;
+import android.view.AttachedSurfaceControl;
 import android.view.SurfaceControl;
 import android.view.View;
 import android.view.ViewGroup;
@@ -354,8 +355,13 @@ public final class WindowAnimationController {
         for (WindowSurfaceAnimationTarget target : targets) {
             target.host.resetWindowSurfaceAnimation(transaction);
         }
-        transaction.apply();
-        transaction.close();
+        AttachedSurfaceControl rootSurfaceControl = workspace().getRootSurfaceControl();
+        boolean scheduledOnDraw = rootSurfaceControl != null
+                && rootSurfaceControl.applyTransactionOnDraw(transaction);
+        if (!scheduledOnDraw) {
+            transaction.apply();
+            transaction.close();
+        }
         workspace().invalidate();
     }
 
