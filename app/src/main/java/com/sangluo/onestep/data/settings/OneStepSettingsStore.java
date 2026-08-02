@@ -51,6 +51,7 @@ public final class OneStepSettingsStore {
     private static final String PREF_LOG_RECORDING_ENABLED = "log_recording_enabled";
     private static final String PREF_BUILT_IN_DESKTOP_COMPONENT =
             "built_in_desktop_component";
+    private static final String BUILT_IN_DESKTOP_ONE_STEP = "onestep";
 
     private final SharedPreferences preferences;
 
@@ -211,7 +212,19 @@ public final class OneStepSettingsStore {
 
     public ComponentName getBuiltInDesktopComponent() {
         String value = preferences.getString(PREF_BUILT_IN_DESKTOP_COMPONENT, "");
-        return TextUtils.isEmpty(value) ? null : ComponentName.unflattenFromString(value);
+        return TextUtils.isEmpty(value) || BUILT_IN_DESKTOP_ONE_STEP.equals(value)
+                ? null : ComponentName.unflattenFromString(value);
+    }
+
+    public boolean isOneStepDesktopSelected() {
+        String value = preferences.getString(PREF_BUILT_IN_DESKTOP_COMPONENT, "");
+        return TextUtils.isEmpty(value) || BUILT_IN_DESKTOP_ONE_STEP.equals(value);
+    }
+
+    public void saveOneStepDesktop() {
+        preferences.edit()
+                .putString(PREF_BUILT_IN_DESKTOP_COMPONENT, BUILT_IN_DESKTOP_ONE_STEP)
+                .apply();
     }
 
     public void saveBuiltInDesktopComponent(ComponentName componentName) {

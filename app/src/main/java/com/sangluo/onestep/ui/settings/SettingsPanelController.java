@@ -104,7 +104,9 @@ public final class SettingsPanelController {
         void saveTopAppList(List<String> orderedKeys, Set<String> selectedKeys);
         List<LauncherApp> builtInDesktopApps();
         String builtInDesktopComponentKey();
+        boolean oneStepDesktopSelected();
         void refreshBuiltInDesktopApps();
+        void saveOneStepDesktop();
         void saveBuiltInDesktop(LauncherApp app);
         List<LauncherApp> defaultHomeCandidates();
         void setDefaultHome(LauncherApp app, DefaultHomeResultCallback callback);
@@ -218,6 +220,7 @@ public final class SettingsPanelController {
     private List<LauncherApp> topAppCandidates = Collections.emptyList();
     private Set<String> selectedTopAppInstanceKeys = Collections.emptySet();
     private String builtInDesktopComponentKey = "";
+    private boolean oneStepDesktopSelected = true;
 
     public SettingsPanelController(Activity activity, Callbacks callbacks) {
         this.activity = activity;
@@ -338,7 +341,7 @@ public final class SettingsPanelController {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         LinearLayout builtInDesktopItem = createSettingsItem(
-                "内置桌面", "选择工作区中显示的系统桌面", getBuiltInDesktopLabel());
+                "内置桌面", "选择工作区中显示的桌面", getBuiltInDesktopLabel());
         builtInDesktopValueView = (TextView) builtInDesktopItem.getTag();
         builtInDesktopValueView.setEllipsize(TextUtils.TruncateAt.END);
         builtInDesktopItem.setOnClickListener(v -> showBuiltInDesktopDialog());
@@ -1459,6 +1462,9 @@ public final class SettingsPanelController {
     }
 
     private String getBuiltInDesktopLabel() {
+        if (oneStepDesktopSelected) {
+            return "OneStep桌面";
+        }
         for (LauncherApp app : builtInDesktopApps) {
             if (TextUtils.equals(app.componentKey(), builtInDesktopComponentKey)) {
                 return app.label;
@@ -1470,35 +1476,42 @@ public final class SettingsPanelController {
     private void showBuiltInDesktopDialog() {
         callbacks.refreshBuiltInDesktopApps();
         syncState();
-        if (builtInDesktopApps.isEmpty()) {
-            Toast.makeText(activity, "未找到可用的系统桌面", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        int checkedItem = -1;
+        int checkedItem = oneStepDesktopSelected ? 0 : -1;
         for (int index = 0; index < builtInDesktopApps.size(); index++) {
             if (TextUtils.equals(builtInDesktopApps.get(index).componentKey(),
                     builtInDesktopComponentKey)) {
-                checkedItem = index;
+                checkedItem = index + 1;
                 break;
             }
         }
-        ArrayAdapter<LauncherApp> adapter = new ArrayAdapter<LauncherApp>(activity,
+        List<BuiltInDesktopOption> options = new ArrayList<>();
+        options.add(BuiltInDesktopOption.oneStep());
+        for (LauncherApp app : builtInDesktopApps) {
+            options.add(BuiltInDesktopOption.system(app));
+        }
+        ArrayAdapter<BuiltInDesktopOption> adapter =
+                new ArrayAdapter<BuiltInDesktopOption>(activity,
                 android.R.layout.select_dialog_singlechoice,
-                new ArrayList<>(builtInDesktopApps)) {
+                options) {
             @Override
             public View getView(int position, View convertView, ViewGroup parent) {
                 CheckedTextView row = (CheckedTextView) super.getView(
                         position, convertView, parent);
-                LauncherApp app = getItem(position);
-                if (app == null) {
+                BuiltInDesktopOption option = getItem(position);
+                if (option == null) {
                     return row;
                 }
-                row.setText(TextUtils.concat(app.label, "\n", app.packageName));
+                LauncherApp app = option.app;
+                row.setText(app == null
+                        ? "OneStep桌面"
+                        : TextUtils.concat(app.label, "\n", app.packageName));
                 row.setTextColor(0xff222222);
                 row.setTextSize(TypedValue.COMPLEX_UNIT_DIP, 14);
                 row.setMaxLines(2);
                 row.setCompoundDrawablePadding(dp(12));
-                Drawable icon = copyDrawable(app.icon);
+                Drawable icon = app == null
+                        ? activity.getDrawable(R.mipmap.ic_launcher)
+                        : copyDrawable(app.icon);
                 if (icon != null) {
                     int iconSize = dp(36);
                     icon.setBounds(0, 0, iconSize, iconSize);
@@ -1511,15 +1524,42 @@ public final class SettingsPanelController {
         showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("选择内置桌面")
                 .setSingleChoiceItems(adapter, checkedItem, (dialog, which) -> {
-                    LauncherApp app = adapter.getItem(which);
-                    if (app != null) {
-                        callbacks.saveBuiltInDesktop(app);
-                        builtInDesktopComponentKey = app.componentKey();
+                    BuiltInDesktopOption option = adapter.getItem(which);
+                    if (option != null && option.app == null) {
+                        callbacks.saveOneStepDesktop();
+                        oneStepDesktopSelected = true;
+                        builtInDesktopComponentKey = "";
+                        refresh();
+                    } else if (option != null) {
+                        callbacks.saveBuiltInDesktop(option.app);
+                        oneStepDesktopSelected = false;
+                        builtInDesktopComponentKey = option.app.componentKey();
                         refresh();
                     }
                     dialog.dismiss();
                 })
                 .setNegativeButton("取消", null));
+    }
+
+    private static final class BuiltInDesktopOption {
+        final LauncherApp app;
+
+        private BuiltInDesktopOption(LauncherApp app) {
+            this.app = app;
+        }
+
+        static BuiltInDesktopOption oneStep() {
+            return new BuiltInDesktopOption(null);
+        }
+
+        static BuiltInDesktopOption system(LauncherApp app) {
+            return new BuiltInDesktopOption(app);
+        }
+
+        @Override
+        public String toString() {
+            return app == null ? "OneStep桌面" : app.label;
+        }
     }
 
     private void showTopAppListDialog() {
@@ -1980,6 +2020,7 @@ public final class SettingsPanelController {
         builtInDesktopApps = desktopApps == null
                 ? Collections.emptyList() : new ArrayList<>(desktopApps);
         builtInDesktopComponentKey = callbacks.builtInDesktopComponentKey();
+        oneStepDesktopSelected = callbacks.oneStepDesktopSelected();
         rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
     }
     private void saveOneStepTriggerAreaScale(int v){callbacks.saveOneStepTriggerAreaScale(v);}

@@ -218,6 +218,7 @@ public class MainActivity extends Activity {
     private Set<String> selectedTopAppInstanceKeys = Collections.emptySet();
     private List<LauncherApp> builtInDesktopApps = Collections.emptyList();
     private LauncherApp builtInDesktopApp;
+    private boolean oneStepDesktopSelected = true;
     private LauncherAppRepository launcherAppRepository;
     private final PersistentRootShell persistentRootShell = new PersistentRootShell();
     private boolean embeddingHintShown;
@@ -256,7 +257,7 @@ public class MainActivity extends Activity {
             new OneStepWindowView.Callbacks() {
                 @Override
                 public View createDesktopHome() {
-                    return builtInDesktopApp == null
+                    return oneStepDesktopSelected
                             ? MainActivity.this.createDesktopHome() : null;
                 }
 
@@ -778,11 +779,13 @@ public class MainActivity extends Activity {
             return;
         }
         builtInDesktopApps = refreshedApps;
+        oneStepDesktopSelected = settingsStore.isOneStepDesktopSelected();
         ComponentName selectedComponent = settingsStore.getBuiltInDesktopComponent();
-        LauncherApp selected = findAppByComponent(refreshedApps, selectedComponent);
-        if (selected == null && !refreshedApps.isEmpty()) {
-            selected = refreshedApps.get(0);
-            settingsStore.saveBuiltInDesktopComponent(selected.componentName);
+        LauncherApp selected = oneStepDesktopSelected
+                ? null : findAppByComponent(refreshedApps, selectedComponent);
+        if (!oneStepDesktopSelected && selected == null) {
+            oneStepDesktopSelected = true;
+            settingsStore.saveOneStepDesktop();
         }
         builtInDesktopApp = selected;
         if (selected != null) {
@@ -2630,10 +2633,12 @@ public class MainActivity extends Activity {
             Log.w(TAG, "Loading system desktop applications failed", e);
         }
         ComponentName selectedComponent = settingsStore.getBuiltInDesktopComponent();
-        builtInDesktopApp = findAppByComponent(builtInDesktopApps, selectedComponent);
-        if (builtInDesktopApp == null && !builtInDesktopApps.isEmpty()) {
-            builtInDesktopApp = builtInDesktopApps.get(0);
-            settingsStore.saveBuiltInDesktopComponent(builtInDesktopApp.componentName);
+        oneStepDesktopSelected = settingsStore.isOneStepDesktopSelected();
+        builtInDesktopApp = oneStepDesktopSelected
+                ? null : findAppByComponent(builtInDesktopApps, selectedComponent);
+        if (!oneStepDesktopSelected && builtInDesktopApp == null) {
+            oneStepDesktopSelected = true;
+            settingsStore.saveOneStepDesktop();
         }
     }
 
@@ -2667,6 +2672,7 @@ public class MainActivity extends Activity {
             return;
         }
         builtInDesktopApp = resolved;
+        oneStepDesktopSelected = false;
         settingsStore.saveBuiltInDesktopComponent(resolved.componentName);
         boolean replaced = false;
         List<LauncherApp> updatedApps = new ArrayList<>(builtInDesktopApps);
@@ -2683,6 +2689,17 @@ public class MainActivity extends Activity {
         builtInDesktopApps = updatedApps;
         updateSettingsPageViews();
         Toast.makeText(this, "已将“" + resolved.label + "”设为内置桌面",
+                Toast.LENGTH_SHORT).show();
+        mainHandler.post(this::requestDesktopHomeInMain);
+    }
+
+    private void saveOneStepDesktop() {
+        builtInDesktopApp = null;
+        oneStepDesktopSelected = true;
+        settingsStore.saveOneStepDesktop();
+        updateSettingsPageViews();
+        rebuildDesktopHomeViews();
+        Toast.makeText(this, "已将“OneStep桌面”设为内置桌面",
                 Toast.LENGTH_SHORT).show();
         mainHandler.post(this::requestDesktopHomeInMain);
     }
@@ -2842,8 +2859,14 @@ public class MainActivity extends Activity {
             @Override public String builtInDesktopComponentKey() {
                 return builtInDesktopApp == null ? "" : builtInDesktopApp.componentKey();
             }
+            @Override public boolean oneStepDesktopSelected() {
+                return oneStepDesktopSelected;
+            }
             @Override public void refreshBuiltInDesktopApps() {
                 MainActivity.this.loadBuiltInDesktopApps();
+            }
+            @Override public void saveOneStepDesktop() {
+                MainActivity.this.saveOneStepDesktop();
             }
             @Override public void saveBuiltInDesktop(LauncherApp app) {
                 MainActivity.this.saveBuiltInDesktop(app);
@@ -3099,6 +3122,9 @@ public class MainActivity extends Activity {
     }
 
     private LauncherApp resolveBuiltInDesktopApp() {
+        if (oneStepDesktopSelected) {
+            return null;
+        }
         if (launcherAppRepository == null) {
             return null;
         }

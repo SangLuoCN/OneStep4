@@ -203,10 +203,12 @@ public final class OneStepWindowView extends FrameLayout {
         }
         placeholder.removeView(desktopHome);
         desktopHome = callbacks.createDesktopHome();
-        placeholder.addView(desktopHome, 0, matchFrame());
-        desktopHome.setVisibility(desktopHomeShown ? VISIBLE : GONE);
+        if (desktopHome != null) {
+            placeholder.addView(desktopHome, 0, matchFrame());
+            desktopHome.setVisibility(desktopHomeShown ? VISIBLE : GONE);
+        }
         setMainWindowMode(mainWindow);
-        if (desktopHomeShown) {
+        if (desktopHomeShown && desktopHome != null) {
             callbacks.configureDesktopHomeViewport(this);
         }
     }
