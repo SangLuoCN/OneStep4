@@ -91,6 +91,7 @@ import com.sangluo.onestep.feature.embedding.HostedSurfaceReusePolicy;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
 import com.sangluo.onestep.feature.embedding.HostedTouchFocusPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
+import com.sangluo.onestep.feature.embedding.VirtualDisplayViewportPolicy;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
 import com.sangluo.onestep.feature.media.MediaSessionCoordinator;
 import com.sangluo.onestep.hook.OneStepPrimaryHomePolicy;
@@ -3023,6 +3024,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         boolean targetDualMainLayout = callbacks.isDualMainLayout();
         boolean leavingDualMainLayout = displayUsesDualMainLayout
                 && !targetDualMainLayout;
+        if (!VirtualDisplayViewportPolicy.shouldResizeForContainerLayout(
+                callbacks.isLargeScreenDevice(), targetDualMainLayout, leavingDualMainLayout)) {
+            keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
+            return;
+        }
         Rect layoutReferenceRect = getReferenceRenderRect();
         if (!hasMatchingAspectRatio(viewWidth, viewHeight,
                 layoutReferenceRect.width(), layoutReferenceRect.height())) {
@@ -3093,14 +3099,15 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             virtualWidth = Math.max(1, Math.round(virtualWidth * qualityScale));
             virtualHeight = Math.max(1, Math.round(virtualHeight * qualityScale));
         }
-        boolean useTabletDensity = callbacks.isLargeScreenDevice()
-                && !callbacks.isDualMainLayout();
+        boolean largeScreenDevice = callbacks.isLargeScreenDevice();
+        boolean useTabletDensity = largeScreenDevice && !callbacks.isDualMainLayout();
         int densityDpi = VirtualDisplayDensityPolicy.calculateDensityDpi(
                 referenceWidth,
                 referenceHeight,
                 virtualWidth,
                 virtualHeight,
                 owner.getResources().getDisplayMetrics().densityDpi,
+                largeScreenDevice,
                 useTabletDensity);
         float tabletPixelScale = VirtualDisplayDensityPolicy.calculateTabletPixelScale(
                 virtualWidth, virtualHeight, densityDpi, useTabletDensity);

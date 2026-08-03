@@ -15,4 +15,22 @@ public class VirtualDisplayViewportPolicyTest {
     public void dualMainPaneStillAdaptsToLargeScreenLayout() {
         assertFalse(VirtualDisplayViewportPolicy.shouldUseWorkspaceSpec(true));
     }
+
+    @Test
+    public void phoneSingleMainLayoutKeepsStableVirtualDisplay() {
+        assertFalse(VirtualDisplayViewportPolicy.shouldResizeForContainerLayout(
+                false, false, false));
+    }
+
+    @Test
+    public void largeScreenSingleMainLayoutCanResizeVirtualDisplay() {
+        assertTrue(VirtualDisplayViewportPolicy.shouldResizeForContainerLayout(
+                true, false, false));
+    }
+
+    @Test
+    public void leavingDualMainLayoutCanResizeVirtualDisplay() {
+        assertTrue(VirtualDisplayViewportPolicy.shouldResizeForContainerLayout(
+                false, false, true));
+    }
 }

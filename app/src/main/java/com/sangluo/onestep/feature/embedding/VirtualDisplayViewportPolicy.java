@@ -8,4 +8,11 @@ public final class VirtualDisplayViewportPolicy {
     public static boolean shouldUseWorkspaceSpec(boolean dualMainLayout) {
         return !dualMainLayout;
     }
+
+    public static boolean shouldResizeForContainerLayout(
+            boolean largeScreenDevice,
+            boolean targetDualMainLayout,
+            boolean leavingDualMainLayout) {
+        return largeScreenDevice || targetDualMainLayout || leavingDualMainLayout;
+    }
 }

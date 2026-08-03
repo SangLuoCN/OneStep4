@@ -1,8 +1,10 @@
 package com.sangluo.onestep;
 
-/** Preserves each host pane's logical scale while exposing tablet space on large screens. */
+/** Keeps phones at a stable logical width while adapting panes on large screens. */
 public final class VirtualDisplayDensityPolicy {
+    private static final int MIN_PHONE_DENSITY_DPI = 120;
     private static final int MIN_DENSITY_DPI = 300;
+    private static final int PHONE_LOGICAL_WIDTH_DP = 393;
     private static final int TABLET_MIN_LOGICAL_SHORT_EDGE_DP = 600;
     private static final int TABLET_TARGET_LOGICAL_SHORT_EDGE_DP = 800;
 
@@ -12,7 +14,12 @@ public final class VirtualDisplayDensityPolicy {
     public static int calculateDensityDpi(
             int referenceWidth, int referenceHeight,
             int virtualWidth, int virtualHeight,
-            int hostDensityDpi, boolean useTabletDensity) {
+            int hostDensityDpi, boolean largeScreenDevice, boolean useTabletDensity) {
+        if (!largeScreenDevice) {
+            return Math.max(MIN_PHONE_DENSITY_DPI,
+                    Math.round(virtualWidth * 160f / PHONE_LOGICAL_WIDTH_DP));
+        }
+
         float qualityScale = Math.min(
                 virtualWidth / (float) Math.max(1, referenceWidth),
                 virtualHeight / (float) Math.max(1, referenceHeight));
