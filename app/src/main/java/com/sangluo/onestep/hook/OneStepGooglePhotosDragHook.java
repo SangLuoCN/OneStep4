@@ -15,6 +15,7 @@ import android.view.View;
 
 import com.sangluo.onestep.feature.drag.ImageDragBridgeClient;
 import com.sangluo.onestep.feature.drag.ImageDragSourcePolicy;
+import com.sangluo.onestep.feature.drag.GooglePhotosMediaUriResolver;
 
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
@@ -27,7 +28,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 
-/** Reuses Google Photos' MediaModel-to-ClipData pipeline for OneStep image dragging. */
+/** Reuses Google Photos' MediaModel-to-ClipData pipeline for OneStep media dragging. */
 public final class OneStepGooglePhotosDragHook {
     private static final String TAG = "OneStep40-GPhotos";
     private static final long EXPECTED_DRAG_TIMEOUT_MS = 15_000L;
@@ -255,10 +256,10 @@ public final class OneStepGooglePhotosDragHook {
             try {
                 TRANSFER_EXECUTOR.execute(() -> publish(applicationContext, payload));
             } catch (RuntimeException e) {
-                Log.e(TAG, "Cannot schedule Google Photos image transfer", e);
+                Log.e(TAG, "Cannot schedule Google Photos media transfer", e);
             }
         } else {
-            Log.w(TAG, "Google Photos produced no image URI for the requested drag");
+            Log.w(TAG, "Google Photos produced no media URI for the requested drag");
         }
         // Returning false makes Google Photos immediately clean up its internal drag state.
         // OneStep owns the visible drag preview and the remaining touch sequence.
@@ -268,15 +269,15 @@ public final class OneStepGooglePhotosDragHook {
     private static void publish(Context context, DragPayload payload) {
         ContentResolver resolver = context.getContentResolver();
         String mimeType = resolveMimeType(resolver, payload.uri, payload.mimeType);
-        if (!ImageDragSourcePolicy.isImageMimeType(mimeType)) {
-            Log.w(TAG, "Reject non-image Google Photos payload: " + mimeType);
+        if (!ImageDragSourcePolicy.isSupportedMediaMimeType(mimeType)) {
+            Log.w(TAG, "Reject unsupported Google Photos media payload: " + mimeType);
             return;
         }
         boolean bound = ImageDragBridgeClient.transfer(
                 context, payload.uri, payload.displayId,
                 ImageDragSourcePolicy.GOOGLE_PHOTOS_PACKAGE,
                 mimeType, MAX_IMAGE_BYTES, TRANSFER_EXECUTOR);
-        Log.i(TAG, "Google Photos original image bridge bound=" + bound
+        Log.i(TAG, "Google Photos media bridge bound=" + bound
                 + ", display=" + payload.displayId + ", mime=" + mimeType);
     }
 
@@ -284,10 +285,20 @@ public final class OneStepGooglePhotosDragHook {
             ContentResolver resolver, Uri uri, String fallback) {
         try {
             String resolved = resolver.getType(uri);
-            if (ImageDragSourcePolicy.isImageMimeType(resolved)) {
+            if (ImageDragSourcePolicy.isSupportedMediaMimeType(resolved)) {
                 return resolved;
             }
         } catch (RuntimeException ignored) {
+        }
+        Uri mediaStoreUri = GooglePhotosMediaUriResolver.resolve(uri);
+        if (mediaStoreUri != null) {
+            try {
+                String resolved = resolver.getType(mediaStoreUri);
+                if (ImageDragSourcePolicy.isSupportedMediaMimeType(resolved)) {
+                    return resolved;
+                }
+            } catch (RuntimeException ignored) {
+            }
         }
         return fallback;
     }
@@ -351,7 +362,7 @@ public final class OneStepGooglePhotosDragHook {
                     || display.getDisplayId() <= Display.DEFAULT_DISPLAY) {
                 return null;
             }
-            String mimeType = firstImageMimeType(clipData.getDescription());
+            String mimeType = firstMediaMimeType(clipData.getDescription());
             for (int index = 0; index < clipData.getItemCount(); index++) {
                 Uri uri = clipData.getItemAt(index).getUri();
                 if (uri != null) {
@@ -361,13 +372,13 @@ public final class OneStepGooglePhotosDragHook {
             return null;
         }
 
-        private static String firstImageMimeType(ClipDescription description) {
+        private static String firstMediaMimeType(ClipDescription description) {
             if (description == null) {
                 return "image/*";
             }
             for (int index = 0; index < description.getMimeTypeCount(); index++) {
                 String mimeType = description.getMimeType(index);
-                if (ImageDragSourcePolicy.isImageMimeType(mimeType)) {
+                if (ImageDragSourcePolicy.isSupportedMediaMimeType(mimeType)) {
                     return mimeType;
                 }
             }

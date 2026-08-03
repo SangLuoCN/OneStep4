@@ -4,19 +4,22 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.IBinder;
 import android.os.Parcel;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.util.Log;
+import android.util.Size;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.concurrent.Executor;
 
-/** Client side of the explicit original-image pipe owned by OneStep. */
+/** Client side of the explicit media-preview pipe owned by OneStep. */
 public final class ImageDragBridgeClient {
     private static final String TAG = "OneStep40-ImageBridge";
     private static final String ONE_STEP_PACKAGE = "com.sangluo.onestep";
@@ -86,9 +89,9 @@ public final class ImageDragBridgeClient {
         @Override
         public void onServiceConnected(ComponentName name, IBinder service) {
             try {
-                executor.execute(() -> writeOriginal(service));
+                executor.execute(() -> writePreview(service));
             } catch (RuntimeException e) {
-                Log.e(TAG, "Cannot schedule original image pipe", e);
+                Log.e(TAG, "Cannot schedule media preview pipe", e);
                 unbind();
             }
         }
@@ -110,20 +113,29 @@ public final class ImageDragBridgeClient {
             unbind();
         }
 
-        private void writeOriginal(IBinder service) {
+        private void writePreview(IBinder service) {
             long copied = 0L;
             try (ParcelFileDescriptor descriptor = openPipe(service);
-                 InputStream input = context.getContentResolver().openInputStream(sourceUri);
                  OutputStream output = descriptor == null ? null
                          : new ParcelFileDescriptor.AutoCloseOutputStream(descriptor)) {
-                if (input == null || output == null) {
-                    throw new IOException("original image pipe unavailable");
+                if (output == null) {
+                    throw new IOException("media preview pipe unavailable");
                 }
-                copied = copy(input, output, maxBytes);
-                Log.i(TAG, "Original image sent, bytes=" + copied
+                if (ImageDragSourcePolicy.isVideoMimeType(mimeType)) {
+                    copied = writeVideoThumbnail(output);
+                } else {
+                    try (InputStream input = context.getContentResolver()
+                            .openInputStream(sourceUri)) {
+                        if (input == null) {
+                            throw new IOException("source image unavailable");
+                        }
+                        copied = copy(input, output, maxBytes);
+                    }
+                }
+                Log.i(TAG, "Media preview sent, bytes=" + copied
                         + ", display=" + sourceDisplayId);
             } catch (IOException | RemoteException | RuntimeException e) {
-                Log.e(TAG, "Original image send failed after bytes=" + copied, e);
+                Log.e(TAG, "Media preview send failed after bytes=" + copied, e);
             } finally {
                 unbind();
             }
@@ -159,6 +171,30 @@ public final class ImageDragBridgeClient {
             try {
                 context.unbindService(this);
             } catch (IllegalArgumentException ignored) {
+            }
+        }
+
+        private long writeVideoThumbnail(OutputStream output) throws IOException {
+            Uri thumbnailUri = shareUri == null ? sourceUri : shareUri;
+            Bitmap thumbnail = context.getContentResolver().loadThumbnail(
+                    thumbnailUri, new Size(512, 512), null);
+            if (thumbnail == null || thumbnail.isRecycled()) {
+                throw new IOException("video thumbnail unavailable");
+            }
+            try {
+                ByteArrayOutputStream encoded = new ByteArrayOutputStream(128 * 1024);
+                if (!thumbnail.compress(Bitmap.CompressFormat.JPEG, 90, encoded)) {
+                    throw new IOException("video thumbnail encoding failed");
+                }
+                byte[] bytes = encoded.toByteArray();
+                if (bytes.length == 0 || bytes.length > maxBytes) {
+                    throw new IOException("video thumbnail exceeds OneStep drag limit");
+                }
+                output.write(bytes);
+                output.flush();
+                return bytes.length;
+            } finally {
+                thumbnail.recycle();
             }
         }
     }

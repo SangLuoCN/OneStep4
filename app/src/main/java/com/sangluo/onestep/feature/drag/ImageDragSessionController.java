@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
@@ -45,9 +46,9 @@ public final class ImageDragSessionController {
         int dp(float value);
     }
 
-    private static final int PREVIEW_CONTENT_DP = 50;
+    private static final int PREVIEW_CONTENT_DP = 64;
     private static final int PREVIEW_DECODE_EDGE_PX = 512;
-    private static final int PREVIEW_PADDING_DP = 7;
+    private static final int PREVIEW_PADDING_DP = 0;
     private static final int TOUCH_POINT_OFFSET_DP = 30;
     private final Callbacks callbacks;
     private final int[] anchorLocation = new int[2];
@@ -300,6 +301,7 @@ public final class ImageDragSessionController {
         private final Rect sourceRect = new Rect();
         private final RectF imageRect = new RectF();
         private final RectF outerRect = new RectF();
+        private final Path imageClipPath = new Path();
         private final int padding;
         private final int contentSize;
         private final int cornerRadius;
@@ -374,7 +376,13 @@ public final class ImageDragSessionController {
                 imageRect.set(padding, padding,
                         padding + contentSize, padding + contentSize);
                 calculateCenterCrop(current, sourceRect);
+                int restoreCount = canvas.save();
+                imageClipPath.reset();
+                imageClipPath.addRoundRect(
+                        imageRect, cornerRadius, cornerRadius, Path.Direction.CW);
+                canvas.clipPath(imageClipPath);
                 canvas.drawBitmap(current, sourceRect, imageRect, imagePaint);
+                canvas.restoreToCount(restoreCount);
                 canvas.drawRoundRect(outerRect, cornerRadius, cornerRadius, borderPaint);
             } catch (RuntimeException e) {
                 Log.w(TAG, "Draw image drag preview surface failed", e);

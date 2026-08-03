@@ -1,6 +1,6 @@
 id=onestep4_ksu_privapp
 name=OneStep4 (KernelSU)
 version=1.0.4
-versionCode=23
+versionCode=25
 author=SangLuo
-description=KernelSU 系统特权应用；ZygiskNext 提供 Google 相册源图拖拽与 FLAG_SECURE 显示增强；KernelSU 3.x 还需兼容 metamodule。
+description=KernelSU 系统特权应用；ZygiskNext 提供 Google 相册图片/视频拖拽与 FLAG_SECURE 显示增强；KernelSU 3.x 还需兼容 metamodule。

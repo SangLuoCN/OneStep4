@@ -19,7 +19,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/** Explicit Binder bridge that receives the original image from a hooked source app. */
+/** Explicit Binder bridge that receives a decodable media preview from a hooked source app. */
 public final class ImageDragBridgeService extends Service {
     public static final String DESCRIPTOR =
             "com.sangluo.onestep.feature.drag.IImageDragBridge";
@@ -60,7 +60,7 @@ public final class ImageDragBridgeService extends Service {
             ParcelFileDescriptor writeEnd = null;
             try {
                 if (!isAccepted(callingUid, sourceDisplayId, sourcePackage, mimeType)) {
-                    Log.w(TAG, "Original image pipe rejected: uid=" + callingUid
+                    Log.w(TAG, "Media preview pipe rejected: uid=" + callingUid
                             + ", display=" + sourceDisplayId
                             + ", source=" + sourcePackage);
                     reply.writeNoException();
@@ -71,16 +71,16 @@ public final class ImageDragBridgeService extends Service {
                 ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
                 ParcelFileDescriptor readEnd = pipe[0];
                 writeEnd = pipe[1];
-                transferExecutor.execute(() -> receiveOriginal(
+                transferExecutor.execute(() -> receivePreview(
                         readEnd, destination, sourceDisplayId,
                         sourcePackage, mimeType, sourceUri));
                 reply.writeNoException();
                 reply.writeInt(1);
                 writeEnd.writeToParcel(reply, Parcelable.PARCELABLE_WRITE_RETURN_VALUE);
                 writeEnd = null;
-                Log.i(TAG, "Original image pipe opened for display=" + sourceDisplayId);
+                Log.i(TAG, "Media preview pipe opened for display=" + sourceDisplayId);
             } catch (IOException | RuntimeException e) {
-                Log.e(TAG, "Cannot open original image pipe", e);
+                Log.e(TAG, "Cannot open media preview pipe", e);
                 reply.setDataSize(0);
                 reply.setDataPosition(0);
                 reply.writeException(new IllegalStateException(e.getMessage()));
@@ -112,7 +112,7 @@ public final class ImageDragBridgeService extends Service {
             int callingUid, int sourceDisplayId, String sourcePackage, String mimeType) {
         return sourceDisplayId > 0
                 && ImageDragSourcePolicy.isAllowed(sourcePackage, sourceDisplayId)
-                && ImageDragSourcePolicy.isImageMimeType(mimeType)
+                && ImageDragSourcePolicy.isSupportedMediaMimeType(mimeType)
                 && ImageDragBridgeRegistry.canAccept(
                 callingUid, sourceDisplayId, sourcePackage);
     }
@@ -123,10 +123,10 @@ public final class ImageDragBridgeService extends Service {
             throw new IOException("drag cache directory unavailable");
         }
         return new File(directory, "incoming-" + UUID.randomUUID()
-                + ImageFileNamePolicy.extensionForMime(mimeType));
+                + ImageFileNamePolicy.previewExtensionForMime(mimeType));
     }
 
-    private void receiveOriginal(
+    private void receivePreview(
             ParcelFileDescriptor readEnd, File destination, int sourceDisplayId,
             String sourcePackage, String mimeType, Uri sourceUri) {
         boolean accepted = false;
@@ -137,10 +137,10 @@ public final class ImageDragBridgeService extends Service {
             copied = copy(input, output);
             accepted = ImageDragBridgeRegistry.onImageReady(
                     sourceDisplayId, sourcePackage, mimeType, sourceUri, destination);
-            Log.i(TAG, "Original image received=" + accepted
+            Log.i(TAG, "Media preview received=" + accepted
                     + ", bytes=" + copied + ", display=" + sourceDisplayId);
         } catch (IOException | RuntimeException e) {
-            Log.e(TAG, "Original image receive failed after bytes=" + copied, e);
+            Log.e(TAG, "Media preview receive failed after bytes=" + copied, e);
         } finally {
             if (!accepted) {
                 delete(destination);
@@ -170,13 +170,13 @@ public final class ImageDragBridgeService extends Service {
             }
             copied += count;
             if (copied > MAX_IMAGE_BYTES) {
-                throw new IOException("image exceeds OneStep drag limit");
+                throw new IOException("media preview exceeds OneStep drag limit");
             }
             output.write(buffer, 0, count);
         }
         output.flush();
         if (copied == 0L) {
-            throw new IOException("empty image");
+            throw new IOException("empty media preview");
         }
         return copied;
     }

@@ -16,10 +16,13 @@ public class ImageDragSourcePolicyTest {
     }
 
     @Test
-    public void acceptsOnlyImageMimeTypes() {
+    public void acceptsImagesAndVideos() {
         assertTrue(ImageDragSourcePolicy.isImageMimeType("image/jpeg"));
         assertTrue(ImageDragSourcePolicy.isImageMimeType("image/*"));
         assertFalse(ImageDragSourcePolicy.isImageMimeType("video/mp4"));
         assertFalse(ImageDragSourcePolicy.isImageMimeType(null));
+        assertTrue(ImageDragSourcePolicy.isVideoMimeType("video/mp4"));
+        assertTrue(ImageDragSourcePolicy.isSupportedMediaMimeType("video/mp4"));
+        assertFalse(ImageDragSourcePolicy.isSupportedMediaMimeType("text/plain"));
     }
 }

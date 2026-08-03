@@ -27,6 +27,21 @@ public final class ImageFileNamePolicy {
         if (normalized.contains("heic")) {
             return ".heic";
         }
+        if (normalized.contains("mp4")) {
+            return ".mp4";
+        }
+        if (normalized.contains("quicktime") || normalized.contains("mov")) {
+            return ".mov";
+        }
+        if (normalized.contains("webm")) {
+            return ".webm";
+        }
         return ".img";
+    }
+
+    /** The bridge stores a decodable still preview even when the shared media is a video. */
+    public static String previewExtensionForMime(String mimeType) {
+        return ImageDragSourcePolicy.isVideoMimeType(mimeType)
+                ? ".jpg" : extensionForMime(mimeType);
     }
 }

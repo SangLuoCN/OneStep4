@@ -16,6 +16,15 @@ public class GooglePhotosMediaUriResolverTest {
     }
 
     @Test
+    public void unwrapsLocalVideoMediaStoreUri() {
+        assertEquals("content://media/external/video/media/412",
+                GooglePhotosMediaUriResolver.resolve(
+                        "content://com.google.android.apps.photos.contentprovider/-1/1/"
+                                + "content%3A%2F%2Fmedia%2Fexternal%2Fvideo%2Fmedia%2F412/"
+                                + "ORIGINAL/NONE/video%2Fmp4/870226471"));
+    }
+
+    @Test
     public void rejectsNonMediaAndMalformedWrappers() {
         assertNull(GooglePhotosMediaUriResolver.resolve(
                 "content://com.google.android.apps.photos.contentprovider/-1/1/"

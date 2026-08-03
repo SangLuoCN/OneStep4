@@ -19,4 +19,10 @@ public class ImageFileNamePolicyTest {
         assertEquals(".img", ImageFileNamePolicy.extensionForMime("image/*"));
         assertEquals(".img", ImageFileNamePolicy.extensionForMime(null));
     }
+
+    @Test
+    public void videoPreviewAlwaysUsesJpegExtension() {
+        assertEquals(".mp4", ImageFileNamePolicy.extensionForMime("video/mp4"));
+        assertEquals(".jpg", ImageFileNamePolicy.previewExtensionForMime("video/mp4"));
+    }
 }

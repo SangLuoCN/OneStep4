@@ -4508,6 +4508,7 @@ public class MainActivity extends Activity {
             String packageName, Uri uri, String mimeType) {
         String resolvedMime = TextUtils.equals(
                 ImageShareTargetPolicy.QQ_PACKAGE, packageName)
+                && ImageDragSourcePolicy.isImageMimeType(mimeType)
                 ? "image/*" : mimeType;
         Intent probe = new Intent(Intent.ACTION_SEND)
                 .addCategory(Intent.CATEGORY_DEFAULT)
