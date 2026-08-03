@@ -1738,11 +1738,14 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         launchRequestedUserId = app.userId();
         launchRequestedDisplayId = displayId;
         scheduleHostedTaskResolution("image share " + app.packageName);
-        scheduleImageShareReadinessChecks(app);
+        ComponentName initialComponent = shareIntent.getComponent();
+        scheduleImageShareReadinessChecks(app,
+                initialComponent == null ? null : initialComponent.getClassName());
         return true;
     }
 
-    private void scheduleImageShareReadinessChecks(LauncherApp app) {
+    private void scheduleImageShareReadinessChecks(
+            LauncherApp app, String initialActivityName) {
         if (app == null || displayId <= DEFAULT_DISPLAY_ID) {
             return;
         }
@@ -1750,12 +1753,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         int targetDisplayId = displayId;
         for (int delayMs : IMAGE_SHARE_READINESS_DELAYS_MS) {
             mainHandler.postDelayed(() -> checkImageShareReadiness(
-                    generation, targetDisplayId, app), delayMs);
+                    generation, targetDisplayId, app, initialActivityName), delayMs);
         }
     }
 
     private void checkImageShareReadiness(
-            int generation, int targetDisplayId, LauncherApp expectedApp) {
+            int generation, int targetDisplayId, LauncherApp expectedApp,
+            String initialActivityName) {
         if (generation != imageShareReadinessGeneration
                 || targetDisplayId != displayId || embeddedSlotClosing[slot]
                 || slot < 0 || slot >= MAX_WINDOWS
@@ -1778,7 +1782,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         stackList.output, targetDisplayId, expectedApp.packageName);
                 if (TextUtils.isEmpty(topActivity)
                         || !ImageShareTargetPolicy.isShareUiReady(
-                        expectedApp.packageName, topActivity)) {
+                        expectedApp.packageName, topActivity, initialActivityName)) {
                     return;
                 }
                 mainHandler.post(() -> {
@@ -1792,7 +1796,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     imageShareReadinessGeneration++;
                     Log.i(TAG, "Image share activity ready: slot=" + slot
                             + ", display=" + targetDisplayId
-                            + ", component=" + topActivity);
+                            + ", component=" + topActivity
+                            + ", initial=" + initialActivityName);
                     callbacks.onSystemTaskEvent(
                             RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT,
                             targetDisplayId, hostedTaskId,

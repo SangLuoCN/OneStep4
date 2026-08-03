@@ -25,12 +25,24 @@ public final class ImageShareTargetPolicy {
     }
 
     public static boolean isShareUiReady(String packageName, String componentName) {
+        return isShareUiReady(packageName, componentName, null);
+    }
+
+    public static boolean isShareUiReady(
+            String packageName, String componentName, String initialActivityName) {
         if (componentName == null || componentName.contains("SplashActivity")) {
             return false;
         }
         if (QQ_PACKAGE.equals(packageName)) {
-            return componentName.endsWith(QQ_FRIEND_PICKER_ACTIVITY)
-                    || componentName.endsWith("/.activity.ForwardRecentActivity");
+            boolean friendRoute = QQ_FRIEND_ACTIVITY.equals(initialActivityName)
+                    || (initialActivityName != null
+                    && initialActivityName.endsWith("/.activity.JumpActivity"));
+            if (friendRoute || initialActivityName == null) {
+                return componentName.endsWith(QQ_FRIEND_PICKER_ACTIVITY)
+                        || componentName.endsWith("/.activity.ForwardRecentActivity");
+            }
+            return !componentName.endsWith(QQ_FRIEND_ACTIVITY)
+                    && !componentName.endsWith("/.activity.JumpActivity");
         }
         return true;
     }

@@ -41,6 +41,17 @@ public final class ImageDragSessionController {
 
         void cancelInjectedSourceTouch(int sourceSlot);
 
+        void showShareTargets(String mimeType);
+
+        int findShareTarget(float rawX, float rawY);
+
+        void setHoveredShareTarget(int targetIndex);
+
+        void hideShareTargets();
+
+        void deliverToShareTarget(
+                int targetIndex, File imageFile, String mimeType, Uri sourceUri);
+
         void deliverToSlot(int slot, File imageFile, String mimeType, Uri sourceUri);
 
         int dp(float value);
@@ -56,6 +67,7 @@ public final class ImageDragSessionController {
 
     private int sourceSlot = -1;
     private int hoverSlot = -1;
+    private int hoverShareTarget = -1;
     private File imageFile;
     private String mimeType;
     private Uri sourceUri;
@@ -98,6 +110,7 @@ public final class ImageDragSessionController {
             cancel();
             return false;
         }
+        callbacks.showShareTargets(mimeType);
         callbacks.cancelInjectedSourceTouch(sourceSlot);
         updatePosition(rawX, rawY);
         updateHover(rawX, rawY);
@@ -158,7 +171,8 @@ public final class ImageDragSessionController {
     }
 
     public void cancel() {
-        hoverSlot = -1;
+        setHoverTargets(-1, -1);
+        callbacks.hideShareTargets();
         removePreviewView();
         if (previewBitmap != null) {
             previewBitmap.recycle();
@@ -208,9 +222,14 @@ public final class ImageDragSessionController {
     }
 
     private void updateHover(float rawX, float rawY) {
+        int shareTarget = callbacks.findShareTarget(rawX, rawY);
+        if (shareTarget >= 0) {
+            setHoverTargets(shareTarget, -1);
+            return;
+        }
         View workspace = callbacks.workspace();
         if (workspace == null) {
-            setHoverSlot(-1);
+            setHoverTargets(-1, -1);
             return;
         }
         workspace.getLocationOnScreen(workspaceLocation);
@@ -231,27 +250,30 @@ public final class ImageDragSessionController {
         }
         int target = ImageDragHoverPolicy.findTarget(
                 workspaceX, workspaceY, frameValues, eligible);
-        setHoverSlot(target);
+        setHoverTargets(-1, target);
     }
 
-    private void setHoverSlot(int target) {
-        if (target == hoverSlot) {
+    private void setHoverTargets(int shareTarget, int slot) {
+        if (shareTarget == hoverShareTarget && slot == hoverSlot) {
             return;
         }
-        hoverSlot = target;
+        hoverShareTarget = shareTarget;
+        hoverSlot = slot;
+        callbacks.setHoveredShareTarget(shareTarget);
         if (preview != null) {
             preview.animate().cancel();
             preview.animate()
-                    .scaleX(target < 0 ? 1f : 1.08f)
-                    .scaleY(target < 0 ? 1f : 1.08f)
+                    .scaleX(shareTarget < 0 && slot < 0 ? 1f : 1.08f)
+                    .scaleY(shareTarget < 0 && slot < 0 ? 1f : 1.08f)
                     .setDuration(120L)
                     .start();
         }
     }
 
     private void requestDrop() {
+        int shareTarget = hoverShareTarget;
         int targetSlot = hoverSlot;
-        if (targetSlot < 0) {
+        if (shareTarget < 0 && targetSlot < 0) {
             cancel();
             return;
         }
@@ -259,7 +281,12 @@ public final class ImageDragSessionController {
         String deliveredMime = mimeType;
         Uri deliveredUri = sourceUri;
         removePreviewWithoutDeletingFile();
-        callbacks.deliverToSlot(targetSlot, deliveredFile, deliveredMime, deliveredUri);
+        if (shareTarget >= 0) {
+            callbacks.deliverToShareTarget(
+                    shareTarget, deliveredFile, deliveredMime, deliveredUri);
+        } else {
+            callbacks.deliverToSlot(targetSlot, deliveredFile, deliveredMime, deliveredUri);
+        }
     }
 
     private void removePreviewWithoutDeletingFile() {
@@ -270,9 +297,12 @@ public final class ImageDragSessionController {
         }
         sourceSlot = -1;
         hoverSlot = -1;
+        hoverShareTarget = -1;
         imageFile = null;
         mimeType = null;
         sourceUri = null;
+        callbacks.setHoveredShareTarget(-1);
+        callbacks.hideShareTargets();
     }
 
     private void removePreviewView() {

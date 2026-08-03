@@ -2,6 +2,7 @@ package com.sangluo.onestep.ui.widget;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
@@ -82,6 +83,14 @@ public final class AppShortcutView extends LinearLayout {
         appLabel = app.label;
         icon.setImageDrawable(app.icon);
         label.setText(app.label);
+        updateContentDescription();
+    }
+
+    public void bindIcon(Drawable drawable, String description) {
+        instanceKey = "";
+        appLabel = description == null ? "" : description;
+        icon.setImageDrawable(drawable);
+        label.setText(appLabel);
         updateContentDescription();
     }
 

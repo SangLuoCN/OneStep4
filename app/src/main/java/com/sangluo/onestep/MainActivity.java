@@ -74,6 +74,7 @@ import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.drag.ImageDragSessionController;
 import com.sangluo.onestep.feature.drag.ImageDragBridgeRegistry;
+import com.sangluo.onestep.feature.drag.ImageDragShareTarget;
 import com.sangluo.onestep.feature.drag.ImageDragSourcePolicy;
 import com.sangluo.onestep.feature.drag.ImageFileNamePolicy;
 import com.sangluo.onestep.feature.drag.ImageShareTargetPolicy;
@@ -208,6 +209,7 @@ public class MainActivity extends Activity {
     private static final int MAX_PENDING_CROSS_APP_ROUTES = 8;
     private static final long IMAGE_DRAG_CACHE_TTL_MS = 10L * 60L * 1000L;
     private static final long IMAGE_DRAG_CALLBACK_TIMEOUT_MS = 5000L;
+    private static final int IMAGE_DRAG_SHARE_ANIMATION_MS = 180;
     static final String EXTRA_IMAGE_SHARE_ROUTE =
             "com.sangluo.onestep.extra.IMAGE_SHARE_ROUTE";
     private static final long MAX_SHARED_IMAGE_BYTES = 512L * 1024L * 1024L;
@@ -489,6 +491,7 @@ public class MainActivity extends Activity {
     private FrameLayout rootContainer;
     private FrameLayout topChromeContainer;
     private LinearLayout topChromeContent;
+    private FrameLayout topAppStripRoot;
     private LinearLayout topNavLeftControls;
     private LinearLayout topNavRightControls;
     private ImageView topNavPageLeftControl;
@@ -502,6 +505,14 @@ public class MainActivity extends Activity {
     private boolean mainPaneSwapWindowAttached;
     private BlurredBackgroundView oneStepBackgroundView;
     private HorizontalScrollView topAppStripScrollView;
+    private HorizontalScrollView imageDragShareTargetScrollView;
+    private final View[] imageDragShareTargetViews =
+            new View[ImageDragShareTarget.values().length];
+    private final boolean[] imageDragShareTargetEnabled =
+            new boolean[ImageDragShareTarget.values().length];
+    private final Rect imageDragShareHitRect = new Rect();
+    private boolean imageDragShareTargetsVisible;
+    private int imageDragShareAnimationGeneration;
     private View statusGestureShield;
     private View leftCornerTrigger;
     private View rightCornerTrigger;
@@ -2724,13 +2735,17 @@ public class MainActivity extends Activity {
 
     private View createTopAppStrip() {
         FrameLayout stripRoot = new FrameLayout(this);
+        topAppStripRoot = stripRoot;
         stripRoot.setBackgroundColor(Color.TRANSPARENT);
+        stripRoot.setClipChildren(true);
+        stripRoot.setClipToPadding(true);
 
         HorizontalScrollView scrollView = new HorizontalScrollView(this);
         topAppStripScrollView = scrollView;
         scrollView.setHorizontalScrollBarEnabled(false);
         scrollView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-        stripRoot.addView(scrollView, matchFrame());
+        stripRoot.addView(scrollView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, getTopAppStripHeight(), Gravity.TOP));
 
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -2753,12 +2768,236 @@ public class MainActivity extends Activity {
             shortcutViews.add(shortcut);
         }
 
+        imageDragShareTargetScrollView = createImageDragShareTargetStrip();
+        imageDragShareTargetScrollView.setVisibility(View.INVISIBLE);
+        imageDragShareTargetScrollView.setTranslationY(-getTopAppStripHeight());
+        stripRoot.addView(imageDragShareTargetScrollView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, getTopAppStripHeight(), Gravity.TOP));
+        imageDragShareTargetsVisible = false;
+        imageDragShareAnimationGeneration++;
+
         View bottomLine = new View(this);
         bottomLine.setBackgroundColor(Color.BLACK);
         FrameLayout.LayoutParams lineLp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(2), Gravity.BOTTOM);
         stripRoot.addView(bottomLine, lineLp);
         return stripRoot;
+    }
+
+    private HorizontalScrollView createImageDragShareTargetStrip() {
+        HorizontalScrollView scrollView = new HorizontalScrollView(this);
+        scrollView.setHorizontalScrollBarEnabled(false);
+        scrollView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(getTopAppStripSidePaddingDp()),
+                dp(getTopAppStripVerticalPaddingDp()),
+                dp(getTopAppStripSidePaddingDp()),
+                dp(getTopAppStripVerticalPaddingDp()));
+        row.setBackgroundColor(Color.TRANSPARENT);
+        scrollView.addView(row, new HorizontalScrollView.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        int iconSizeDp = getTopAppIconSizeDp();
+        int cellWidthDp = getTopAppStripCellWidthDp(iconSizeDp);
+        ImageDragShareTarget[] targets = ImageDragShareTarget.values();
+        for (int index = 0; index < targets.length; index++) {
+            ImageDragShareTarget target = targets[index];
+            AppShortcutView shortcut = new AppShortcutView(
+                    this, false, iconSizeDp, 0);
+            shortcut.setStatusIndicatorEnabled(false);
+            shortcut.bindIcon(getDrawable(imageDragShareTargetDrawable(target)),
+                    imageDragShareTargetDescription(target));
+            shortcut.setFocusable(false);
+            shortcut.setClickable(false);
+            row.addView(shortcut, new LinearLayout.LayoutParams(
+                    dp(cellWidthDp),
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+            imageDragShareTargetViews[index] = shortcut;
+            imageDragShareTargetEnabled[index] = false;
+        }
+        return scrollView;
+    }
+
+    private int imageDragShareTargetDrawable(ImageDragShareTarget target) {
+        switch (target) {
+            case WECHAT_TIMELINE:
+                return R.drawable.drag_share_wechat_timeline;
+            case WECHAT_FAVORITE:
+                return R.drawable.drag_share_wechat_favorite;
+            case QQ_FAVORITE:
+                return R.drawable.drag_share_qq_favorite;
+            case QQ_COMPUTER:
+                return R.drawable.drag_share_qq_computer;
+            case BLUETOOTH:
+            default:
+                return R.drawable.drag_share_bluetooth;
+        }
+    }
+
+    private String imageDragShareTargetDescription(ImageDragShareTarget target) {
+        switch (target) {
+            case WECHAT_TIMELINE:
+                return "分享到朋友圈";
+            case WECHAT_FAVORITE:
+                return "添加到微信收藏";
+            case QQ_FAVORITE:
+                return "保存到QQ收藏";
+            case QQ_COMPUTER:
+                return "发送到QQ我的电脑";
+            case BLUETOOTH:
+            default:
+                return "蓝牙发送";
+        }
+    }
+
+    private void showImageDragShareTargets(String mimeType) {
+        if (topAppStripRoot == null || topAppStripScrollView == null
+                || imageDragShareTargetScrollView == null) {
+            return;
+        }
+        String resolvedMime = TextUtils.isEmpty(mimeType) ? "image/*" : mimeType;
+        ImageDragShareTarget[] targets = ImageDragShareTarget.values();
+        for (int index = 0; index < targets.length; index++) {
+            imageDragShareTargetEnabled[index] = resolveImageDragShareActivity(
+                    targets[index], resolvedMime) != null;
+        }
+        setHoveredImageDragShareTarget(-1);
+
+        int stripHeight = getTopAppStripHeight();
+        ++imageDragShareAnimationGeneration;
+        imageDragShareTargetsVisible = true;
+        imageDragShareTargetScrollView.animate().cancel();
+        topAppStripScrollView.animate().cancel();
+        imageDragShareTargetScrollView.setVisibility(View.VISIBLE);
+        imageDragShareTargetScrollView.setTranslationY(-stripHeight);
+        topAppStripScrollView.setTranslationY(0f);
+        imageDragShareTargetScrollView.animate()
+                .translationY(0f)
+                .setDuration(IMAGE_DRAG_SHARE_ANIMATION_MS)
+                .setInterpolator(new AccelerateDecelerateInterpolator())
+                .start();
+        topAppStripScrollView.animate()
+                .translationY(stripHeight)
+                .setDuration(IMAGE_DRAG_SHARE_ANIMATION_MS)
+                .setInterpolator(new AccelerateDecelerateInterpolator())
+                .start();
+    }
+
+    private void hideImageDragShareTargets() {
+        if (topAppStripScrollView == null || imageDragShareTargetScrollView == null) {
+            return;
+        }
+        int stripHeight = getTopAppStripHeight();
+        int generation = ++imageDragShareAnimationGeneration;
+        boolean animate = imageDragShareTargetsVisible;
+        imageDragShareTargetsVisible = false;
+        setHoveredImageDragShareTarget(-1);
+        imageDragShareTargetScrollView.animate().cancel();
+        topAppStripScrollView.animate().cancel();
+        if (!animate) {
+            imageDragShareTargetScrollView.setTranslationY(-stripHeight);
+            imageDragShareTargetScrollView.setVisibility(View.INVISIBLE);
+            topAppStripScrollView.setTranslationY(0f);
+            return;
+        }
+        imageDragShareTargetScrollView.animate()
+                .translationY(-stripHeight)
+                .setDuration(IMAGE_DRAG_SHARE_ANIMATION_MS)
+                .setInterpolator(new AccelerateDecelerateInterpolator())
+                .withEndAction(() -> {
+                    if (generation == imageDragShareAnimationGeneration
+                            && !imageDragShareTargetsVisible) {
+                        imageDragShareTargetScrollView.setVisibility(View.INVISIBLE);
+                    }
+                })
+                .start();
+        topAppStripScrollView.animate()
+                .translationY(0f)
+                .setDuration(IMAGE_DRAG_SHARE_ANIMATION_MS)
+                .setInterpolator(new AccelerateDecelerateInterpolator())
+                .start();
+        mainHandler.postDelayed(() -> finishHidingImageDragShareTargets(generation),
+                IMAGE_DRAG_SHARE_ANIMATION_MS + 32L);
+    }
+
+    private void finishHidingImageDragShareTargets(int generation) {
+        if (generation != imageDragShareAnimationGeneration
+                || imageDragShareTargetsVisible
+                || imageDragShareTargetScrollView == null
+                || topAppStripScrollView == null) {
+            return;
+        }
+        imageDragShareTargetScrollView.setVisibility(View.INVISIBLE);
+        imageDragShareTargetScrollView.setTranslationY(-getTopAppStripHeight());
+        topAppStripScrollView.setTranslationY(0f);
+    }
+
+    private int findImageDragShareTarget(float rawX, float rawY) {
+        if (!imageDragShareTargetsVisible || imageDragShareTargetScrollView == null
+                || imageDragShareTargetScrollView.getVisibility() != View.VISIBLE) {
+            return -1;
+        }
+        autoScrollImageDragShareTargets(rawX, rawY);
+        for (int index = 0; index < imageDragShareTargetViews.length; index++) {
+            View target = imageDragShareTargetViews[index];
+            if (!imageDragShareTargetEnabled[index] || target == null
+                    || !target.getGlobalVisibleRect(imageDragShareHitRect)) {
+                continue;
+            }
+            if (imageDragShareHitRect.contains(Math.round(rawX), Math.round(rawY))) {
+                return index;
+            }
+        }
+        return -1;
+    }
+
+    private void autoScrollImageDragShareTargets(float rawX, float rawY) {
+        if (imageDragShareTargetScrollView == null
+                || imageDragShareTargetScrollView.getChildCount() == 0
+                || !imageDragShareTargetScrollView.getGlobalVisibleRect(
+                imageDragShareHitRect)
+                || rawY < imageDragShareHitRect.top
+                || rawY > imageDragShareHitRect.bottom) {
+            return;
+        }
+        int edgeSize = Math.min(dp(36), imageDragShareHitRect.width() / 4);
+        int delta = 0;
+        if (rawX < imageDragShareHitRect.left + edgeSize) {
+            delta = -dp(8);
+        } else if (rawX > imageDragShareHitRect.right - edgeSize) {
+            delta = dp(8);
+        }
+        if (delta == 0) {
+            return;
+        }
+        View content = imageDragShareTargetScrollView.getChildAt(0);
+        int maxScroll = Math.max(
+                0, content.getWidth() - imageDragShareTargetScrollView.getWidth());
+        int targetScroll = Math.max(0, Math.min(maxScroll,
+                imageDragShareTargetScrollView.getScrollX() + delta));
+        imageDragShareTargetScrollView.scrollTo(targetScroll, 0);
+    }
+
+    private void setHoveredImageDragShareTarget(int targetIndex) {
+        for (int index = 0; index < imageDragShareTargetViews.length; index++) {
+            View target = imageDragShareTargetViews[index];
+            if (target == null) {
+                continue;
+            }
+            boolean enabled = imageDragShareTargetEnabled[index];
+            boolean hovered = enabled && index == targetIndex;
+            target.animate().cancel();
+            target.setBackground(null);
+            target.setAlpha(enabled ? 1f : 0.28f);
+            target.animate()
+                    .scaleX(hovered ? 1.1f : 1f)
+                    .scaleY(hovered ? 1.1f : 1f)
+                    .setDuration(100L)
+                    .start();
+        }
     }
 
     private View createDesktopHome() {
@@ -4298,6 +4537,29 @@ public class MainActivity extends Activity {
                         }
                     }
 
+                    @Override public void showShareTargets(String mimeType) {
+                        showImageDragShareTargets(mimeType);
+                    }
+
+                    @Override public int findShareTarget(float rawX, float rawY) {
+                        return findImageDragShareTarget(rawX, rawY);
+                    }
+
+                    @Override public void setHoveredShareTarget(int targetIndex) {
+                        setHoveredImageDragShareTarget(targetIndex);
+                    }
+
+                    @Override public void hideShareTargets() {
+                        hideImageDragShareTargets();
+                    }
+
+                    @Override public void deliverToShareTarget(
+                            int targetIndex, File imageFile,
+                            String mimeType, Uri sourceUri) {
+                        deliverDraggedImageToShareTarget(
+                                targetIndex, imageFile, mimeType, sourceUri);
+                    }
+
                     @Override public void deliverToSlot(
                             int slot, File imageFile, String mimeType, Uri sourceUri) {
                         deliverDraggedImage(slot, imageFile, mimeType, sourceUri);
@@ -4406,6 +4668,133 @@ public class MainActivity extends Activity {
         return started;
     }
 
+    private void deliverDraggedImageToShareTarget(
+            int targetIndex, File imageFile, String mimeType, Uri sourceUri) {
+        ImageDragShareTarget target = ImageDragShareTarget.fromIndex(targetIndex);
+        if (activityDestroyed || target == null || imageFile == null || !imageFile.isFile()
+                || sourceUri == null || !"content".equals(sourceUri.getScheme())) {
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        String resolvedMime = TextUtils.isEmpty(mimeType) ? "image/*" : mimeType;
+        Intent share = createImageDragShareTargetIntent(
+                target, sourceUri, resolvedMime);
+        if (share == null) {
+            Log.w(TAG, "Dragged media share target unavailable: " + target);
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        try {
+            grantUriPermission(target.packageName(), sourceUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Cannot grant dragged media to " + target, e);
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        if (!launchImageDragShareTarget(target, share)) {
+            Log.w(TAG, "Dragged media share launch failed: " + target);
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        Log.i(TAG, "Dragged media share launched: target=" + target
+                + ", component=" + share.getComponent()
+                + ", sourceAuthority=" + sourceUri.getAuthority());
+        scheduleImageDragFileDeletion(imageFile);
+    }
+
+    private Intent createImageDragShareTargetIntent(
+            ImageDragShareTarget target, Uri uri, String mimeType) {
+        ResolveInfo resolved = resolveImageDragShareActivity(target, mimeType);
+        if (resolved == null || resolved.activityInfo == null) {
+            return null;
+        }
+        Intent share = new Intent(Intent.ACTION_SEND)
+                .addCategory(Intent.CATEGORY_DEFAULT)
+                .setPackage(target.packageName())
+                .setType(mimeType)
+                .setComponent(new ComponentName(
+                        resolved.activityInfo.packageName, resolved.activityInfo.name))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        share.putExtra(Intent.EXTRA_STREAM, uri);
+        share.setClipData(ClipData.newUri(
+                getContentResolver(), "OneStep media", uri));
+        return share;
+    }
+
+    private ResolveInfo resolveImageDragShareActivity(
+            ImageDragShareTarget target, String mimeType) {
+        if (target == null || TextUtils.isEmpty(mimeType)) {
+            return null;
+        }
+        Intent probe = new Intent(Intent.ACTION_SEND)
+                .addCategory(Intent.CATEGORY_DEFAULT)
+                .setPackage(target.packageName())
+                .setType(mimeType);
+        List<ResolveInfo> candidates;
+        try {
+            candidates = getPackageManager().queryIntentActivities(
+                    probe, PackageManager.MATCH_DEFAULT_ONLY);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Query drag share target failed: " + target, e);
+            return null;
+        }
+        for (ResolveInfo candidate : candidates) {
+            if (candidate != null && candidate.activityInfo != null
+                    && TextUtils.equals(
+                    target.packageName(), candidate.activityInfo.packageName)
+                    && target.matchesActivity(candidate.activityInfo.name)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private boolean launchImageDragShareTarget(
+            ImageDragShareTarget target, Intent share) {
+        int targetSlot = findImageDragSharePackageSlot(target.packageName());
+        if (targetSlot >= 0) {
+            LauncherApp targetApp = windowApps[targetSlot];
+            EmbeddedAppHost host = embeddedHosts[targetSlot];
+            if (targetApp != null && host instanceof RootVirtualDisplayHost
+                    && ((RootVirtualDisplayHost) host)
+                    .launchImageShareActivity(targetApp, share)) {
+                armImageSharePromotion(targetSlot, targetApp, share.getComponent());
+                return true;
+            }
+        }
+        if (target != ImageDragShareTarget.BLUETOOTH) {
+            LauncherApp targetApp = createLauncherAppForPackage(target.packageName());
+            if (targetApp != null) {
+                routedLaunchIntents.put(target.packageName(), share);
+                addOrFocusApp(targetApp);
+                return true;
+            }
+        }
+        try {
+            ActivityOptions options = ActivityOptions.makeBasic();
+            options.setLaunchDisplayId(Display.DEFAULT_DISPLAY);
+            startActivity(share, options.toBundle());
+            return true;
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Log.w(TAG, "Cannot start drag share target on display 0: " + target, e);
+            return false;
+        }
+    }
+
+    private int findImageDragSharePackageSlot(String packageName) {
+        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
+            LauncherApp app = windowApps[slot];
+            if (app != null && !embeddedSlotClosing[slot]
+                    && isWindowSlotEnabled(slot)
+                    && TextUtils.equals(packageName, app.packageName)) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
     private void deliverDraggedImage(
             int targetSlot, File imageFile, String mimeType, Uri sourceUri) {
         if (activityDestroyed || imageFile == null || !imageFile.isFile()
@@ -4484,7 +4873,9 @@ public class MainActivity extends Activity {
                 || !TextUtils.equals(packageName, pending.packageName)
                 || TextUtils.isEmpty(componentName)
                 || !ImageShareTargetPolicy.isShareUiReady(
-                packageName, componentName)) {
+                packageName, componentName,
+                pending.shareComponent == null
+                        ? null : pending.shareComponent.getClassName())) {
             return;
         }
         if (pending.targetSlot < 0 || pending.targetSlot >= MAX_WINDOWS
