@@ -8,6 +8,7 @@ import android.app.ActivityOptions;
 import android.app.WallpaperManager;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -15,6 +16,7 @@ import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.content.res.Resources;
@@ -33,6 +35,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -57,6 +60,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.core.content.FileProvider;
 
 import com.sangluo.onestep.data.settings.OneStepSettings;
 import com.sangluo.onestep.data.settings.OneStepSettingsStore;
@@ -68,6 +72,11 @@ import com.sangluo.onestep.feature.embedding.DefaultHomeRoutingPolicy;
 import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
+import com.sangluo.onestep.feature.drag.ImageDragSessionController;
+import com.sangluo.onestep.feature.drag.ImageDragBridgeRegistry;
+import com.sangluo.onestep.feature.drag.ImageDragSourcePolicy;
+import com.sangluo.onestep.feature.drag.ImageFileNamePolicy;
+import com.sangluo.onestep.feature.drag.ImageShareTargetPolicy;
 import com.sangluo.onestep.feature.logging.SessionLogRecorder;
 import com.sangluo.onestep.feature.tasks.RunningTaskAppResolver;
 import com.sangluo.onestep.model.LauncherApp;
@@ -91,6 +100,8 @@ import com.sangluo.onestep.ui.window.WindowAnimationController;
 import com.sangluo.onestep.ui.window.WindowLayoutCalculator;
 import com.sangluo.onestep.ui.window.WindowLayoutModePolicy;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
@@ -103,10 +114,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
 import static com.sangluo.onestep.data.settings.OneStepSettings.CORNER_TRIGGER_SENSITIVITY_DEFAULT;
@@ -193,6 +206,11 @@ public class MainActivity extends Activity {
     private static final long HOSTED_DISPLAY_FOCUS_DELAY_MS = 80L;
     private static final long BLOCKED_RECENTS_RESTORE_TIMEOUT_MS = 1000L;
     private static final int MAX_PENDING_CROSS_APP_ROUTES = 8;
+    private static final long IMAGE_DRAG_CACHE_TTL_MS = 10L * 60L * 1000L;
+    private static final long IMAGE_DRAG_CALLBACK_TIMEOUT_MS = 5000L;
+    static final String EXTRA_IMAGE_SHARE_ROUTE =
+            "com.sangluo.onestep.extra.IMAGE_SHARE_ROUTE";
+    private static final long MAX_SHARED_IMAGE_BYTES = 512L * 1024L * 1024L;
     private static final int DEFERRED_MEDIA_SESSION_REFRESH = 1;
     private static final int DEFERRED_MEDIA_UI_REFRESH = 1 << 1;
     private static final int DEFERRED_PLAYLIST_REFRESH = 1 << 2;
@@ -221,6 +239,7 @@ public class MainActivity extends Activity {
     private final List<Integer> sideSlotOrder = new ArrayList<>();
     private final ArrayDeque<RoutedAppLaunch> pendingCrossAppRoutes = new ArrayDeque<>();
     private final Map<String, Intent> routedLaunchIntents = new HashMap<>();
+    private PendingImageSharePromotion pendingImageSharePromotion;
 
     private List<LauncherApp> launcherApps = Collections.emptyList();
     private List<LauncherApp> orderedTopAppCandidates = Collections.emptyList();
@@ -246,6 +265,7 @@ public class MainActivity extends Activity {
     private final ExecutorService pipDockExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService runningTaskExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService launcherIconExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService imageDragIoExecutor = Executors.newSingleThreadExecutor();
     private final Object rootInputBridgeStartLock = new Object();
     private boolean launcherIconReceiverRegistered;
     private boolean launcherIconRefreshInFlight;
@@ -438,15 +458,23 @@ public class MainActivity extends Activity {
                 }
                 @Override public boolean onCrossAppLaunch(
                         int sourceDisplayId, String sourcePackage,
-                        Intent intent, String targetPackage) {
+                        Intent intent, String targetPackage,
+                        String sharedImageMimeType,
+                        ParcelFileDescriptor sharedImageDescriptor) {
                     return MainActivity.this.onCrossAppLaunch(
-                            sourceDisplayId, sourcePackage, intent, targetPackage);
+                            sourceDisplayId, sourcePackage, intent, targetPackage,
+                            sharedImageMimeType, sharedImageDescriptor);
                 }
                 @Override public void onSystemTaskEvent(
                         int event, int displayId, int taskId, String packageName,
                         String componentName) {
                     MainActivity.this.onSystemTaskEvent(
                             event, displayId, taskId, packageName, componentName);
+                }
+                @Override public boolean onImageDragTouch(
+                        int sourceSlot, MotionEvent event) {
+                    return imageDragSessionController != null
+                            && imageDragSessionController.onTouch(sourceSlot, event);
                 }
                 @Override public void onHostedAppExitedAfterBack(
                         int slot, LauncherApp app, Runnable afterDesktopTakeover) {
@@ -531,6 +559,7 @@ public class MainActivity extends Activity {
     private SettingsPanelController settingsPanelController;
     private TopPanelController topPanelController;
     private SideWindowInputShieldController sideInputShieldController;
+    private ImageDragSessionController imageDragSessionController;
     private android.window.OnBackInvokedCallback systemBackCallback;
     private boolean pipMonitoringActive;
     private boolean pipQueryInFlight;
@@ -559,6 +588,21 @@ public class MainActivity extends Activity {
     private final Runnable pipMonitorRunnable = this::queryPipStateAsync;
     private final Runnable pipDockBoundsUpdateRunnable = this::requestPipDockFromSlot;
     private final Runnable runningTaskMonitorRunnable = this::queryRunningTaskStatusesAsync;
+    private final ImageDragBridgeRegistry.Listener imageDragBridgeListener =
+            new ImageDragBridgeRegistry.Listener() {
+                @Override public boolean canAccept(
+                        int callingUid, int sourceDisplayId, String sourcePackage) {
+                    return canAcceptImageDragSource(
+                            callingUid, sourceDisplayId, sourcePackage);
+                }
+
+                @Override public boolean onImageReady(
+                        int sourceDisplayId, String sourcePackage,
+                        String mimeType, Uri sourceUri, File imageFile) {
+                    return beginImageDragFileBlocking(
+                            sourceDisplayId, sourcePackage, imageFile, mimeType, sourceUri);
+                }
+            };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -600,6 +644,9 @@ public class MainActivity extends Activity {
         reconcileTopAppListConfiguration();
         loadBuiltInDesktopApps();
         setContentView(createDesktop());
+        imageDragSessionController = createImageDragSessionController();
+        ImageDragBridgeRegistry.register(imageDragBridgeListener);
+        cleanupStaleImageDragFiles();
         registerLauncherIconChangeReceiver();
         sideInputShieldController = new SideWindowInputShieldController(
                 this, MAX_WINDOWS, new SideWindowInputShieldController.Callbacks() {
@@ -1064,6 +1111,8 @@ public class MainActivity extends Activity {
     private void handleSystemTaskEvent(
             int event, int displayId, int taskId, String packageName, String componentName) {
         requestRunningTaskStatusRefresh();
+        promotePendingImageShareIfReady(
+                event, displayId, packageName, componentName);
         if (activityDestroyed || activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS) {
             return;
         }
@@ -1464,6 +1513,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
+        if (imageDragSessionController != null) {
+            imageDragSessionController.cancel();
+            imageDragSessionController = null;
+        }
+        ImageDragBridgeRegistry.unregister(imageDragBridgeListener);
         removeMainPaneSwapWindow(true);
         if (sessionLogRecorder != null) {
             sessionLogRecorder.close();
@@ -1478,6 +1532,7 @@ public class MainActivity extends Activity {
         }
         if (nonDefaultDisplayHomeRelay) {
             launcherIconExecutor.shutdownNow();
+            imageDragIoExecutor.shutdownNow();
             mediaRootExecutor.shutdownNow();
             hookSettingsExecutor.shutdownNow();
             visualEffectExecutor.shutdownNow();
@@ -1528,6 +1583,7 @@ public class MainActivity extends Activity {
         mediaRootExecutor.shutdownNow();
         hookSettingsExecutor.shutdownNow();
         launcherIconExecutor.shutdownNow();
+        imageDragIoExecutor.shutdownNow();
         visualEffectExecutor.shutdownNow();
         wallpaperExecutor.shutdownNow();
         pipDockExecutor.shutdown();
@@ -4210,15 +4266,330 @@ public class MainActivity extends Activity {
         }
     }
 
+    private ImageDragSessionController createImageDragSessionController() {
+        return new ImageDragSessionController(
+                new ImageDragSessionController.Callbacks() {
+                    @Override public ViewGroup previewContainer() {
+                        return rootContainer;
+                    }
+
+                    @Override public int previewDisplayId() {
+                        return getActivityDisplayId();
+                    }
+
+                    @Override public View workspace() { return workspace; }
+                    @Override public Rect[] windowFrames() { return calculateWindowRects(); }
+                    @Override public int slotCount() { return MAX_WINDOWS; }
+
+                    @Override public boolean canDropOnSlot(
+                            int sourceSlot, int candidateSlot) {
+                        return candidateSlot >= 0 && candidateSlot < MAX_WINDOWS
+                                && candidateSlot != sourceSlot
+                                && isWindowSlotEnabled(candidateSlot)
+                                && !embeddedSlotClosing[candidateSlot]
+                                && windowApps[candidateSlot] != null;
+                    }
+
+                    @Override public void cancelInjectedSourceTouch(int sourceSlot) {
+                        EmbeddedAppHost host = sourceSlot >= 0 && sourceSlot < MAX_WINDOWS
+                                ? embeddedHosts[sourceSlot] : null;
+                        if (host instanceof RootVirtualDisplayHost) {
+                            ((RootVirtualDisplayHost) host).cancelInjectedTouchForImageDrag();
+                        }
+                    }
+
+                    @Override public void deliverToSlot(
+                            int slot, File imageFile, String mimeType, Uri sourceUri) {
+                        deliverDraggedImage(slot, imageFile, mimeType, sourceUri);
+                    }
+
+                    @Override public int dp(float value) {
+                        return MainActivity.this.dp(value);
+                    }
+                });
+    }
+
+    private boolean canAcceptImageDragSource(
+            int callingUid, int sourceDisplayId, String sourcePackage) {
+        if (callingUid <= 0
+                || !ImageDragSourcePolicy.isAllowed(sourcePackage, sourceDisplayId)) {
+            return false;
+        }
+        String[] packages = getPackageManager().getPackagesForUid(callingUid);
+        boolean packageMatches = false;
+        if (packages != null) {
+            for (String packageName : packages) {
+                if (TextUtils.equals(sourcePackage, packageName)) {
+                    packageMatches = true;
+                    break;
+                }
+            }
+        }
+        return packageMatches && runOnMainBlocking(() -> {
+            RootVirtualDisplayHost sourceHost = findRootVirtualDisplayHost(sourceDisplayId);
+            if (sourceHost == null || !sourceHost.hasActiveTouchForImageDrag()) {
+                return false;
+            }
+            int sourceSlot = sourceHost.getSlot();
+            LauncherApp sourceApp = sourceSlot >= 0 && sourceSlot < MAX_WINDOWS
+                    ? windowApps[sourceSlot] : null;
+            return sourceApp != null && isMainPaneSlot(sourceSlot)
+                    && TextUtils.equals(sourcePackage, sourceApp.packageName);
+        }, 500L);
+    }
+
+    private boolean beginImageDragFileBlocking(
+            int sourceDisplayId, String sourcePackage, File imageFile,
+            String mimeType, Uri sourceUri) {
+        return runOnMainBlocking(() -> beginImageDragOnMain(
+                sourceDisplayId, sourcePackage, imageFile, mimeType, sourceUri),
+                IMAGE_DRAG_CALLBACK_TIMEOUT_MS);
+    }
+
+    private boolean runOnMainBlocking(BooleanSupplier operation, long timeoutMs) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            return operation.getAsBoolean();
+        }
+        AtomicBoolean accepted = new AtomicBoolean();
+        AtomicBoolean expired = new AtomicBoolean();
+        CountDownLatch handled = new CountDownLatch(1);
+        Runnable request = () -> {
+            try {
+                if (!expired.get()) {
+                    accepted.set(operation.getAsBoolean());
+                }
+            } finally {
+                handled.countDown();
+            }
+        };
+        if (!mainHandler.post(request)) {
+            return false;
+        }
+        try {
+            if (!handled.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+                expired.set(true);
+                mainHandler.removeCallbacks(request);
+                return false;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            expired.set(true);
+            mainHandler.removeCallbacks(request);
+            return false;
+        }
+        return accepted.get();
+    }
+
+    private boolean beginImageDragOnMain(
+            int sourceDisplayId, String sourcePackage, File imageFile,
+            String mimeType, Uri sourceUri) {
+        RootVirtualDisplayHost sourceHost = findRootVirtualDisplayHost(sourceDisplayId);
+        if (sourceHost == null || imageDragSessionController == null
+                || !sourceHost.hasActiveTouchForImageDrag()) {
+            return false;
+        }
+        int sourceSlot = sourceHost.getSlot();
+        LauncherApp sourceApp = sourceSlot >= 0 && sourceSlot < MAX_WINDOWS
+                ? windowApps[sourceSlot] : null;
+        if (sourceApp == null || !TextUtils.equals(sourcePackage, sourceApp.packageName)
+                || !isMainPaneSlot(sourceSlot)) {
+            return false;
+        }
+        boolean started = imageDragSessionController.begin(
+                sourceSlot, imageFile,
+                TextUtils.isEmpty(mimeType) ? "image/*" : mimeType,
+                sourceUri,
+                sourceHost.getLatestTouchRawX(), sourceHost.getLatestTouchRawY());
+        Log.i(TAG, "image drag session started=" + started
+                + ", source=" + sourcePackage + ", slot=" + sourceSlot
+                + ", previewDisplay=" + getActivityDisplayId());
+        return started;
+    }
+
+    private void deliverDraggedImage(
+            int targetSlot, File imageFile, String mimeType, Uri sourceUri) {
+        if (activityDestroyed || imageFile == null || !imageFile.isFile()
+                || targetSlot < 0 || targetSlot >= MAX_WINDOWS) {
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        LauncherApp targetApp = windowApps[targetSlot];
+        if (targetApp == null) {
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        if (sourceUri == null || !"content".equals(sourceUri.getScheme())) {
+            Log.w(TAG, "Dragged image has no shareable original URI");
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        Uri uri = sourceUri;
+        try {
+            grantUriPermission(targetApp.packageName, uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Create image drag URI failed", e);
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        String resolvedMime = TextUtils.isEmpty(mimeType) ? "image/png" : mimeType;
+        Intent share = createImageShareIntent(
+                targetApp.packageName, uri, resolvedMime);
+        if (share == null) {
+            Log.w(TAG, "No standard image share target for " + targetApp.packageName);
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        EmbeddedAppHost host = embeddedHosts[targetSlot];
+        if (!(host instanceof RootVirtualDisplayHost)) {
+            Log.w(TAG, "Image share target has no root display host: "
+                    + targetApp.packageName);
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        boolean launched = ((RootVirtualDisplayHost) host)
+                .launchImageShareActivity(targetApp, share);
+        if (!launched) {
+            Log.w(TAG, "Image share activity launch failed: "
+                    + targetApp.packageName + ", component="
+                    + share.getComponent());
+            deleteImageDragFile(imageFile);
+            return;
+        }
+        Log.i(TAG, "Image share activity launched before main promotion: target="
+                + targetApp.packageName + ", component=" + share.getComponent()
+                + ", sourceAuthority=" + uri.getAuthority());
+        scheduleImageDragFileDeletion(imageFile);
+        armImageSharePromotion(targetSlot, targetApp, share.getComponent());
+    }
+
+    private void armImageSharePromotion(
+            int targetSlot, LauncherApp targetApp, ComponentName shareComponent) {
+        EmbeddedAppHost host = targetSlot >= 0 && targetSlot < MAX_WINDOWS
+                ? embeddedHosts[targetSlot] : null;
+        if (targetApp == null || !(host instanceof RootVirtualDisplayHost)) {
+            return;
+        }
+        pendingImageSharePromotion = new PendingImageSharePromotion(
+                targetSlot, targetApp.packageName,
+                ((RootVirtualDisplayHost) host).getDisplayId(), shareComponent);
+    }
+
+    private void promotePendingImageShareIfReady(
+            int event, int displayId, String packageName, String componentName) {
+        PendingImageSharePromotion pending = pendingImageSharePromotion;
+        if (pending == null
+                || event != RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT
+                || displayId != pending.displayId
+                || !TextUtils.equals(packageName, pending.packageName)
+                || TextUtils.isEmpty(componentName)
+                || !ImageShareTargetPolicy.isShareUiReady(
+                packageName, componentName)) {
+            return;
+        }
+        if (pending.targetSlot < 0 || pending.targetSlot >= MAX_WINDOWS
+                || embeddedSlotClosing[pending.targetSlot]
+                || windowApps[pending.targetSlot] == null
+                || !TextUtils.equals(
+                windowApps[pending.targetSlot].packageName, pending.packageName)) {
+            pendingImageSharePromotion = null;
+            return;
+        }
+        pendingImageSharePromotion = null;
+        Log.i(TAG, "Promote image share after target activity moved to front: target="
+                + pending.packageName + ", component=" + componentName
+                + ", initial=" + pending.shareComponent);
+        if (pending.targetSlot != activeMainSlot) {
+            swapWithMain(pending.targetSlot);
+        }
+    }
+
+    private Intent createImageShareIntent(
+            String packageName, Uri uri, String mimeType) {
+        String resolvedMime = TextUtils.equals(
+                ImageShareTargetPolicy.QQ_PACKAGE, packageName)
+                ? "image/*" : mimeType;
+        Intent probe = new Intent(Intent.ACTION_SEND)
+                .addCategory(Intent.CATEGORY_DEFAULT)
+                .setPackage(packageName)
+                .setType(resolvedMime)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        probe.putExtra(Intent.EXTRA_STREAM, uri);
+        probe.setClipData(ClipData.newUri(
+                getContentResolver(), "OneStep image", uri));
+        List<ResolveInfo> candidates;
+        try {
+            candidates = getPackageManager().queryIntentActivities(
+                    probe, PackageManager.MATCH_DEFAULT_ONLY);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Query image share activities failed for " + packageName, e);
+            return null;
+        }
+        String requiredActivity = ImageShareTargetPolicy.requiredActivity(packageName);
+        ResolveInfo selected = null;
+        for (ResolveInfo candidate : candidates) {
+            if (candidate == null || candidate.activityInfo == null
+                    || !TextUtils.equals(packageName, candidate.activityInfo.packageName)) {
+                continue;
+            }
+            if (requiredActivity == null) {
+                if (selected == null) {
+                    selected = candidate;
+                }
+            } else if (TextUtils.equals(requiredActivity, candidate.activityInfo.name)) {
+                selected = candidate;
+                break;
+            }
+        }
+        if (selected == null || selected.activityInfo == null) {
+            return null;
+        }
+        ComponentName component = new ComponentName(
+                selected.activityInfo.packageName, selected.activityInfo.name);
+        return probe.setComponent(component);
+    }
+
+    private File imageDragDirectory() {
+        return new File(getCacheDir(), "drag");
+    }
+
+    private void cleanupStaleImageDragFiles() {
+        File[] files = imageDragDirectory().listFiles();
+        if (files == null) {
+            return;
+        }
+        long cutoff = System.currentTimeMillis() - IMAGE_DRAG_CACHE_TTL_MS;
+        for (File file : files) {
+            if (file.isFile() && file.lastModified() < cutoff) {
+                deleteImageDragFile(file);
+            }
+        }
+    }
+
+    private void scheduleImageDragFileDeletion(File file) {
+        mainHandler.postDelayed(() -> deleteImageDragFile(file), IMAGE_DRAG_CACHE_TTL_MS);
+    }
+
+    private static void deleteImageDragFile(File file) {
+        if (file != null && file.isFile() && !file.delete()) {
+            file.deleteOnExit();
+        }
+    }
+
     private boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
-                                     Intent intent, String targetPackage) {
-        if (activityDestroyed || intent == null || TextUtils.isEmpty(sourcePackage)
-                || TextUtils.isEmpty(targetPackage)
+                                     Intent intent, String targetPackage,
+                                     String sharedImageMimeType,
+                                     ParcelFileDescriptor sharedImageDescriptor) {
+        if (activityDestroyed || intent == null || TextUtils.isEmpty(sourcePackage)) {
+            return false;
+        }
+        RootVirtualDisplayHost sourceHost = findRootVirtualDisplayHost(sourceDisplayId);
+        if (TextUtils.isEmpty(targetPackage)
                 || TextUtils.equals(sourcePackage, targetPackage)
                 || TextUtils.equals(getPackageName(), targetPackage)) {
             return false;
         }
-        RootVirtualDisplayHost sourceHost = findRootVirtualDisplayHost(sourceDisplayId);
         if (sourceHost == null) {
             return false;
         }
@@ -4236,17 +4607,154 @@ public class MainActivity extends Activity {
         if (component != null && !TextUtils.equals(component.getPackageName(), targetPackage)) {
             return false;
         }
+        if (sharedImageDescriptor != null
+                && !TextUtils.isEmpty(sharedImageMimeType)
+                && sharedImageMimeType.startsWith("image/")) {
+            return enqueueCrossAppImageRoute(
+                    sourceSlot, sourcePackage, targetApp, intent,
+                    sharedImageMimeType, sharedImageDescriptor);
+        }
         RoutedAppLaunch routedLaunch = new RoutedAppLaunch(
-                sourceSlot, sourcePackage, targetApp, new Intent(intent));
+                sourceSlot, sourcePackage, targetApp, new Intent(intent), null);
         return mainHandler.post(() -> enqueueCrossAppRoute(routedLaunch));
+    }
+
+    private boolean enqueueCrossAppImageRoute(
+            int sourceSlot, String sourcePackage, LauncherApp targetApp,
+            Intent originalIntent, String mimeType,
+            ParcelFileDescriptor sharedImageDescriptor) {
+        ParcelFileDescriptor descriptorCopy = null;
+        File imageFile;
+        try {
+            descriptorCopy = ParcelFileDescriptor.dup(
+                    sharedImageDescriptor.getFileDescriptor());
+            imageFile = newSharedImageFile(mimeType);
+        } catch (IOException | RuntimeException e) {
+            if (descriptorCopy != null) {
+                try {
+                    descriptorCopy.close();
+                } catch (IOException ignored) {
+                }
+            }
+            Log.w(TAG, "Cannot retain cross-app shared image", e);
+            return false;
+        }
+        ParcelFileDescriptor retainedDescriptor = descriptorCopy;
+        Intent originalCopy = new Intent(originalIntent);
+        try {
+            imageDragIoExecutor.execute(() -> {
+                if (!copySharedImage(retainedDescriptor, imageFile)) {
+                    deleteImageDragFile(imageFile);
+                    return;
+                }
+                Uri localUri;
+                Intent localizedIntent;
+                try {
+                    localUri = FileProvider.getUriForFile(
+                            this, getPackageName() + ".drag-files", imageFile);
+                    grantUriPermission(targetApp.packageName, localUri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    localizedIntent = localizeImageShareIntent(
+                            originalCopy, localUri, mimeType);
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "Cannot authorize retained shared image", e);
+                    deleteImageDragFile(imageFile);
+                    return;
+                }
+                RoutedAppLaunch routedLaunch = new RoutedAppLaunch(
+                        sourceSlot, sourcePackage, targetApp,
+                        localizedIntent, imageFile);
+                if (!mainHandler.post(() -> enqueueCrossAppRoute(routedLaunch))) {
+                    deleteImageDragFile(imageFile);
+                }
+            });
+            return true;
+        } catch (RuntimeException e) {
+            try {
+                retainedDescriptor.close();
+            } catch (IOException ignored) {
+            }
+            deleteImageDragFile(imageFile);
+            Log.w(TAG, "Cannot queue cross-app image copy", e);
+            return false;
+        }
+    }
+
+    private File newSharedImageFile(String mimeType) throws IOException {
+        File directory = imageDragDirectory();
+        if ((!directory.isDirectory() && !directory.mkdirs()) || !directory.isDirectory()) {
+            throw new IOException("drag cache directory unavailable");
+        }
+        return new File(directory, "share-" + UUID.randomUUID()
+                + ImageFileNamePolicy.extensionForMime(mimeType));
+    }
+
+    private boolean copySharedImage(ParcelFileDescriptor descriptor, File destination) {
+        long copied = 0L;
+        try (ParcelFileDescriptor.AutoCloseInputStream input =
+                     new ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+             FileOutputStream output = new FileOutputStream(destination)) {
+            byte[] buffer = new byte[128 * 1024];
+            int count;
+            while ((count = input.read(buffer)) >= 0) {
+                if (count == 0) {
+                    continue;
+                }
+                copied += count;
+                if (copied > MAX_SHARED_IMAGE_BYTES) {
+                    throw new IOException("shared image exceeds OneStep limit");
+                }
+                output.write(buffer, 0, count);
+            }
+            output.flush();
+            if (copied == 0L) {
+                throw new IOException("empty shared image");
+            }
+            Log.i(TAG, "Retained cross-app shared image: bytes=" + copied);
+            return true;
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "Retain cross-app shared image failed after bytes=" + copied, e);
+            return false;
+        }
+    }
+
+    private Intent localizeImageShareIntent(Intent original, Uri localUri, String mimeType) {
+        Intent localized = new Intent(original)
+                .setType(mimeType)
+                .putExtra(Intent.EXTRA_STREAM, localUri)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                .putExtra(EXTRA_IMAGE_SHARE_ROUTE, true);
+        localized.setClipData(ClipData.newUri(
+                getContentResolver(), "OneStep image", localUri));
+        Intent nested = nestedShareIntent(original);
+        if (nested != null) {
+            localized.putExtra(Intent.EXTRA_INTENT,
+                    localizeImageShareIntent(nested, localUri, mimeType));
+        }
+        return localized;
+    }
+
+    private static Intent nestedShareIntent(Intent intent) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                return intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent.class);
+            }
+            return intent.getParcelableExtra(Intent.EXTRA_INTENT);
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private void enqueueCrossAppRoute(RoutedAppLaunch routedLaunch) {
         if (activityDestroyed || routedLaunch == null) {
+            if (routedLaunch != null) {
+                deleteImageDragFile(routedLaunch.sharedImageFile);
+            }
             return;
         }
         while (pendingCrossAppRoutes.size() >= MAX_PENDING_CROSS_APP_ROUTES) {
-            pendingCrossAppRoutes.removeFirst();
+            deleteImageDragFile(pendingCrossAppRoutes.removeFirst().sharedImageFile);
         }
         pendingCrossAppRoutes.addLast(routedLaunch);
         mainHandler.removeCallbacks(drainCrossAppRoutesRunnable);
@@ -4273,8 +4781,23 @@ public class MainActivity extends Activity {
         }
 
         pendingCrossAppRoutes.removeFirst();
-        routedLaunchIntents.put(launch.targetApp.packageName, launch.intent);
         int existingSlot = findSlot(launch.targetApp);
+        if (launch.sharedImageFile != null && existingSlot >= 0
+                && !embeddedSlotClosing[existingSlot]
+                && launchRoutedImageShare(launch, existingSlot)) {
+            Log.i(TAG, "Route retained image directly into existing target: source="
+                    + launch.sourcePackage + ", target=" + launch.targetApp.packageName
+                    + ", slot=" + existingSlot);
+            if (!pendingCrossAppRoutes.isEmpty()) {
+                mainHandler.postDelayed(
+                        drainCrossAppRoutesRunnable, CROSS_APP_ROUTE_RETRY_MS);
+            }
+            return;
+        }
+        if (launch.sharedImageFile != null) {
+            scheduleImageDragFileDeletion(launch.sharedImageFile);
+        }
+        routedLaunchIntents.put(launch.targetApp.packageName, launch.intent);
         if (existingSlot >= 0 && existingSlot != activeMainSlot
                 && !embeddedSlotClosing[existingSlot]) {
             switchMainSlot(existingSlot, true);
@@ -4288,6 +4811,44 @@ public class MainActivity extends Activity {
         if (!pendingCrossAppRoutes.isEmpty()) {
             mainHandler.postDelayed(drainCrossAppRoutesRunnable, CROSS_APP_ROUTE_RETRY_MS);
         }
+    }
+
+    private boolean launchRoutedImageShare(RoutedAppLaunch launch, int targetSlot) {
+        if (launch == null || launch.sharedImageFile == null
+                || !launch.sharedImageFile.isFile()
+                || targetSlot < 0 || targetSlot >= MAX_WINDOWS) {
+            return false;
+        }
+        LauncherApp targetApp = windowApps[targetSlot];
+        EmbeddedAppHost host = embeddedHosts[targetSlot];
+        if (targetApp == null || !targetApp.isSameInstance(launch.targetApp)
+                || !(host instanceof RootVirtualDisplayHost)) {
+            return false;
+        }
+        Uri uri;
+        Intent share;
+        try {
+            uri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".drag-files", launch.sharedImageFile);
+            grantUriPermission(targetApp.packageName, uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            share = createImageShareIntent(
+                    targetApp.packageName, uri,
+                    TextUtils.isEmpty(launch.intent.getType())
+                            ? "image/*" : launch.intent.getType());
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Cannot prepare retained image share", e);
+            return false;
+        }
+        if (share == null || !((RootVirtualDisplayHost) host)
+                .launchImageShareActivity(targetApp, share)) {
+            Log.w(TAG, "Retained image share launch failed: target="
+                    + targetApp.packageName);
+            return false;
+        }
+        scheduleImageDragFileDeletion(launch.sharedImageFile);
+        armImageSharePromotion(targetSlot, targetApp, share.getComponent());
+        return true;
     }
 
     private boolean isCrossAppRouteUiBusy() {
@@ -6709,13 +7270,31 @@ public class MainActivity extends Activity {
         final String sourcePackage;
         final LauncherApp targetApp;
         final Intent intent;
+        final File sharedImageFile;
 
         RoutedAppLaunch(int sourceSlot, String sourcePackage,
-                        LauncherApp targetApp, Intent intent) {
+                        LauncherApp targetApp, Intent intent, File sharedImageFile) {
             this.sourceSlot = sourceSlot;
             this.sourcePackage = sourcePackage;
             this.targetApp = targetApp;
             this.intent = intent;
+            this.sharedImageFile = sharedImageFile;
+        }
+    }
+
+    private static final class PendingImageSharePromotion {
+        final int targetSlot;
+        final String packageName;
+        final int displayId;
+        final ComponentName shareComponent;
+
+        PendingImageSharePromotion(
+                int targetSlot, String packageName,
+                int displayId, ComponentName shareComponent) {
+            this.targetSlot = targetSlot;
+            this.packageName = packageName;
+            this.displayId = displayId;
+            this.shareComponent = shareComponent;
         }
     }
 

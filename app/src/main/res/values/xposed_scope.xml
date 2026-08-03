@@ -5,5 +5,6 @@
         <item>com.android.settings</item>
         <item>com.android.systemui</item>
         <item>com.miui.home</item>
+        <item>com.google.android.apps.photos</item>
     </string-array>
 </resources>

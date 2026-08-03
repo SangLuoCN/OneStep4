@@ -4,9 +4,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Parcel;
+import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.os.SystemClock;
 import android.util.Log;
@@ -15,6 +17,7 @@ import android.view.Surface;
 
 import com.sangluo.onestep.system.display.DisplayOwnerPolicy;
 import com.sangluo.onestep.system.root.SystemServiceFailurePolicy;
+import com.sangluo.onestep.feature.drag.ImageShareIntentParser;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -48,7 +51,6 @@ public final class RootVirtualDisplayBridge extends Binder {
             IBinder.FIRST_CALL_TRANSACTION + 6;
     public static final int TRANSACTION_UPDATE_LAUNCH_SOURCE =
             IBinder.FIRST_CALL_TRANSACTION + 7;
-
     private static final int ROOT_UID = 0;
     private static final long LAUNCH_BYPASS_TIMEOUT_MS = 3000L;
     private static final long ROUTING_INPUT_ARM_TIMEOUT_MS = 5000L;
@@ -544,14 +546,72 @@ public final class RootVirtualDisplayBridge extends Binder {
         synchronized (launchRoutingLock) {
             callback = launchCallback;
         }
-        boolean routed = callback != null && callback.route(
-                sourceDisplayId, sourcePackage, intent, targetPackage);
+        ImageShareIntentParser.Payload sharedImage =
+                ImageShareIntentParser.find(intent);
+        ParcelFileDescriptor sharedDescriptor = sharedImage == null
+                ? null : openSharedImage(sharedImage.uri);
+        boolean routed;
+        try {
+            routed = callback != null && callback.route(
+                    sourceDisplayId, sourcePackage, intent, targetPackage,
+                    sharedImage == null ? "" : sharedImage.mimeType, sharedDescriptor);
+        } finally {
+            if (sharedDescriptor != null) {
+                try {
+                    sharedDescriptor.close();
+                } catch (IOException ignored) {
+                }
+            }
+        }
         if (routed) {
             synchronized (launchRoutingLock) {
                 lastInputUptime = 0L;
             }
         }
         return routed;
+    }
+
+    private ParcelFileDescriptor openSharedImage(Uri uri) {
+        if (uri == null) {
+            return null;
+        }
+        try {
+            ParcelFileDescriptor descriptor = context.getContentResolver()
+                    .openFileDescriptor(uri, "r");
+            if (descriptor != null) {
+                return descriptor;
+            }
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "share URI openFile failed: " + e.getClass().getSimpleName()
+                    + ", uri=" + uri);
+        }
+        try {
+            android.content.res.AssetFileDescriptor asset = context.getContentResolver()
+                    .openTypedAssetFileDescriptor(uri, "image/*", null);
+            if (asset != null) {
+                try {
+                    return ParcelFileDescriptor.dup(asset.getParcelFileDescriptor().getFileDescriptor());
+                } finally {
+                    asset.close();
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "share URI openTyped failed: " + e.getClass().getSimpleName()
+                    + ", uri=" + uri);
+        }
+        String path = uri.getPath();
+        if (path != null && path.startsWith("/raw/")) {
+            String decoded = Uri.decode(path.substring("/raw/".length()));
+            if (decoded.startsWith("/storage/emulated/") || decoded.startsWith("/sdcard/")) {
+                try {
+                    return ParcelFileDescriptor.open(new java.io.File(decoded),
+                            ParcelFileDescriptor.MODE_READ_ONLY);
+                } catch (IOException | RuntimeException e) {
+                    Log.w(TAG, "share raw path open failed: " + e.getClass().getSimpleName());
+                }
+            }
+        }
+        return null;
     }
 
     void notifyTaskEvent(int event, int displayId, int taskId, String packageName,
@@ -636,7 +696,8 @@ public final class RootVirtualDisplayBridge extends Binder {
         }
 
         boolean route(int sourceDisplayId, String sourcePackage,
-                      Intent intent, String targetPackage) {
+                      Intent intent, String targetPackage,
+                      String sharedImageMimeType, ParcelFileDescriptor sharedDescriptor) {
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
             try {
@@ -646,6 +707,11 @@ public final class RootVirtualDisplayBridge extends Binder {
                 data.writeInt(1);
                 intent.writeToParcel(data, 0);
                 data.writeString(targetPackage);
+                data.writeString(sharedImageMimeType);
+                data.writeInt(sharedDescriptor == null ? 0 : 1);
+                if (sharedDescriptor != null) {
+                    sharedDescriptor.writeToParcel(data, 0);
+                }
                 callback.transact(LAUNCH_CALLBACK_TRANSACTION, data, reply, 0);
                 reply.readException();
                 return reply.readInt() != 0;
@@ -691,6 +757,7 @@ public final class RootVirtualDisplayBridge extends Binder {
                 data.recycle();
             }
         }
+
 
         @Override
         public void binderDied() {

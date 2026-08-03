@@ -47,6 +47,7 @@ import android.util.TypedValue;
 import android.view.AttachedSurfaceControl;
 import android.view.Display;
 import android.view.Gravity;
+import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
@@ -89,6 +90,7 @@ import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.embedding.HostedInputFocusPolicy;
 import com.sangluo.onestep.feature.embedding.HostedSurfaceReusePolicy;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
+import com.sangluo.onestep.feature.drag.ImageShareTargetPolicy;
 import com.sangluo.onestep.feature.embedding.HostedTouchFocusPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayViewportPolicy;
@@ -208,9 +210,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         Rect[] calculateWindowRects();
         Intent consumeRoutedLaunchIntent(int slot, String packageName);
         boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
-                                 Intent intent, String targetPackage);
+                                 Intent intent, String targetPackage,
+                                 String sharedImageMimeType,
+                                 android.os.ParcelFileDescriptor sharedImageDescriptor);
         void onSystemTaskEvent(int event, int displayId, int taskId, String packageName,
                                String componentName);
+        boolean onImageDragTouch(int sourceSlot, MotionEvent event);
         void onHostedAppExitedAfterBack(
                 int slot, LauncherApp app, Runnable afterDesktopTakeover);
     }
@@ -253,6 +258,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final String EXTRA_CLONE_RESOLVER_CALLING_PACKAGE =
             "doubleapp_calling_package";
     private static final int[] HOSTED_TASK_RESOLUTION_DELAYS_MS = {80, 240, 700, 1500};
+    private static final int[] IMAGE_SHARE_READINESS_DELAYS_MS = {80, 180, 360, 700};
     private static final int[] BACK_EXIT_CHECK_DELAYS_MS = {60, 180, 450};
     private static final long ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS = 240L;
     private static final long HOSTED_SURFACE_REVEAL_AFTER_VISIBLE_MS = 96L;
@@ -310,6 +316,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private int lastViewHeight;
     private float touchDownX;
     private float touchDownY;
+    private float latestTouchX;
+    private float latestTouchY;
+    private float latestTouchRawX;
+    private float latestTouchRawY;
     private long touchDownTime;
     private long touchDownWallTime;
     private int touchTargetDisplayId = -1;
@@ -334,6 +344,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private int hostedTaskValidationGeneration;
     private boolean hostedTaskValidationInFlight;
     private int routedLaunchGeneration;
+    private int imageShareReadinessGeneration;
     private int backExitCheckGeneration;
     private int systemResumeExitCheckGeneration;
     private boolean surfaceDetached;
@@ -665,6 +676,21 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         syncLaunchRoutingSource();
         rootVirtualDisplayBridgeClient.allowNextLaunch(
                 getRootInputBridgeToken(), app.packageName);
+
+        boolean directImageShare = routedLaunchIntent != null
+                && routedLaunchIntent.getBooleanExtra(
+                MainActivity.EXTRA_IMAGE_SHARE_ROUTE, false);
+        if (directImageShare && systemLaunchAvailable
+                && !skipActivityOptionsLaunch
+                && startWithActivityOptions(
+                routedLaunchIntent, app, startEpoch, false)) {
+            launchRequestedPackage = app.packageName;
+            launchRequestedUserId = app.userId();
+            launchRequestedDisplayId = displayId;
+            scheduleHostedTaskResolution("direct image share " + app.packageName);
+            unavailableReason = "";
+            return true;
+        }
 
         if (routedLaunchIntent != null && systemLaunchAvailable
                 && !skipActivityOptionsLaunch
@@ -1560,6 +1586,17 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     @Override
     public boolean onTouch(View view, MotionEvent event) {
+        latestTouchX = event.getX();
+        latestTouchY = event.getY();
+        latestTouchRawX = event.getRawX();
+        latestTouchRawY = event.getRawY();
+        if (callbacks.onImageDragTouch(slot, event)) {
+            if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                clearTouchState();
+            }
+            return true;
+        }
         if (displayId < 0 || callbacks.mainSlotSwitchPendingSlot() >= 0
                 || callbacks.isWindowFrameAnimationRunning()) {
             if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
@@ -1672,6 +1709,128 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         touchTargetViewWidth = 0;
         touchTargetViewHeight = 0;
         touchTargetDisplayRotation = Surface.ROTATION_0;
+    }
+
+    boolean launchImageShareActivity(LauncherApp app, Intent shareIntent) {
+        if (app == null || shareIntent == null || !app.isCurrentUser()
+                || displayId <= DEFAULT_DISPLAY_ID || !hasVirtualDisplay()
+                || embeddedSlotClosing[slot]) {
+            return false;
+        }
+        LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS
+                ? windowApps[slot] : null;
+        if (currentApp == null || !currentApp.isSameInstance(app)) {
+            return false;
+        }
+        int startEpoch = callbacks.embeddedStartEpoch();
+        if (!shouldRunEmbeddedStart(startEpoch)) {
+            return false;
+        }
+        syncLaunchRoutingSource();
+        rootVirtualDisplayBridgeClient.allowNextLaunch(
+                getRootInputBridgeToken(), app.packageName);
+        boolean launched = startWithActivityOptions(
+                shareIntent, app, startEpoch, false);
+        if (!launched) {
+            return false;
+        }
+        launchRequestedPackage = app.packageName;
+        launchRequestedUserId = app.userId();
+        launchRequestedDisplayId = displayId;
+        scheduleHostedTaskResolution("image share " + app.packageName);
+        scheduleImageShareReadinessChecks(app);
+        return true;
+    }
+
+    private void scheduleImageShareReadinessChecks(LauncherApp app) {
+        if (app == null || displayId <= DEFAULT_DISPLAY_ID) {
+            return;
+        }
+        int generation = ++imageShareReadinessGeneration;
+        int targetDisplayId = displayId;
+        for (int delayMs : IMAGE_SHARE_READINESS_DELAYS_MS) {
+            mainHandler.postDelayed(() -> checkImageShareReadiness(
+                    generation, targetDisplayId, app), delayMs);
+        }
+    }
+
+    private void checkImageShareReadiness(
+            int generation, int targetDisplayId, LauncherApp expectedApp) {
+        if (generation != imageShareReadinessGeneration
+                || targetDisplayId != displayId || embeddedSlotClosing[slot]
+                || slot < 0 || slot >= MAX_WINDOWS
+                || windowApps[slot] == null
+                || !windowApps[slot].isSameInstance(expectedApp)) {
+            return;
+        }
+        try {
+            rootExecutor.execute(() -> {
+                ShellCommandResult stackList = runPrivilegedCommand(
+                        TASK_STACK_LIST_COMMAND,
+                        "check image share activity " + expectedApp.packageName, false);
+                if (generation != imageShareReadinessGeneration
+                        || targetDisplayId != displayId
+                        || stackList.exitCode != 0
+                        || TextUtils.isEmpty(stackList.output)) {
+                    return;
+                }
+                String topActivity = HostedTaskParser.findVisibleTopActivity(
+                        stackList.output, targetDisplayId, expectedApp.packageName);
+                if (TextUtils.isEmpty(topActivity)
+                        || !ImageShareTargetPolicy.isShareUiReady(
+                        expectedApp.packageName, topActivity)) {
+                    return;
+                }
+                mainHandler.post(() -> {
+                    if (generation != imageShareReadinessGeneration
+                            || targetDisplayId != displayId
+                            || embeddedSlotClosing[slot]
+                            || windowApps[slot] == null
+                            || !windowApps[slot].isSameInstance(expectedApp)) {
+                        return;
+                    }
+                    imageShareReadinessGeneration++;
+                    Log.i(TAG, "Image share activity ready: slot=" + slot
+                            + ", display=" + targetDisplayId
+                            + ", component=" + topActivity);
+                    callbacks.onSystemTaskEvent(
+                            RootVirtualDisplayBridge.TASK_EVENT_MOVED_TO_FRONT,
+                            targetDisplayId, hostedTaskId,
+                            expectedApp.packageName, topActivity);
+                });
+            });
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Queue image share readiness check failed for slot " + slot);
+        }
+    }
+
+    void cancelInjectedTouchForImageDrag() {
+        if (!touchStartedOnMain || touchSequenceSuppressed
+                || touchTargetDisplayId <= DEFAULT_DISPLAY_ID) {
+            return;
+        }
+        MotionEvent cancel = MotionEvent.obtain(
+                touchDownTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL,
+                latestTouchX, latestTouchY, 0);
+        try {
+            injectMotionDirect(cancel);
+            touchSequenceSuppressed = true;
+        } finally {
+            cancel.recycle();
+        }
+    }
+
+    boolean hasActiveTouchForImageDrag() {
+        return touchStartedOnMain && !touchReservedForSystemNavigation
+                && touchTargetDisplayId == displayId;
+    }
+
+    float getLatestTouchRawX() {
+        return latestTouchRawX;
+    }
+
+    float getLatestTouchRawY() {
+        return latestTouchRawY;
     }
 
     private boolean movedPastTouchSlop(float x, float y) {

@@ -18,6 +18,7 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
     private static final String SETTINGS_PACKAGE = "com.android.settings";
     private static final String SYSTEM_UI_PACKAGE = "com.android.systemui";
     private static final String MIUI_HOME_PACKAGE = "com.miui.home";
+    private static final String GOOGLE_PHOTOS_PACKAGE = "com.google.android.apps.photos";
     private static final String SECURE_WINDOW_PROPERTY = "onestep.hook.secure";
     private static final String STATUS_BAR_PROPERTY = "onestep.hook.statusbar";
     private static final String PRIMARY_HOME_ENHANCEMENT_PROPERTY =
@@ -32,6 +33,17 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam loadPackageParam) {
         if (loadPackageParam == null) {
+            return;
+        }
+        if (GOOGLE_PHOTOS_PACKAGE.equals(loadPackageParam.packageName)) {
+            OneStepGooglePhotosDragHook.install(
+                    loadPackageParam.packageName, loadPackageParam.processName);
+            return;
+        }
+        if (!SYSTEM_FRAMEWORK_PACKAGE.equals(loadPackageParam.packageName)
+                && !SETTINGS_PACKAGE.equals(loadPackageParam.packageName)
+                && !SYSTEM_UI_PACKAGE.equals(loadPackageParam.packageName)
+                && !MIUI_HOME_PACKAGE.equals(loadPackageParam.packageName)) {
             return;
         }
         if (SETTINGS_PACKAGE.equals(loadPackageParam.packageName)

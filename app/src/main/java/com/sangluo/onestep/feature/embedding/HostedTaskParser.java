@@ -141,6 +141,51 @@ public final class HostedTaskParser {
         return false;
     }
 
+    public static String findVisibleTopActivity(
+            String stackList, int targetDisplayId, String packageName) {
+        if (stackList == null || packageName == null || packageName.isEmpty()) {
+            return "";
+        }
+        int rootDisplayId = -1;
+        String[] lines = stackList.split("\n");
+        for (String rawLine : lines) {
+            String line = rawLine.trim();
+            if (isDisplayContainerLine(line)) {
+                rootDisplayId = parseIntAfter(line, "displayId=");
+                continue;
+            }
+            if (rootDisplayId != targetDisplayId || !line.startsWith("taskId=")
+                    || !line.contains("visible=true")) {
+                continue;
+            }
+            String component = parseTopActivity(line);
+            if (component.startsWith(packageName + "/")) {
+                return component;
+            }
+        }
+        return "";
+    }
+
+    private static String parseTopActivity(String taskLine) {
+        int marker = taskLine.indexOf("topActivity=");
+        if (marker < 0) {
+            return "";
+        }
+        int start = marker + "topActivity=".length();
+        String prefix = "ComponentInfo{";
+        if (taskLine.startsWith(prefix, start)) {
+            start += prefix.length();
+            int end = taskLine.indexOf('}', start);
+            return end > start ? taskLine.substring(start, end) : "";
+        }
+        int end = start;
+        while (end < taskLine.length()
+                && !Character.isWhitespace(taskLine.charAt(end))) {
+            end++;
+        }
+        return end > start ? taskLine.substring(start, end) : "";
+    }
+
     private static boolean hasDisplayableTopActivity(String taskLine) {
         int marker = taskLine.indexOf("topActivity=");
         if (marker < 0) {

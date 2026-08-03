@@ -59,6 +59,13 @@ REPLACE=""
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 HOOK_CONFIG_DIR="$MODPATH/hook-config"
+
+# Remove payloads left by pre-Google-Photos builds when upgrading in place.
+rm -f "$MODPATH/onestep_gallery_injector" \
+  "$MODPATH/onestep_gallery_hook.so" \
+  "$MODPATH/system/bin/onestep_gallery_injector" \
+  "$MODPATH/system/lib64/libonestep_gallery_hook.so" \
+  "$MODPATH/system/priv-app/OneStep4/onestep_gallery_hook.so"
 PREVIOUS_HOOK_CONFIG_DIR="/data/adb/modules/onestep4_ksu_privapp/hook-config"
 PREVIOUS_HOOK_CONFIG_EXISTS=false
 if [ -d "$PREVIOUS_HOOK_CONFIG_DIR" ]; then

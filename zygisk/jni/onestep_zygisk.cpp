@@ -41,8 +41,11 @@ constexpr const char *kHyperOsGestureNavigationHookClass =
         "com.sangluo.onestep.hook.HyperOsGestureNavigationBypassHook";
 constexpr const char *kHyperOsSystemUiGestureNavigationHookClass =
         "com.sangluo.onestep.hook.HyperOsSystemUiGestureNavigationBypassHook";
+constexpr const char *kGooglePhotosDragHookClass =
+        "com.sangluo.onestep.hook.OneStepGooglePhotosDragHook";
 constexpr const char *kMiuiHomeProcess = "com.miui.home";
 constexpr const char *kSystemUiProcess = "com.android.systemui";
+constexpr const char *kGooglePhotosProcess = "com.google.android.apps.photos";
 constexpr const char *kHyperOsVersionProperty = "ro.mi.os.version.name";
 constexpr const char *kDisableSecureWindowHook =
         "hook-config/disable-secure-window";
@@ -75,6 +78,27 @@ bool clearException(JNIEnv *env, const char *stage) {
     }
     return true;
 }
+
+template <typename T>
+bool jniResultUnavailable(JNIEnv *env, T result, const char *stage) {
+    bool hadException = clearException(env, stage);
+    return result == nullptr || hadException;
+}
+
+class JniExceptionGuard {
+public:
+    JniExceptionGuard(JNIEnv *environment, const char *callbackStage)
+            : env(environment), stage(callbackStage) {
+    }
+
+    ~JniExceptionGuard() {
+        clearException(env, stage);
+    }
+
+private:
+    JNIEnv *env;
+    const char *stage;
+};
 
 bool containsIgnoreCase(const char *text, const char *needle) {
     if (text == nullptr || needle == nullptr || *needle == '\0') {
@@ -199,12 +223,12 @@ void *readModuleFile(int moduleFd, const char *path, size_t *sizeOut) {
 
 jobject systemClassLoader(JNIEnv *env) {
     jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
-    if (classLoaderClass == nullptr || clearException(env, "find ClassLoader")) {
+    if (jniResultUnavailable(env, classLoaderClass, "find ClassLoader")) {
         return nullptr;
     }
     jmethodID method = env->GetStaticMethodID(
             classLoaderClass, "getSystemClassLoader", "()Ljava/lang/ClassLoader;");
-    if (method == nullptr || clearException(env, "getSystemClassLoader method")) {
+    if (jniResultUnavailable(env, method, "getSystemClassLoader method")) {
         return nullptr;
     }
     jobject loader = env->CallStaticObjectMethod(classLoaderClass, method);
@@ -221,18 +245,18 @@ jobject makeAliuHookClassLoader(JNIEnv *env, int moduleFd, jobject parent) {
         return nullptr;
     }
     jobject buffer = env->NewDirectByteBuffer(dexData, static_cast<jlong>(dexSize));
-    if (buffer == nullptr || clearException(env, "create AliuHook dex buffer")) {
+    if (jniResultUnavailable(env, buffer, "create AliuHook dex buffer")) {
         free(dexData);
         return nullptr;
     }
 
     jclass byteBufferClass = env->FindClass("java/nio/ByteBuffer");
-    if (byteBufferClass == nullptr || clearException(env, "find ByteBuffer")) {
+    if (jniResultUnavailable(env, byteBufferClass, "find ByteBuffer")) {
         free(dexData);
         return nullptr;
     }
     jobjectArray buffers = env->NewObjectArray(1, byteBufferClass, buffer);
-    if (buffers == nullptr || clearException(env, "create AliuHook dex buffer array")) {
+    if (jniResultUnavailable(env, buffers, "create AliuHook dex buffer array")) {
         free(dexData);
         return nullptr;
     }
@@ -242,13 +266,13 @@ jobject makeAliuHookClassLoader(JNIEnv *env, int moduleFd, jobject parent) {
              "/proc/self/fd/%d/zygisk-runtime/%s", moduleFd, kAbi);
     jstring libraryPathString = env->NewStringUTF(libraryPath);
     jclass loaderClass = env->FindClass("dalvik/system/InMemoryDexClassLoader");
-    if (loaderClass == nullptr || clearException(env, "find InMemoryDexClassLoader")) {
+    if (jniResultUnavailable(env, loaderClass, "find InMemoryDexClassLoader")) {
         return nullptr;
     }
     jmethodID constructor = env->GetMethodID(
             loaderClass, "<init>",
             "([Ljava/nio/ByteBuffer;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
-    if (constructor == nullptr || clearException(env, "InMemoryDexClassLoader constructor")) {
+    if (jniResultUnavailable(env, constructor, "InMemoryDexClassLoader constructor")) {
         return nullptr;
     }
     jobject loader = env->NewObject(loaderClass, constructor, buffers,
@@ -264,12 +288,12 @@ bool initializeAliuHook(JNIEnv *env, jobject loader) {
     jmethodID forName = classClass == nullptr ? nullptr : env->GetStaticMethodID(
             classClass, "forName",
             "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;");
-    if (forName == nullptr || clearException(env, "Class.forName method")) {
+    if (jniResultUnavailable(env, forName, "Class.forName method")) {
         return false;
     }
     jstring name = env->NewStringUTF("de.robv.android.xposed.XposedBridge");
     jobject result = env->CallStaticObjectMethod(classClass, forName, name, JNI_TRUE, loader);
-    if (result == nullptr || clearException(env, "initialize AliuHook")) {
+    if (jniResultUnavailable(env, result, "initialize AliuHook")) {
         return false;
     }
     return true;
@@ -277,13 +301,13 @@ bool initializeAliuHook(JNIEnv *env, jobject loader) {
 
 jobject makeAppClassLoader(JNIEnv *env, jobject parent) {
     jclass loaderClass = env->FindClass("dalvik/system/DexClassLoader");
-    if (loaderClass == nullptr || clearException(env, "find DexClassLoader")) {
+    if (jniResultUnavailable(env, loaderClass, "find DexClassLoader")) {
         return nullptr;
     }
     jmethodID constructor = env->GetMethodID(
             loaderClass, "<init>",
             "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
-    if (constructor == nullptr || clearException(env, "DexClassLoader constructor")) {
+    if (jniResultUnavailable(env, constructor, "DexClassLoader constructor")) {
         return nullptr;
     }
     jstring apkPath = env->NewStringUTF(kOneStepApk);
@@ -299,13 +323,13 @@ jclass loadHookClass(JNIEnv *env, jobject appLoader) {
     jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
     jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
             classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    if (loadClass == nullptr || clearException(env, "ClassLoader.loadClass method")) {
+    if (jniResultUnavailable(env, loadClass, "ClassLoader.loadClass method")) {
         return nullptr;
     }
     jstring className = env->NewStringUTF(kHookClass);
     auto hookClass = static_cast<jclass>(
             env->CallObjectMethod(appLoader, loadClass, className));
-    if (hookClass == nullptr || clearException(env, "load OneStep hook class")) {
+    if (jniResultUnavailable(env, hookClass, "load OneStep hook class")) {
         return nullptr;
     }
     return hookClass;
@@ -315,15 +339,15 @@ jclass loadStatusBarOverlayHookClass(JNIEnv *env, jobject appLoader) {
     jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
     jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
             classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    if (loadClass == nullptr
-            || clearException(env, "ClassLoader.loadClass method for status-bar overlay")) {
+    if (jniResultUnavailable(env, loadClass,
+            "ClassLoader.loadClass method for status-bar overlay")) {
         return nullptr;
     }
     jstring className = env->NewStringUTF(kStatusBarOverlayHookClass);
     auto overlayHookClass = static_cast<jclass>(
             env->CallObjectMethod(appLoader, loadClass, className));
-    if (overlayHookClass == nullptr
-            || clearException(env, "load OneStep status-bar overlay hook class")) {
+    if (jniResultUnavailable(env, overlayHookClass,
+            "load OneStep status-bar overlay hook class")) {
         return nullptr;
     }
     return overlayHookClass;
@@ -333,15 +357,15 @@ jclass loadPrimaryHomeHookClass(JNIEnv *env, jobject appLoader) {
     jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
     jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
             classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    if (loadClass == nullptr
-            || clearException(env, "ClassLoader.loadClass method for primary HOME")) {
+    if (jniResultUnavailable(env, loadClass,
+            "ClassLoader.loadClass method for primary HOME")) {
         return nullptr;
     }
     jstring className = env->NewStringUTF(kPrimaryHomeHookClass);
     auto primaryHomeClass = static_cast<jclass>(
             env->CallObjectMethod(appLoader, loadClass, className));
-    if (primaryHomeClass == nullptr
-            || clearException(env, "load OneStep primary HOME hook class")) {
+    if (jniResultUnavailable(env, primaryHomeClass,
+            "load OneStep primary HOME hook class")) {
         return nullptr;
     }
     return primaryHomeClass;
@@ -351,15 +375,15 @@ jclass loadRootVirtualDisplayCompatHookClass(JNIEnv *env, jobject appLoader) {
     jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
     jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
             classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    if (loadClass == nullptr
-            || clearException(env, "ClassLoader.loadClass method for root display compat")) {
+    if (jniResultUnavailable(env, loadClass,
+            "ClassLoader.loadClass method for root display compat")) {
         return nullptr;
     }
     jstring className = env->NewStringUTF(kRootVirtualDisplayCompatHookClass);
     auto compatHookClass = static_cast<jclass>(
             env->CallObjectMethod(appLoader, loadClass, className));
-    if (compatHookClass == nullptr
-            || clearException(env, "load OneStep root display compat hook class")) {
+    if (jniResultUnavailable(env, compatHookClass,
+            "load OneStep root display compat hook class")) {
         return nullptr;
     }
     return compatHookClass;
@@ -369,15 +393,15 @@ jclass loadHyperOsGestureNavigationHookClass(JNIEnv *env, jobject appLoader) {
     jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
     jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
             classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    if (loadClass == nullptr
-            || clearException(env, "ClassLoader.loadClass method for HyperOS gesture")) {
+    if (jniResultUnavailable(env, loadClass,
+            "ClassLoader.loadClass method for HyperOS gesture")) {
         return nullptr;
     }
     jstring className = env->NewStringUTF(kHyperOsGestureNavigationHookClass);
     auto gestureHookClass = static_cast<jclass>(
             env->CallObjectMethod(appLoader, loadClass, className));
-    if (gestureHookClass == nullptr
-            || clearException(env, "load HyperOS gesture hook class")) {
+    if (jniResultUnavailable(env, gestureHookClass,
+            "load HyperOS gesture hook class")) {
         return nullptr;
     }
     return gestureHookClass;
@@ -387,18 +411,35 @@ jclass loadHyperOsSystemUiGestureNavigationHookClass(JNIEnv *env, jobject appLoa
     jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
     jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
             classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
-    if (loadClass == nullptr
-            || clearException(env, "ClassLoader.loadClass method for HyperOS SystemUI gesture")) {
+    if (jniResultUnavailable(env, loadClass,
+            "ClassLoader.loadClass method for HyperOS SystemUI gesture")) {
         return nullptr;
     }
     jstring className = env->NewStringUTF(kHyperOsSystemUiGestureNavigationHookClass);
     auto gestureHookClass = static_cast<jclass>(
             env->CallObjectMethod(appLoader, loadClass, className));
-    if (gestureHookClass == nullptr
-            || clearException(env, "load HyperOS SystemUI gesture hook class")) {
+    if (jniResultUnavailable(env, gestureHookClass,
+            "load HyperOS SystemUI gesture hook class")) {
         return nullptr;
     }
     return gestureHookClass;
+}
+
+jclass loadNamedHookClass(JNIEnv *env, jobject appLoader, const char *name,
+                          const char *stage) {
+    jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
+    jmethodID loadClass = classLoaderClass == nullptr ? nullptr : env->GetMethodID(
+            classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    if (jniResultUnavailable(env, loadClass, stage)) {
+        return nullptr;
+    }
+    jstring className = env->NewStringUTF(name);
+    auto hookClass = static_cast<jclass>(
+            env->CallObjectMethod(appLoader, loadClass, className));
+    if (jniResultUnavailable(env, hookClass, stage)) {
+        return nullptr;
+    }
+    return hookClass;
 }
 
 bool isProcess(JNIEnv *env, jstring niceName, const char *expected) {
@@ -406,11 +447,26 @@ bool isProcess(JNIEnv *env, jstring niceName, const char *expected) {
         return false;
     }
     const char *name = env->GetStringUTFChars(niceName, nullptr);
-    if (name == nullptr || clearException(env, "read app process name")) {
+    if (jniResultUnavailable(env, name, "read app process name")) {
         return false;
     }
     bool matches = strcmp(name, expected) == 0;
     env->ReleaseStringUTFChars(niceName, name);
+    return matches;
+}
+
+bool isPackageDataDirectory(JNIEnv *env, jstring appDataDir, const char *expected) {
+    if (appDataDir == nullptr || expected == nullptr) {
+        return false;
+    }
+    const char *path = env->GetStringUTFChars(appDataDir, nullptr);
+    if (jniResultUnavailable(env, path, "read app data directory")) {
+        return false;
+    }
+    const char *lastSlash = strrchr(path, '/');
+    const char *directoryName = lastSlash == nullptr ? path : lastSlash + 1;
+    bool matches = strcmp(directoryName, expected) == 0;
+    env->ReleaseStringUTFChars(appDataDir, path);
     return matches;
 }
 
@@ -428,18 +484,30 @@ public:
     }
 
     void preAppSpecialize(zygisk::AppSpecializeArgs *args) override {
+        JniExceptionGuard exceptionGuard(env, "finish app pre-specialization");
         bool isMiuiHome = args != nullptr
                 && isProcess(env, args->nice_name, kMiuiHomeProcess);
         bool isSystemUi = args != nullptr
                 && isProcess(env, args->nice_name, kSystemUiProcess);
-        if ((!isMiuiHome && !isSystemUi) || !isHyperOs()) {
+        bool wantsHyperOsHook = (isMiuiHome || isSystemUi) && isHyperOs();
+        bool googlePhotosNameMatched = args != nullptr
+                && isProcess(env, args->nice_name, kGooglePhotosProcess);
+        bool googlePhotosDataDirMatched = args != nullptr
+                && isPackageDataDirectory(
+                        env, args->app_data_dir, kGooglePhotosProcess);
+        bool isGooglePhotos = googlePhotosNameMatched || googlePhotosDataDirMatched;
+        if (!wantsHyperOsHook && !isGooglePhotos) {
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
             return;
         }
         if (activeLsposedModuleInstalled()) {
-            LOGI("LSPosed backend selected; skip standalone HyperOS app hook");
+            LOGI("LSPosed backend selected; skip standalone app hook");
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
             return;
+        }
+        if (isGooglePhotos) {
+            LOGI("Google Photos source process selected via %s",
+                 googlePhotosNameMatched ? "process name" : "app data directory");
         }
         int moduleFd = api->getModuleDir();
         if (moduleFd < 0) {
@@ -454,45 +522,65 @@ public:
             jobject appLoader = makeAppClassLoader(env, aliuhookLoader);
             jclass localGestureHookClass = nullptr;
             if (appLoader != nullptr) {
-                localGestureHookClass = isMiuiHome
-                        ? loadHyperOsGestureNavigationHookClass(env, appLoader)
-                        : loadHyperOsSystemUiGestureNavigationHookClass(env, appLoader);
+                if (wantsHyperOsHook) {
+                    localGestureHookClass = isMiuiHome
+                            ? loadHyperOsGestureNavigationHookClass(env, appLoader)
+                            : loadHyperOsSystemUiGestureNavigationHookClass(env, appLoader);
+                }
+                if (isGooglePhotos) {
+                    jclass localSource = loadNamedHookClass(
+                            env, appLoader, kGooglePhotosDragHookClass,
+                            "load Google Photos drag hook class");
+                    if (localSource != nullptr) {
+                        googlePhotosDragHookClass = static_cast<jclass>(
+                                env->NewGlobalRef(localSource));
+                    }
+                }
             }
             if (localGestureHookClass != nullptr) {
-                appProcessSystemClassLoaderRef = env->NewGlobalRef(systemLoader);
                 hyperOsAppHookClass = static_cast<jclass>(
                         env->NewGlobalRef(localGestureHookClass));
                 LOGI("HyperOS gesture hook runtime prepared for %s in %s",
                      kAbi, isMiuiHome ? kMiuiHomeProcess : kSystemUiProcess);
             }
+            if (hyperOsAppHookClass != nullptr
+                    || googlePhotosDragHookClass != nullptr) {
+                appProcessSystemClassLoaderRef = env->NewGlobalRef(systemLoader);
+            }
         }
         close(moduleFd);
-        if (hyperOsAppHookClass == nullptr
-                || appProcessSystemClassLoaderRef == nullptr) {
+        if (appProcessSystemClassLoaderRef == nullptr) {
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
         }
     }
 
     void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
-        if (hyperOsAppHookClass == nullptr
-                || appProcessSystemClassLoaderRef == nullptr) {
+        JniExceptionGuard exceptionGuard(env, "finish app post-specialization");
+        if (appProcessSystemClassLoaderRef == nullptr) {
             return;
         }
-        jmethodID bootstrap = env->GetStaticMethodID(
-                hyperOsAppHookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
-        if (bootstrap == nullptr
-                || clearException(env, "find HyperOS gesture hook bootstrap")) {
-            LOGE("HyperOS gesture hook bootstrap was unavailable");
-            return;
+        if (hyperOsAppHookClass != nullptr) {
+            jmethodID bootstrap = env->GetStaticMethodID(
+                    hyperOsAppHookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
+            if (jniResultUnavailable(
+                    env, bootstrap, "find HyperOS gesture hook bootstrap")) {
+                LOGE("HyperOS gesture hook bootstrap was unavailable");
+            } else {
+                env->CallStaticVoidMethod(
+                        hyperOsAppHookClass, bootstrap, appProcessSystemClassLoaderRef);
+                if (!clearException(env, "run HyperOS gesture hook bootstrap")) {
+                    LOGI("HyperOS gesture hook bootstrap started");
+                }
+            }
         }
-        env->CallStaticVoidMethod(
-                hyperOsAppHookClass, bootstrap, appProcessSystemClassLoaderRef);
-        if (!clearException(env, "run HyperOS gesture hook bootstrap")) {
-            LOGI("HyperOS gesture hook bootstrap started");
+        if (googlePhotosDragHookClass != nullptr) {
+            invokeAppHookInstall(googlePhotosDragHookClass, "Google Photos source",
+                    kGooglePhotosProcess, kGooglePhotosProcess);
         }
     }
 
     void preServerSpecialize(zygisk::ServerSpecializeArgs *) override {
+        JniExceptionGuard exceptionGuard(env, "finish server pre-specialization");
         int moduleFd = api->getModuleDir();
         if (moduleFd < 0) {
             LOGE("module directory unavailable");
@@ -552,6 +640,7 @@ public:
     }
 
     void postServerSpecialize(const zygisk::ServerSpecializeArgs *) override {
+        JniExceptionGuard exceptionGuard(env, "finish server post-specialization");
         if (lsposedBackendSelected) {
             LOGI("LSPosed backend selected for system_server");
             return;
@@ -571,8 +660,8 @@ public:
         } else {
             jmethodID compatBootstrap = env->GetStaticMethodID(
                     rootDisplayCompatHookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
-            if (compatBootstrap == nullptr
-                    || clearException(env, "find root display compat hook bootstrap")) {
+            if (jniResultUnavailable(
+                    env, compatBootstrap, "find root display compat hook bootstrap")) {
                 LOGE("Root display compat hook bootstrap was unavailable");
             } else {
                 env->CallStaticVoidMethod(
@@ -589,7 +678,7 @@ public:
         } else {
             jmethodID bootstrap = env->GetStaticMethodID(
                     hookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
-            if (bootstrap == nullptr || clearException(env, "find hook bootstrap")) {
+            if (jniResultUnavailable(env, bootstrap, "find hook bootstrap")) {
                 LOGE("Secure-window hook bootstrap was unavailable");
             } else {
                 env->CallStaticVoidMethod(hookClass, bootstrap, systemClassLoaderRef);
@@ -613,8 +702,8 @@ public:
                     statusBarOverlayHookClass,
                     "bootstrap",
                     "(Ljava/lang/ClassLoader;)V");
-            if (overlayBootstrap == nullptr
-                    || clearException(env, "find status-bar overlay hook bootstrap")) {
+            if (jniResultUnavailable(
+                    env, overlayBootstrap, "find status-bar overlay hook bootstrap")) {
                 LOGE("Status-bar overlay hook bootstrap was unavailable");
                 writeStatusHookDiagnostic("status-bar bootstrap method unavailable");
             } else {
@@ -634,8 +723,8 @@ public:
         } else {
             jmethodID primaryHomeBootstrap = env->GetStaticMethodID(
                     primaryHomeHookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
-            if (primaryHomeBootstrap == nullptr
-                    || clearException(env, "find primary HOME hook bootstrap")) {
+            if (jniResultUnavailable(
+                    env, primaryHomeBootstrap, "find primary HOME hook bootstrap")) {
                 LOGE("Primary HOME hook bootstrap was unavailable");
             } else {
                 env->CallStaticVoidMethod(
@@ -649,6 +738,22 @@ public:
     }
 
 private:
+    void invokeAppHookInstall(jclass targetClass, const char *label,
+                              const char *packageName, const char *processName) {
+        jmethodID install = env->GetStaticMethodID(
+                targetClass, "install", "(Ljava/lang/String;Ljava/lang/String;)V");
+        if (jniResultUnavailable(env, install, "find image drag hook install")) {
+            LOGE("Image drag %s hook install method unavailable", label);
+            return;
+        }
+        jstring packageValue = env->NewStringUTF(packageName);
+        jstring processValue = env->NewStringUTF(processName);
+        env->CallStaticVoidMethod(targetClass, install, packageValue, processValue);
+        if (!clearException(env, "run image drag hook install")) {
+            LOGI("Image drag %s hook installed in %s", label, processName);
+        }
+    }
+
     static void closeStatusHookDiagnostic() {
         if (statusHookDiagnosticFd >= 0) {
             close(statusHookDiagnosticFd);
@@ -662,6 +767,7 @@ private:
     jclass primaryHomeHookClass = nullptr;
     jclass rootDisplayCompatHookClass = nullptr;
     jclass hyperOsAppHookClass = nullptr;
+    jclass googlePhotosDragHookClass = nullptr;
     jobject appClassLoaderRef = nullptr;
     jobject systemClassLoaderRef = nullptr;
     jobject appProcessSystemClassLoaderRef = nullptr;

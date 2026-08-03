@@ -119,6 +119,25 @@ public class HostedTaskParserTest {
     }
 
     @Test
+    public void findsVisibleTopActivityOnExactDisplay() {
+        String stackList = "Stack id=4 displayId=12 userId=0\n"
+                + "  taskId=42 visible=true topActivity=ComponentInfo{"
+                + "com.tencent.mobileqq/.activity.ForwardRecentActivity}\n"
+                + "Stack id=5 displayId=13 userId=0\n"
+                + "  taskId=43 visible=true topActivity=com.tencent.mobileqq/"
+                + ".activity.SplashActivity\n";
+
+        assertEquals("com.tencent.mobileqq/.activity.ForwardRecentActivity",
+                HostedTaskParser.findVisibleTopActivity(
+                        stackList, 12, "com.tencent.mobileqq"));
+        assertEquals("com.tencent.mobileqq/.activity.SplashActivity",
+                HostedTaskParser.findVisibleTopActivity(
+                        stackList, 13, "com.tencent.mobileqq"));
+        assertEquals("", HostedTaskParser.findVisibleTopActivity(
+                stackList, 12, "com.tencent.mm"));
+    }
+
+    @Test
     public void findsActivityCountForExactTask() {
         String activities = "* Task{root #333 type=home sz=1}\n"
                 + "  * Task{app #42 type=standard visible=true sz=1}\n"

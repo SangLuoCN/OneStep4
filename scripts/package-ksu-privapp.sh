@@ -67,6 +67,15 @@ for required_file in \
     fi
 done
 
+for zygisk_library in \
+    "$ZYGISK_LIB_DIR/arm64-v8a/libonestep_zygisk.so" \
+    "$ZYGISK_LIB_DIR/armeabi-v7a/libonestep_zygisk.so"; do
+    if strings "$zygisk_library" | grep -q 'OneStepImageDragTargetHook'; then
+        echo "Zygisk 构建产物仍包含已移除的 QQ 目标 Hook：$zygisk_library" >&2
+        exit 1
+    fi
+done
+
 APK_SHA256="$(sha256_file "$APK_PATH")"
 OUT_ZIP="$OUT_DIR/OneStep4-$APP_VERSION_NAME-ksu-$(date +%Y%m%d-%H%M%S).zip"
 
@@ -172,6 +181,14 @@ for required_entry in \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk"; do
     if [[ ! -s "$VERIFY_DIR/$required_entry" ]]; then
         echo "KernelSU ZIP 内缺少 Zygisk Hook：$required_entry" >&2
+        exit 1
+    fi
+done
+for packaged_zygisk_library in \
+    "$VERIFY_DIR/zygisk-payload/arm64-v8a.so" \
+    "$VERIFY_DIR/zygisk-payload/armeabi-v7a.so"; do
+    if strings "$packaged_zygisk_library" | grep -q 'OneStepImageDragTargetHook'; then
+        echo "KernelSU ZIP 仍包含已移除的 QQ 目标 Hook：$packaged_zygisk_library" >&2
         exit 1
     fi
 done

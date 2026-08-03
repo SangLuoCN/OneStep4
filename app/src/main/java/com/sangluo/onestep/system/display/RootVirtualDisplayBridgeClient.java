@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Parcel;
+import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.util.Log;
 import android.view.Surface;
@@ -214,7 +215,9 @@ public final class RootVirtualDisplayBridgeClient {
 
     public interface CrossAppLaunchListener {
         boolean onCrossAppLaunch(int sourceDisplayId, String sourcePackage,
-                                 Intent intent, String targetPackage);
+                                 Intent intent, String targetPackage,
+                                 String sharedImageMimeType,
+                                 ParcelFileDescriptor sharedImageDescriptor);
     }
 
     public interface TaskEventListener {
@@ -261,14 +264,26 @@ public final class RootVirtualDisplayBridgeClient {
             Intent intent = data.readInt() == 0
                     ? null : Intent.CREATOR.createFromParcel(data);
             String targetPackage = data.readString();
+            String sharedImageMimeType = data.dataAvail() > 0 ? data.readString() : "";
+            ParcelFileDescriptor sharedImageDescriptor = data.dataAvail() > 0
+                    && data.readInt() != 0
+                    ? ParcelFileDescriptor.CREATOR.createFromParcel(data) : null;
             CrossAppLaunchListener listener = crossAppLaunchListener;
             boolean accepted = false;
             try {
                 accepted = listener != null && listener.onCrossAppLaunch(
-                        sourceDisplayId, sourcePackage, intent, targetPackage);
+                        sourceDisplayId, sourcePackage, intent, targetPackage,
+                        sharedImageMimeType, sharedImageDescriptor);
             } catch (RuntimeException e) {
                 Log.w(TAG, "Cross-app launch callback handler failed: "
                         + e.getClass().getSimpleName());
+            } finally {
+                if (sharedImageDescriptor != null) {
+                    try {
+                        sharedImageDescriptor.close();
+                    } catch (java.io.IOException ignored) {
+                    }
+                }
             }
             reply.writeNoException();
             reply.writeInt(accepted ? 1 : 0);
