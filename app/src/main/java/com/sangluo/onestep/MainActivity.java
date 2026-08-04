@@ -40,6 +40,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
+import android.os.UserManager;
 import android.provider.Settings;
 import android.provider.MediaStore;
 import android.text.TextUtils;
@@ -212,6 +213,7 @@ public class MainActivity extends Activity {
     private static final long DEFAULT_HOME_RESTORE_DELAY_MS = 80L;
     private static final long HOSTED_DISPLAY_FOCUS_DELAY_MS = 80L;
     private static final long BLOCKED_RECENTS_RESTORE_TIMEOUT_MS = 1000L;
+    private static final long DIRECT_BOOT_BRIDGE_PREWARM_RELEASE_DELAY_MS = 5000L;
     private static final int MAX_PENDING_CROSS_APP_ROUTES = 8;
     private static final long IMAGE_DRAG_CACHE_TTL_MS = 10L * 60L * 1000L;
     private static final long IMAGE_DRAG_CALLBACK_TIMEOUT_MS = 5000L;
@@ -257,6 +259,7 @@ public class MainActivity extends Activity {
     private Set<String> selectedTopAppInstanceKeys = Collections.emptySet();
     private List<LauncherApp> builtInDesktopApps = Collections.emptyList();
     private LauncherApp builtInDesktopApp;
+    private boolean builtInDesktopResolutionFresh;
     private boolean oneStepDesktopSelected = true;
     private LauncherAppRepository launcherAppRepository;
     private final PersistentRootShell persistentRootShell = new PersistentRootShell();
@@ -537,7 +540,15 @@ public class MainActivity extends Activity {
     private boolean exitOneStepPending;
     private boolean activityDestroyed;
     private boolean activityResumed;
+    private boolean activityLifecycleResumed;
     private boolean nonDefaultDisplayHomeRelay;
+    private boolean directBootHome;
+    private boolean directBootUnlockReceiverRegistered;
+    private boolean directBootInitializationRequested;
+    private boolean fullHomeInitialized;
+    private FrameLayout directBootRootContainer;
+    private RootVirtualDisplayHost directBootBridgePrewarmHost;
+    private LauncherApp directBootPrewarmDesktopApp;
     private boolean embeddedResourcesReleased;
     private WindowAnimationController windowAnimationController;
     private boolean windowSwitchAnimationCritical;
@@ -606,6 +617,14 @@ public class MainActivity extends Activity {
     private final Runnable pipMonitorRunnable = this::queryPipStateAsync;
     private final Runnable pipDockBoundsUpdateRunnable = this::requestPipDockFromSlot;
     private final Runnable runningTaskMonitorRunnable = this::queryRunningTaskStatusesAsync;
+    private final BroadcastReceiver directBootUnlockReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (Intent.ACTION_USER_UNLOCKED.equals(intent == null ? null : intent.getAction())) {
+                initializeFullHomeAfterDirectBootUnlock();
+            }
+        }
+    };
     private final ImageDragBridgeRegistry.Listener imageDragBridgeListener =
             new ImageDragBridgeRegistry.Listener() {
                 @Override public boolean canAccept(
@@ -636,9 +655,23 @@ public class MainActivity extends Activity {
             redirectHomeToDefaultDisplay();
             return;
         }
+        if (!isCurrentUserUnlocked()) {
+            directBootHome = true;
+            showDirectBootHome();
+            registerDirectBootUnlockReceiver();
+            Log.i(TAG, "Showing Direct Boot HOME until user unlock");
+            return;
+        }
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        initializeFullHome();
+    }
+
+    /** Builds the HOME surface while keeping the already-rendered Direct Boot surface alive. */
+    private void initializeFullHome() {
+        directBootHome = false;
+        unregisterDirectBootUnlockReceiver();
         applyOneStepRotationPolicy(getResources().getConfiguration());
         defaultDisplayInstance = new WeakReference<>(this);
-        requestWindowFeature(Window.FEATURE_NO_TITLE);
         Window hostWindow = getWindow();
         hostWindow.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
         hostWindow.setFormat(PixelFormat.OPAQUE);
@@ -658,10 +691,22 @@ public class MainActivity extends Activity {
         windowAnimationController = createWindowAnimationController();
         initializeEmbeddedBridgeState();
         launcherAppRepository = new LauncherAppRepository(this);
-        launcherApps = launcherAppRepository.loadLauncherApps();
+        // App/icon enumeration is the most expensive part of HOME creation. Start with the
+        // stable desktop shell and fill the launcher entries after the first frame is drawn.
+        launcherApps = Collections.emptyList();
         reconcileTopAppListConfiguration();
-        loadBuiltInDesktopApps();
+        loadBuiltInDesktopAppsForStartup();
+        reconcileDirectBootPrewarmDesktop();
         setContentView(createDesktop());
+        directBootRootContainer = null;
+        finishFullHomeInitialization();
+    }
+
+    private void finishFullHomeInitialization() {
+        if (activityDestroyed || fullHomeInitialized) {
+            return;
+        }
+        Window hostWindow = getWindow();
         imageDragSessionController = createImageDragSessionController();
         ImageDragBridgeRegistry.register(imageDragBridgeListener);
         cleanupStaleImageDragFiles();
@@ -697,14 +742,29 @@ public class MainActivity extends Activity {
         mainHandler.post(this::requestDesktopHomeInMain);
         initMediaMonitoring();
         initAmapNavigationMonitoring();
+        fullHomeInitialized = true;
+        requestLauncherIconRefresh("initial HOME load");
+        mainHandler.postDelayed(this::releaseDirectBootBridgePrewarmHost,
+                DIRECT_BOOT_BRIDGE_PREWARM_RELEASE_DELAY_MS);
+        if (activityLifecycleResumed) {
+            resumeFullHome();
+        }
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        if (nonDefaultDisplayHomeRelay) {
+        activityLifecycleResumed = true;
+        if (nonDefaultDisplayHomeRelay || directBootHome) {
             return;
         }
+        if (!fullHomeInitialized) {
+            return;
+        }
+        resumeFullHome();
+    }
+
+    private void resumeFullHome() {
         boolean returningToForeground = !activityResumed;
         activityResumed = true;
         startRunningTaskMonitoring();
@@ -727,6 +787,9 @@ public class MainActivity extends Activity {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        if (directBootHome || !fullHomeInitialized) {
+            return;
+        }
         if (!nonDefaultDisplayHomeRelay) {
             applyOneStepRotationPolicy(newConfig);
             requestLauncherIconRefresh("configuration changed");
@@ -912,6 +975,15 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        if (directBootHome) {
+            if (isCurrentUserUnlocked()) {
+                initializeFullHomeAfterDirectBootUnlock();
+            }
+            return;
+        }
+        if (!fullHomeInitialized) {
+            return;
+        }
         if (nonDefaultDisplayHomeRelay) {
             redirectHomeToDefaultDisplay();
             return;
@@ -947,7 +1019,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
-        if (nonDefaultDisplayHomeRelay) {
+        activityLifecycleResumed = false;
+        if (nonDefaultDisplayHomeRelay || directBootHome || !fullHomeInitialized) {
             super.onPause();
             return;
         }
@@ -960,7 +1033,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onStop() {
-        if (nonDefaultDisplayHomeRelay) {
+        if (nonDefaultDisplayHomeRelay || directBootHome || !fullHomeInitialized) {
             super.onStop();
             return;
         }
@@ -976,6 +1049,9 @@ public class MainActivity extends Activity {
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
+        if (directBootHome || !fullHomeInitialized) {
+            return;
+        }
         if (hasFocus) {
             applyStatusBarForCurrentMode();
             scheduleSideInputProtectionSync();
@@ -1531,6 +1607,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         activityDestroyed = true;
+        if (directBootHome) {
+            unregisterDirectBootUnlockReceiver();
+            releaseDirectBootResources();
+            super.onDestroy();
+            return;
+        }
+        releaseDirectBootBridgePrewarmHost();
         if (imageDragSessionController != null) {
             imageDragSessionController.cancel();
             imageDragSessionController = null;
@@ -1702,7 +1785,172 @@ public class MainActivity extends Activity {
     @SuppressLint("GestureBackNavigation")
     @Override
     public void onBackPressed() {
+        if (directBootHome || !fullHomeInitialized) {
+            return;
+        }
         handleSystemBack();
+    }
+
+    private boolean isCurrentUserUnlocked() {
+        UserManager userManager = getSystemService(UserManager.class);
+        return userManager == null || userManager.isUserUnlocked();
+    }
+
+    private void showDirectBootHome() {
+        requestWindowFeature(Window.FEATURE_NO_TITLE);
+        Window directBootWindow = getWindow();
+        directBootWindow.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WALLPAPER);
+        directBootWindow.setFormat(PixelFormat.OPAQUE);
+        directBootWindow.setBackgroundDrawable(new ColorDrawable(Color.BLACK));
+        directBootWindow.setStatusBarColor(Color.BLACK);
+        directBootWindow.setNavigationBarColor(Color.BLACK);
+
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
+        directBootRootContainer = root;
+
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setGravity(Gravity.CENTER);
+        content.setBackgroundColor(Color.BLACK);
+
+        ImageView icon = new ImageView(this);
+        icon.setImageResource(R.mipmap.ic_launcher);
+        icon.setContentDescription(getString(R.string.app_name));
+        int iconSize = dp(72);
+        content.addView(icon, new LinearLayout.LayoutParams(iconSize, iconSize));
+
+        TextView label = new TextView(this);
+        label.setText(R.string.app_name);
+        label.setTextColor(Color.WHITE);
+        label.setGravity(Gravity.CENTER);
+        setDpTextSize(label, 18f);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        labelParams.topMargin = dp(16);
+        content.addView(label, labelParams);
+        root.addView(content, matchFrame());
+        setContentView(root);
+        root.post(this::prewarmDirectBootRootBridge);
+    }
+
+    private void prewarmDirectBootRootBridge() {
+        if (!directBootHome || activityDestroyed || directBootBridgePrewarmHost != null) {
+            return;
+        }
+        RootVirtualDisplayHost prewarmHost = new RootVirtualDisplayHost(
+                this, this, 0, rootVirtualDisplayCallbacks, true);
+        if (!prewarmHost.hasRootAccess()) {
+            prewarmHost.release();
+            return;
+        }
+        directBootBridgePrewarmHost = prewarmHost;
+        prewarmHost.ensureRootInputBridgeStarted();
+        ComponentName desktopComponent =
+                OneStepSettingsStore.getDirectBootBuiltInDesktopComponent(this);
+        if (desktopComponent != null) {
+            try {
+                LauncherApp desktopApp = new LauncherAppRepository(this)
+                        .loadHomeApp(desktopComponent);
+                if (desktopApp != null && directBootRootContainer != null) {
+                    directBootPrewarmDesktopApp = desktopApp;
+                    directBootRootContainer.addView(prewarmHost.getView(), 0, matchFrame());
+                    prewarmHost.prepareDirectBootDisplay(desktopApp);
+                }
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Direct Boot desktop prelaunch unavailable", e);
+            }
+        }
+        Log.i(TAG, "Prewarming root display bridge during Direct Boot: desktop="
+                + (directBootPrewarmDesktopApp == null ? "none"
+                : directBootPrewarmDesktopApp.componentKey()));
+    }
+
+    private void releaseDirectBootBridgePrewarmHost() {
+        RootVirtualDisplayHost prewarmHost = directBootBridgePrewarmHost;
+        LauncherApp prewarmDesktop = directBootPrewarmDesktopApp;
+        directBootBridgePrewarmHost = null;
+        directBootPrewarmDesktopApp = null;
+        if (prewarmDesktop != null && windowApps[0] != null
+                && prewarmDesktop.isSameInstance(windowApps[0])) {
+            windowApps[0] = null;
+        }
+        if (prewarmHost != null) {
+            prewarmHost.release();
+        }
+    }
+
+    private void reconcileDirectBootPrewarmDesktop() {
+        if (directBootBridgePrewarmHost == null) {
+            return;
+        }
+        if (directBootPrewarmDesktopApp != null && builtInDesktopApp != null
+                && directBootPrewarmDesktopApp.isSameInstance(builtInDesktopApp)) {
+            return;
+        }
+        releaseDirectBootBridgePrewarmHost();
+    }
+
+    private void registerDirectBootUnlockReceiver() {
+        if (directBootUnlockReceiverRegistered) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter(Intent.ACTION_USER_UNLOCKED);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(directBootUnlockReceiver, filter, Context.RECEIVER_EXPORTED);
+            } else {
+                registerReceiver(directBootUnlockReceiver, filter);
+            }
+            directBootUnlockReceiverRegistered = true;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Unable to register Direct Boot unlock receiver", e);
+        }
+        if (isCurrentUserUnlocked()) {
+            initializeFullHomeAfterDirectBootUnlock();
+        }
+    }
+
+    private void unregisterDirectBootUnlockReceiver() {
+        if (!directBootUnlockReceiverRegistered) {
+            return;
+        }
+        try {
+            unregisterReceiver(directBootUnlockReceiver);
+        } catch (RuntimeException ignored) {
+        }
+        directBootUnlockReceiverRegistered = false;
+    }
+
+    private void initializeFullHomeAfterDirectBootUnlock() {
+        if (!directBootHome || directBootInitializationRequested || activityDestroyed
+                || !isCurrentUserUnlocked()) {
+            return;
+        }
+        directBootInitializationRequested = true;
+        unregisterDirectBootUnlockReceiver();
+        Log.i(TAG, "User unlocked; initializing full OneStep HOME in place");
+        mainHandler.post(() -> {
+            if (!activityDestroyed && directBootHome) {
+                initializeFullHome();
+            }
+        });
+    }
+
+    private void releaseDirectBootResources() {
+        releaseDirectBootBridgePrewarmHost();
+        mainHandler.removeCallbacksAndMessages(null);
+        mediaRootExecutor.shutdownNow();
+        hookSettingsExecutor.shutdownNow();
+        displayImePolicyExecutor.shutdownNow();
+        sensorPolicyExecutor.shutdownNow();
+        visualEffectExecutor.shutdownNow();
+        wallpaperExecutor.shutdownNow();
+        pipDockExecutor.shutdownNow();
+        runningTaskExecutor.shutdownNow();
+        launcherIconExecutor.shutdownNow();
+        imageDragIoExecutor.shutdownNow();
+        persistentRootShell.close();
     }
 
     private void registerSystemBackCallback() {
@@ -3325,6 +3573,21 @@ public class MainActivity extends Activity {
             oneStepDesktopSelected = true;
             settingsStore.saveOneStepDesktop();
         }
+        builtInDesktopResolutionFresh = true;
+    }
+
+    private void loadBuiltInDesktopAppsForStartup() {
+        ComponentName selectedComponent = settingsStore.getBuiltInDesktopComponent();
+        oneStepDesktopSelected = settingsStore.isOneStepDesktopSelected();
+        if (!oneStepDesktopSelected && selectedComponent != null
+                && directBootPrewarmDesktopApp != null
+                && selectedComponent.equals(directBootPrewarmDesktopApp.componentName)) {
+            builtInDesktopApp = directBootPrewarmDesktopApp;
+            builtInDesktopApps = Collections.singletonList(directBootPrewarmDesktopApp);
+            builtInDesktopResolutionFresh = true;
+            return;
+        }
+        loadBuiltInDesktopApps();
     }
 
     private LauncherApp findAppByComponent(
@@ -3948,6 +4211,10 @@ public class MainActivity extends Activity {
         if (builtInDesktopApp == null) {
             loadBuiltInDesktopApps();
             updateSettingsPageViews();
+            return builtInDesktopApp;
+        }
+        if (builtInDesktopResolutionFresh) {
+            builtInDesktopResolutionFresh = false;
             return builtInDesktopApp;
         }
         try {
@@ -4681,6 +4948,19 @@ public class MainActivity extends Activity {
 
     private void installFreshEmbeddedHost(int slot) {
         if (slot < 0 || slot >= MAX_WINDOWS || windowViews[slot] == null) {
+            return;
+        }
+        if (slot == 0 && directBootBridgePrewarmHost != null
+                && directBootPrewarmDesktopApp != null && builtInDesktopApp != null
+                && directBootPrewarmDesktopApp.isSameInstance(builtInDesktopApp)) {
+            RootVirtualDisplayHost prewarmHost = directBootBridgePrewarmHost;
+            directBootBridgePrewarmHost = null;
+            directBootPrewarmDesktopApp = null;
+            prewarmHost.completeDirectBootPrewarm();
+            embeddedHosts[slot] = prewarmHost;
+            windowViews[slot].attachEmbeddedHost(prewarmHost.getView());
+            Log.i(TAG, "Adopted Direct Boot virtual display for slot " + slot
+                    + ": display=" + prewarmHost.getDisplayId());
             return;
         }
         EmbeddedAppHost host = createEmbeddedHost(this, slot);

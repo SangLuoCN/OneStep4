@@ -221,6 +221,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private static final String TAG = "OneStep40";
+    private static volatile Boolean cachedSuCommandAvailable;
     private static final int ROOT_COMMAND_TIMEOUT_SECONDS = 8;
     private static final int LONG_PRESS_SWAP_MS = 450;
     private static final int DEFAULT_DISPLAY_ID = 0;
@@ -285,7 +286,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private final ExecutorService displayImePolicyExecutor;
     private final ExecutorService sensorPolicyExecutor;
     private final PersistentRootShell persistentRootShell;
-    private final EmbeddedStartEpochStore embeddedStartEpochStore;
+    private EmbeddedStartEpochStore embeddedStartEpochStore;
     private final Object rootInputBridgeStartLock;
     private final FrameLayout hostView;
     private final SurfaceView surfaceView;
@@ -347,7 +348,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private boolean touchSequenceSuppressed;
     private int touchFocusRequestGeneration;
     private boolean skipActivityOptionsLaunch;
-    private Boolean suCommandAvailable;
     private String launchRequestedPackage = "";
     private int launchRequestedUserId = -1;
     private int launchRequestedDisplayId = -1;
@@ -382,11 +382,18 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private boolean retainSensorPolicyOnRelease;
     private int requestedSensorLandscapeRotation = -1;
     private boolean sensorLandscapeRotationApplied;
+    private boolean bridgePrewarmOnly;
     private String unavailableReason = "";
     RootVirtualDisplayHost(MainActivity owner, Context context, int slot, Callbacks callbacks) {
+        this(owner, context, slot, callbacks, false);
+    }
+
+    RootVirtualDisplayHost(MainActivity owner, Context context, int slot, Callbacks callbacks,
+                           boolean bridgePrewarmOnly) {
         this.owner = owner;
         this.callbacks = callbacks;
         this.slot = slot;
+        this.bridgePrewarmOnly = bridgePrewarmOnly;
         windowApps = callbacks.windowApps();
         windowViews = callbacks.windowViews();
         embeddedSlotClosing = callbacks.embeddedSlotClosing();
@@ -417,7 +424,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         hostView.addView(surfaceView, matchParent);
         rootAvailable = hasSuCommand();
         systemLaunchAvailable = hasGrantedSystemEmbeddingPermission() || isSystemAppInstall();
-        recoverStaleSensorServiceUidOverridesAsync();
+        if (!bridgePrewarmOnly) {
+            recoverStaleSensorServiceUidOverridesAsync();
+        }
         if (!rootAvailable && !systemLaunchAvailable) {
             unavailableReason = "未检测到 su 或 system/priv-app 权限";
         }
@@ -598,6 +607,40 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         return true;
     }
 
+    void prepareDirectBootDisplay(LauncherApp desktopApp) {
+        if (!bridgePrewarmOnly || desktopApp == null || !isAvailable()) {
+            return;
+        }
+        windowApps[slot] = desktopApp;
+        pendingApp = desktopApp;
+        surfaceView.setVisibility(View.VISIBLE);
+        hostView.post(() -> {
+            if (!bridgePrewarmOnly || !isAvailable()) {
+                return;
+            }
+            int width = surfaceView.getWidth();
+            int height = surfaceView.getHeight();
+            Surface surface = surfaceView.getHolder().getSurface();
+            if (width > 0 && height > 0 && surface != null && surface.isValid()) {
+                createVirtualDisplay(surfaceView.getHolder(), width, height);
+                if (displayId > DEFAULT_DISPLAY_ID && pendingApp != null) {
+                    LauncherApp pendingDesktop = pendingApp;
+                    pendingApp = null;
+                    start(pendingDesktop);
+                }
+            }
+        });
+    }
+
+    void completeDirectBootPrewarm() {
+        if (!bridgePrewarmOnly) {
+            return;
+        }
+        bridgePrewarmOnly = false;
+        embeddedStartEpochStore = callbacks.embeddedStartEpochStore();
+        recoverStaleSensorServiceUidOverridesAsync();
+    }
+
     @Override
     public boolean start(LauncherApp app) {
         return start(app, false);
@@ -672,7 +715,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             unavailableReason = "启动已取消";
             return false;
         }
-        if (app.isCurrentUser()) {
+        if (app.isCurrentUser() && !bridgePrewarmOnly) {
             syncHostedSensorIsolationAsync(app.packageName);
         }
         if (reusingHostedApp) {
@@ -2923,7 +2966,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private void scheduleHostedTaskResolution(String reason) {
-        if (!canResolveHostedTask() || hostedTaskId > 0) {
+        if (bridgePrewarmOnly || !canResolveHostedTask() || hostedTaskId > 0) {
             return;
         }
         int token = ++taskResolutionToken;
@@ -3758,41 +3801,48 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private boolean hasSuCommand() {
-        if (suCommandAvailable != null) {
-            return suCommandAvailable;
+        Boolean cached = cachedSuCommandAvailable;
+        if (cached != null) {
+            return cached;
         }
-        String[] knownPaths = {
-            "/system/bin/su",
-            "/system/xbin/su",
-            "/product/bin/su",
-            "/sbin/su",
-            "/su/bin/su",
-            "/debug_ramdisk/su"
-        };
-        for (String path : knownPaths) {
-            if (new File(path).exists()) {
-                suCommandAvailable = true;
-                return true;
+        synchronized (RootVirtualDisplayHost.class) {
+            cached = cachedSuCommandAvailable;
+            if (cached != null) {
+                return cached;
             }
-        }
+            String[] knownPaths = {
+                "/system/bin/su",
+                "/system/xbin/su",
+                "/product/bin/su",
+                "/sbin/su",
+                "/su/bin/su",
+                "/debug_ramdisk/su"
+            };
+            for (String path : knownPaths) {
+                if (new File(path).exists()) {
+                    cachedSuCommandAvailable = true;
+                    return true;
+                }
+            }
 
-        Process process = null;
-        try {
-            process = new ProcessBuilder("sh", "-c", "command -v su")
-                    .redirectErrorStream(true)
-                    .start();
-            boolean finished = waitForProcess(process, 600L);
-            suCommandAvailable = finished && process.exitValue() == 0;
-            return suCommandAvailable;
-        } catch (IOException | InterruptedException | RuntimeException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            suCommandAvailable = false;
-            return false;
-        } finally {
-            if (process != null) {
-                process.destroy();
+            Process process = null;
+            try {
+                process = new ProcessBuilder("sh", "-c", "command -v su")
+                        .redirectErrorStream(true)
+                        .start();
+                boolean finished = waitForProcess(process, 600L);
+                cachedSuCommandAvailable = finished && process.exitValue() == 0;
+                return cachedSuCommandAvailable;
+            } catch (IOException | InterruptedException | RuntimeException e) {
+                if (e instanceof InterruptedException) {
+                    Thread.currentThread().interrupt();
+                }
+                cachedSuCommandAvailable = false;
+                return false;
+            } finally {
+                if (process != null) {
+                    process.destroy();
+                }
             }
         }
     }
@@ -3962,6 +4012,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private String buildGuardedStartCommand(String command, int startEpoch) {
+        if (embeddedStartEpochStore == null) {
+            return command;
+        }
         return "epoch=$(cat " + shellQuote(embeddedStartEpochStore.getFilePath())
                 + " 2>/dev/null); if [ \"$epoch\" != \"" + startEpoch
                 + "\" ]; then echo stale embedded start; exit 73; fi; " + command;

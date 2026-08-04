@@ -20,6 +20,7 @@ import java.util.Set;
 /** Owns preference keys, legacy migrations, validation, and persistence. */
 public final class OneStepSettingsStore {
     private static final String PREFS_NAME = "onestep_settings";
+    private static final String DIRECT_BOOT_PREFS_NAME = "onestep_direct_boot";
     private static final String PREF_BACKGROUND_URI = "background_uri";
     private static final String PREF_GRID_ROWS = "grid_rows";
     private static final String PREF_GRID_COLUMNS = "grid_columns";
@@ -54,9 +55,12 @@ public final class OneStepSettingsStore {
     private static final String BUILT_IN_DESKTOP_ONE_STEP = "onestep";
 
     private final SharedPreferences preferences;
+    private final SharedPreferences directBootPreferences;
 
     public OneStepSettingsStore(Context context) {
         preferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        directBootPreferences = context.createDeviceProtectedStorageContext()
+                .getSharedPreferences(DIRECT_BOOT_PREFS_NAME, Context.MODE_PRIVATE);
     }
 
     public OneStepSettings load() {
@@ -212,12 +216,14 @@ public final class OneStepSettingsStore {
 
     public ComponentName getBuiltInDesktopComponent() {
         String value = preferences.getString(PREF_BUILT_IN_DESKTOP_COMPONENT, "");
+        mirrorDirectBootDesktopSelection(value);
         return TextUtils.isEmpty(value) || BUILT_IN_DESKTOP_ONE_STEP.equals(value)
                 ? null : ComponentName.unflattenFromString(value);
     }
 
     public boolean isOneStepDesktopSelected() {
         String value = preferences.getString(PREF_BUILT_IN_DESKTOP_COMPONENT, "");
+        mirrorDirectBootDesktopSelection(value);
         return TextUtils.isEmpty(value) || BUILT_IN_DESKTOP_ONE_STEP.equals(value);
     }
 
@@ -225,6 +231,7 @@ public final class OneStepSettingsStore {
         preferences.edit()
                 .putString(PREF_BUILT_IN_DESKTOP_COMPONENT, BUILT_IN_DESKTOP_ONE_STEP)
                 .apply();
+        mirrorDirectBootDesktopSelection(BUILT_IN_DESKTOP_ONE_STEP);
     }
 
     public void saveBuiltInDesktopComponent(ComponentName componentName) {
@@ -236,6 +243,24 @@ public final class OneStepSettingsStore {
                     componentName.flattenToString());
         }
         editor.apply();
+        mirrorDirectBootDesktopSelection(componentName == null
+                ? "" : componentName.flattenToString());
+    }
+
+    public static ComponentName getDirectBootBuiltInDesktopComponent(Context context) {
+        SharedPreferences directBootPreferences = context.createDeviceProtectedStorageContext()
+                .getSharedPreferences(DIRECT_BOOT_PREFS_NAME, Context.MODE_PRIVATE);
+        String value = directBootPreferences.getString(
+                PREF_BUILT_IN_DESKTOP_COMPONENT, "");
+        return TextUtils.isEmpty(value) || BUILT_IN_DESKTOP_ONE_STEP.equals(value)
+                ? null : ComponentName.unflattenFromString(value);
+    }
+
+    private void mirrorDirectBootDesktopSelection(String value) {
+        directBootPreferences.edit()
+                .putString(PREF_BUILT_IN_DESKTOP_COMPONENT,
+                        TextUtils.isEmpty(value) ? BUILT_IN_DESKTOP_ONE_STEP : value)
+                .commit();
     }
 
     public synchronized Set<String> getSensorUidOverrides() {

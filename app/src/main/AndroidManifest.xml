@@ -68,6 +68,7 @@
 
         <activity
             android:name=".MainActivity"
+            android:directBootAware="true"
             android:exported="true"
             android:launchMode="singleTask"
             android:alwaysRetainTaskState="true"
@@ -98,6 +99,7 @@
 
         <activity
             android:name=".DisplayAccessActivity"
+            android:directBootAware="true"
             android:excludeFromRecents="true"
             android:exported="true"
             android:noHistory="true"
