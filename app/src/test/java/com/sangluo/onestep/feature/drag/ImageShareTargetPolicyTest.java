@@ -83,6 +83,20 @@ public class ImageShareTargetPolicyTest {
                 ImageDragShareTarget.QQ_COMPUTER.activityName());
         assertEquals("com.android.bluetooth.opp.BluetoothOppLauncherActivity",
                 ImageDragShareTarget.BLUETOOTH.activityName());
+        assertEquals("com.android.printspooler.ui.MiPrintControlActivity",
+                ImageDragShareTarget.PRINT.activityName());
+        assertEquals("com.alipay.mobile.quinox.splash.ShareDispenseActivity",
+                ImageDragShareTarget.ALIPAY.activityName());
+        assertEquals("com.ss.android.ugc.aweme.share.ui.SystemShareNewActivity",
+                ImageDragShareTarget.DOUYIN.activityName());
+        assertEquals("com.jingdong.app.mall.open.PhotoBuyActivity",
+                ImageDragShareTarget.JD.activityName());
+        assertEquals("com.wps.multiwindow.main.HomeActivity",
+                ImageDragShareTarget.EMAIL.activityName());
+        assertEquals("com.miui.notes.ui.activity.IntermediaryActivity",
+                ImageDragShareTarget.NOTES.activityName());
+        assertEquals("com.xiaomi.scanner.app.ScanActivity",
+                ImageDragShareTarget.SCANNER.activityName());
     }
 
     @Test
@@ -92,5 +106,22 @@ public class ImageShareTargetPolicyTest {
         assertTrue(ImageDragShareTarget.QQ_FAVORITE.initializesAppBeforeColdStartShare());
         assertTrue(ImageDragShareTarget.QQ_COMPUTER.initializesAppBeforeColdStartShare());
         assertFalse(ImageDragShareTarget.BLUETOOTH.initializesAppBeforeColdStartShare());
+        assertFalse(ImageDragShareTarget.PRINT.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.ALIPAY.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.DOUYIN.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.JD.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.EMAIL.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.NOTES.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.SCANNER.initializesAppBeforeColdStartShare());
+    }
+
+    @Test
+    public void preferredActivityWinsWhenOneAppExposesMultipleShareRoutes() {
+        assertEquals(0, ImageDragShareTarget.DOUYIN.activityMatchPriority(
+                "com.ss.android.ugc.aweme.share.ui.SystemShareNewActivity"));
+        assertEquals(1, ImageDragShareTarget.DOUYIN.activityMatchPriority(
+                "com.ss.android.ugc.aweme.share.OpenPlatformShareRealActivity"));
+        assertEquals(-1, ImageDragShareTarget.DOUYIN.activityMatchPriority(
+                "com.ss.android.ugc.aweme.splash.SplashActivity"));
     }
 }

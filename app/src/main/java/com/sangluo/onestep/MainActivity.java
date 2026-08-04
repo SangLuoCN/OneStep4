@@ -2833,8 +2833,10 @@ public class MainActivity extends Activity {
     private List<ImageDragShareEntry> buildImageDragShareEntries() {
         List<ImageDragShareEntry> entries = new ArrayList<>();
         for (ImageDragShareTarget target : ImageDragShareTarget.values()) {
-            if (target == ImageDragShareTarget.BLUETOOTH) {
-                entries.add(new ImageDragShareEntry(target, null));
+            if (!target.usesAppInstance()) {
+                if (isImageDragSharePackageInstalled(target.packageName())) {
+                    entries.add(new ImageDragShareEntry(target, null));
+                }
                 continue;
             }
             List<LauncherApp> instances = imageDragShareInstances(target.packageName());
@@ -2843,6 +2845,21 @@ public class MainActivity extends Activity {
             }
         }
         return entries;
+    }
+
+    private boolean isImageDragSharePackageInstalled(String packageName) {
+        if (TextUtils.isEmpty(packageName)) {
+            return false;
+        }
+        try {
+            getPackageManager().getApplicationInfo(
+                    packageName, PackageManager.MATCH_DISABLED_COMPONENTS);
+            return true;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private List<LauncherApp> imageDragShareInstances(String packageName) {
@@ -2887,8 +2904,22 @@ public class MainActivity extends Activity {
             case QQ_COMPUTER:
                 return R.drawable.drag_share_qq_computer;
             case BLUETOOTH:
-            default:
                 return R.drawable.drag_share_bluetooth;
+            case PRINT:
+                return R.drawable.drag_share_print;
+            case ALIPAY:
+                return R.drawable.drag_share_alipay;
+            case DOUYIN:
+                return R.drawable.drag_share_douyin;
+            case JD:
+                return R.drawable.drag_share_jd;
+            case EMAIL:
+                return R.drawable.drag_share_email;
+            case NOTES:
+                return R.drawable.drag_share_notes;
+            case SCANNER:
+            default:
+                return R.drawable.drag_share_scanner;
         }
     }
 
@@ -2903,8 +2934,22 @@ public class MainActivity extends Activity {
             case QQ_COMPUTER:
                 return "发送到QQ我的电脑";
             case BLUETOOTH:
-            default:
                 return "蓝牙发送";
+            case PRINT:
+                return "打印";
+            case ALIPAY:
+                return "支付宝";
+            case DOUYIN:
+                return "抖音";
+            case JD:
+                return "京东";
+            case EMAIL:
+                return "电子邮件";
+            case NOTES:
+                return "笔记";
+            case SCANNER:
+            default:
+                return "扫一扫";
         }
     }
 
@@ -2916,10 +2961,15 @@ public class MainActivity extends Activity {
         String resolvedMime = TextUtils.isEmpty(mimeType) ? "image/*" : mimeType;
         for (int index = 0; index < imageDragShareEntries.size(); index++) {
             ImageDragShareEntry entry = imageDragShareEntries.get(index);
-            imageDragShareTargetEnabled[index] = resolveImageDragShareActivity(
+            boolean enabled = resolveImageDragShareActivity(
                     entry.target, resolvedMime) != null
-                    && (entry.target == ImageDragShareTarget.BLUETOOTH
+                    && (!entry.target.usesAppInstance()
                     || entry.app != null);
+            imageDragShareTargetEnabled[index] = enabled;
+            View targetView = imageDragShareTargetViews[index];
+            if (targetView != null) {
+                targetView.setVisibility(enabled ? View.VISIBLE : View.GONE);
+            }
         }
         setHoveredImageDragShareTarget(-1);
 
@@ -4806,15 +4856,20 @@ public class MainActivity extends Activity {
             Log.w(TAG, "Query drag share target failed: " + target, e);
             return null;
         }
+        ResolveInfo selected = null;
+        int selectedPriority = Integer.MAX_VALUE;
         for (ResolveInfo candidate : candidates) {
             if (candidate != null && candidate.activityInfo != null
                     && TextUtils.equals(
-                    target.packageName(), candidate.activityInfo.packageName)
-                    && target.matchesActivity(candidate.activityInfo.name)) {
-                return candidate;
+                    target.packageName(), candidate.activityInfo.packageName)) {
+                int priority = target.activityMatchPriority(candidate.activityInfo.name);
+                if (priority >= 0 && priority < selectedPriority) {
+                    selected = candidate;
+                    selectedPriority = priority;
+                }
             }
         }
-        return null;
+        return selected;
     }
 
     private boolean launchImageDragShareTarget(
@@ -4831,7 +4886,7 @@ public class MainActivity extends Activity {
                 return true;
             }
         }
-        if (targetApp != null && target != ImageDragShareTarget.BLUETOOTH) {
+        if (targetApp != null && target.usesAppInstance()) {
             routedLaunchIntents.put(targetApp.instanceKey(), share);
             addOrFocusApp(targetApp);
             return true;

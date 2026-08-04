@@ -20,6 +20,13 @@
         <package android:name="com.autonavi.minimap" />
         <package android:name="me.weishu.kernelsu" />
         <package android:name="com.rifsxd.ksunext" />
+        <package android:name="com.android.printspooler" />
+        <package android:name="com.eg.android.AlipayGphone" />
+        <package android:name="com.ss.android.ugc.aweme" />
+        <package android:name="com.jingdong.app.mall" />
+        <package android:name="com.android.email" />
+        <package android:name="com.miui.notes" />
+        <package android:name="com.xiaomi.scanner" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
