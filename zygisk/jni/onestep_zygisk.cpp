@@ -50,6 +50,7 @@ constexpr const char *kMiuiHomeProcess = "com.miui.home";
 constexpr const char *kSystemUiProcess = "com.android.systemui";
 constexpr const char *kGooglePhotosProcess = "com.google.android.apps.photos";
 constexpr const char *kHyperOsVersionProperty = "ro.mi.os.version.name";
+constexpr const char *kImageDragSharingProperty = "onestep.hook.image_drag";
 constexpr const char *kDisableSecureWindowHook =
         "hook-config/disable-secure-window";
 constexpr const char *kDisableStatusBarOverlayHook =
@@ -495,6 +496,11 @@ bool isHyperOs() {
             && strncmp(version, "OS", 2) == 0;
 }
 
+bool isPropertyEnabled(const char *name) {
+    char value[PROP_VALUE_MAX]{};
+    return __system_property_get(name, value) > 0 && strcmp(value, "1") == 0;
+}
+
 class OneStepZygiskModule : public zygisk::ModuleBase {
 public:
     void onLoad(zygisk::Api *loadedApi, JNIEnv *loadedEnv) override {
@@ -509,13 +515,15 @@ public:
         bool isSystemUi = args != nullptr
                 && isProcess(env, args->nice_name, kSystemUiProcess);
         bool wantsHyperOsHook = (isMiuiHome || isSystemUi) && isHyperOs();
+        bool imageDragSharingEnabled = isPropertyEnabled(kImageDragSharingProperty);
         bool googlePhotosNameMatched = args != nullptr
                 && isProcess(env, args->nice_name, kGooglePhotosProcess);
         bool googlePhotosDataDirMatched = args != nullptr
                 && isPackageDataDirectory(
                         env, args->app_data_dir, kGooglePhotosProcess);
-        bool isGooglePhotos = googlePhotosNameMatched || googlePhotosDataDirMatched;
-        bool isGenericImageSource = args != nullptr
+        bool isGooglePhotos = imageDragSharingEnabled
+                && (googlePhotosNameMatched || googlePhotosDataDirMatched);
+        bool isGenericImageSource = imageDragSharingEnabled && args != nullptr
                 && isUserAppMainProcess(env, args->uid, args->nice_name)
                 && !isGooglePhotos;
         if (!wantsHyperOsHook && !isGooglePhotos && !isGenericImageSource) {

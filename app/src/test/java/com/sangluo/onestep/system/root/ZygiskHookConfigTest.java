@@ -12,6 +12,7 @@ public class ZygiskHookConfigTest {
     public void parseReadsIndependentHookAndRuntimeStates() {
         ZygiskHookConfig.State state = ZygiskHookConfig.parse(
                 "secure=0\nstatusbar=1\nprimaryhome_enhancement=0\n"
+                        + "image_drag=0\n"
                         + "module=1\nzygisk=0\n"
                         + "lsposed=1\nlsposed_backend=1\nstandalone_backend=0\n");
 
@@ -19,6 +20,7 @@ public class ZygiskHookConfigTest {
         assertFalse(state.secureWindowEnabled);
         assertTrue(state.statusBarOverlayEnabled);
         assertFalse(state.primaryHomeEnhancementEnabled);
+        assertFalse(state.imageDragSharingEnabled);
         assertTrue(state.moduleInstalled);
         assertFalse(state.zygiskPayloadActive);
         assertTrue(state.lsposedInstalled);
@@ -31,12 +33,14 @@ public class ZygiskHookConfigTest {
         ZygiskHookConfig.State state = ZygiskHookConfig.parse(
                 "diagnostic=value\nzygisk=1\nmodule=1\nstatusbar=0\nsecure=1\n"
                         + "standalone_backend=1\nprimaryhome_enhancement=1\n"
+                        + "image_drag=1\n"
                         + "lsposed_backend=0\nlsposed=0\n");
 
         assertNotNull(state);
         assertTrue(state.secureWindowEnabled);
         assertFalse(state.statusBarOverlayEnabled);
         assertTrue(state.primaryHomeEnhancementEnabled);
+        assertTrue(state.imageDragSharingEnabled);
         assertTrue(state.moduleInstalled);
         assertTrue(state.zygiskPayloadActive);
         assertFalse(state.lsposedInstalled);
@@ -47,12 +51,14 @@ public class ZygiskHookConfigTest {
     @Test
     public void parseRejectsMissingOrInvalidFields() {
         assertNull(ZygiskHookConfig.parse(
-                "secure=1\nstatusbar=1\nprimaryhome_enhancement=1\nmodule=1\n"));
+                "secure=1\nstatusbar=1\nprimaryhome_enhancement=1\n"
+                        + "image_drag=0\nmodule=1\n"));
         assertNull(ZygiskHookConfig.parse(
-                "secure=1\nstatusbar=1\nmodule=1\nzygisk=1\n"
+                "secure=1\nstatusbar=1\nimage_drag=0\nmodule=1\nzygisk=1\n"
                         + "lsposed=0\nlsposed_backend=0\nstandalone_backend=1\n"));
         assertNull(ZygiskHookConfig.parse(
                 "secure=enabled\nstatusbar=1\nprimaryhome_enhancement=1\n"
+                        + "image_drag=0\n"
                         + "module=1\nzygisk=1\n"
                         + "lsposed=0\nlsposed_backend=0\nstandalone_backend=1\n"));
     }
@@ -69,6 +75,8 @@ public class ZygiskHookConfigTest {
         assertTrue(command.contains("onestep-standalone-backend-active"));
         assertTrue(command.contains("(lsposed|lspd|vector)"));
         assertTrue(command.contains("disable-primary-home-enhancement"));
+        assertTrue(command.contains("enable-image-drag-sharing"));
+        assertTrue(command.contains("echo image_drag=1; else echo image_drag=0"));
         assertTrue(command.contains(
                 "disable-status-bar-overlay\" ]; then echo statusbar=1; "
                         + "else echo statusbar=0"));
@@ -76,10 +84,12 @@ public class ZygiskHookConfigTest {
 
     @Test
     public void writeCommandUsesIndependentDisableMarkers() {
-        String secureOnly = ZygiskHookConfig.writeCommand(true, false, false);
-        String statusBarOnly = ZygiskHookConfig.writeCommand(false, true, false);
+        String secureOnly = ZygiskHookConfig.writeCommand(true, false, false, false);
+        String statusBarOnly = ZygiskHookConfig.writeCommand(false, true, false, false);
         String primaryHomeEnhancementOnly =
-                ZygiskHookConfig.writeCommand(false, false, true);
+                ZygiskHookConfig.writeCommand(false, false, true, false);
+        String imageDragOnly =
+                ZygiskHookConfig.writeCommand(false, false, false, true);
 
         assertTrue(secureOnly.contains(
                 "rm -f \"$onestep_config/disable-secure-window\""));
@@ -99,5 +109,9 @@ public class ZygiskHookConfigTest {
                 ": > \"$onestep_config/disable-status-bar-overlay\""));
         assertTrue(primaryHomeEnhancementOnly.contains(
                 "rm -f \"$onestep_config/disable-primary-home-enhancement\""));
+        assertTrue(imageDragOnly.contains(
+                ": > \"$onestep_config/enable-image-drag-sharing\""));
+        assertTrue(secureOnly.contains(
+                "rm -f \"$onestep_config/enable-image-drag-sharing\""));
     }
 }

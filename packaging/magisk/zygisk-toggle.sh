@@ -61,6 +61,7 @@ esac
 rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER" \
   "$PRIMARY_HOME_ACTIVE_MARKER" "$ROOT_DISPLAY_COMPAT_ACTIVE_MARKER"
 resetprop -n onestep.hook.primaryhome_enhancement 0
+resetprop -n onestep.hook.image_drag 0
 if [ "$SDK_INT" -lt 29 ]; then
   rm -rf "$MODULE_DIR/zygisk"
   resetprop -n onestep.hook.backend unsupported
@@ -80,6 +81,11 @@ if [ -e "$MODULE_DIR/hook-config/disable-primary-home-enhancement" ]; then
   primary_home_enhancement=0
 else
   primary_home_enhancement=1
+fi
+if [ -e "$MODULE_DIR/hook-config/enable-image-drag-sharing" ]; then
+  resetprop -n onestep.hook.image_drag 1
+else
+  resetprop -n onestep.hook.image_drag 0
 fi
 
 if lsposed_active; then

@@ -2,6 +2,8 @@ package com.sangluo.onestep.hook;
 
 import android.util.Log;
 
+import com.sangluo.onestep.feature.drag.ImageDragFeatureGate;
+
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Method;
@@ -35,14 +37,20 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
         if (loadPackageParam == null) {
             return;
         }
+        boolean imageDragSharingEnabled = readBooleanProperty(
+                ImageDragFeatureGate.PROPERTY);
         if (GOOGLE_PHOTOS_PACKAGE.equals(loadPackageParam.packageName)) {
-            OneStepGooglePhotosDragHook.install(
-                    loadPackageParam.packageName, loadPackageParam.processName);
+            if (imageDragSharingEnabled) {
+                OneStepGooglePhotosDragHook.install(
+                        loadPackageParam.packageName, loadPackageParam.processName);
+            }
             return;
         }
-        OneStepUniversalImageDragHook.install(
-                loadPackageParam.packageName, loadPackageParam.processName,
-                loadPackageParam.classLoader);
+        if (imageDragSharingEnabled) {
+            OneStepUniversalImageDragHook.install(
+                    loadPackageParam.packageName, loadPackageParam.processName,
+                    loadPackageParam.classLoader);
+        }
         if (!SYSTEM_FRAMEWORK_PACKAGE.equals(loadPackageParam.packageName)
                 && !SETTINGS_PACKAGE.equals(loadPackageParam.packageName)
                 && !SYSTEM_UI_PACKAGE.equals(loadPackageParam.packageName)

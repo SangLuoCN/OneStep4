@@ -37,7 +37,8 @@ lsposed_active() {
 
 mkdir -p "$HOOK_CONFIG_DIR"
 for hook_marker in disable-secure-window disable-status-bar-overlay \
-    disable-primary-home-enhancement enable-hyperos-third-party-gesture; do
+    disable-primary-home-enhancement enable-hyperos-third-party-gesture \
+    enable-image-drag-sharing; do
   if [ -f "$PREVIOUS_HOOK_CONFIG_DIR/$hook_marker" ]; then
     : >"$HOOK_CONFIG_DIR/$hook_marker"
   fi

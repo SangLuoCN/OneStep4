@@ -79,6 +79,7 @@ import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.drag.ImageDragSessionController;
 import com.sangluo.onestep.feature.drag.ImageDragBridgeRegistry;
+import com.sangluo.onestep.feature.drag.ImageDragFeatureGate;
 import com.sangluo.onestep.feature.drag.ImageDragShareTarget;
 import com.sangluo.onestep.feature.drag.ImageDragSourcePolicy;
 import com.sangluo.onestep.feature.drag.ImageFileNamePolicy;
@@ -707,9 +708,11 @@ public class MainActivity extends Activity {
             return;
         }
         Window hostWindow = getWindow();
-        imageDragSessionController = createImageDragSessionController();
-        ImageDragBridgeRegistry.register(imageDragBridgeListener);
-        cleanupStaleImageDragFiles();
+        if (ImageDragFeatureGate.isEnabled()) {
+            imageDragSessionController = createImageDragSessionController();
+            ImageDragBridgeRegistry.register(imageDragBridgeListener);
+            cleanupStaleImageDragFiles();
+        }
         registerLauncherIconChangeReceiver();
         sideInputShieldController = new SideWindowInputShieldController(
                 this, MAX_WINDOWS, new SideWindowInputShieldController.Callbacks() {
@@ -3023,11 +3026,18 @@ public class MainActivity extends Activity {
             shortcutViews.add(shortcut);
         }
 
-        imageDragShareTargetScrollView = createImageDragShareTargetStrip();
-        imageDragShareTargetScrollView.setVisibility(View.INVISIBLE);
-        imageDragShareTargetScrollView.setTranslationY(-getTopAppStripHeight());
-        stripRoot.addView(imageDragShareTargetScrollView, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, getTopAppStripHeight(), Gravity.TOP));
+        if (ImageDragFeatureGate.isEnabled()) {
+            imageDragShareTargetScrollView = createImageDragShareTargetStrip();
+            imageDragShareTargetScrollView.setVisibility(View.INVISIBLE);
+            imageDragShareTargetScrollView.setTranslationY(-getTopAppStripHeight());
+            stripRoot.addView(imageDragShareTargetScrollView, new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, getTopAppStripHeight(), Gravity.TOP));
+        } else {
+            imageDragShareTargetScrollView = null;
+            imageDragShareTargetViews = new View[0];
+            imageDragShareTargetEnabled = new boolean[0];
+            imageDragShareEntries = Collections.emptyList();
+        }
         imageDragShareTargetsVisible = false;
         imageDragShareAnimationGeneration++;
 
@@ -4005,10 +4015,12 @@ public class MainActivity extends Activity {
                     boolean secureWindowEnabled,
                     boolean statusBarOverlayEnabled,
                     boolean primaryHomeEnhancementEnabled,
+                    boolean imageDragSharingEnabled,
                     SettingsPanelController.HookSettingsResultCallback callback) {
                 MainActivity.this.saveZygiskHookSettings(
                         secureWindowEnabled, statusBarOverlayEnabled,
-                        primaryHomeEnhancementEnabled, callback);
+                        primaryHomeEnhancementEnabled, imageDragSharingEnabled,
+                        callback);
             }
             @Override public void rebootDevice() {
                 MainActivity.this.rebootDeviceForHookSettings();
@@ -8385,12 +8397,14 @@ public class MainActivity extends Activity {
             boolean secureWindowEnabled,
             boolean statusBarOverlayEnabled,
             boolean primaryHomeEnhancementEnabled,
+            boolean imageDragSharingEnabled,
             SettingsPanelController.HookSettingsResultCallback callback) {
         hookSettingsExecutor.execute(() -> {
             ShellCommandResult result = runMainPrivilegedCommand(
                     ZygiskHookConfig.writeCommand(
                             secureWindowEnabled, statusBarOverlayEnabled,
-                            primaryHomeEnhancementEnabled),
+                            primaryHomeEnhancementEnabled,
+                            imageDragSharingEnabled),
                     "save Zygisk hook settings", false);
             ZygiskHookConfig.State state = result.isSuccess()
                     ? ZygiskHookConfig.parse(result.output) : null;

@@ -10,6 +10,8 @@ public final class ZygiskHookConfig {
     private static final String DISABLE_STATUS_BAR_OVERLAY = "disable-status-bar-overlay";
     private static final String DISABLE_PRIMARY_HOME_ENHANCEMENT =
             "disable-primary-home-enhancement";
+    private static final String ENABLE_IMAGE_DRAG_SHARING =
+            "enable-image-drag-sharing";
     private static final String MAGISK_MODULE_DIR =
             "/data/adb/modules/onestep40_privapp";
     private static final String KSU_MODULE_DIR =
@@ -36,6 +38,9 @@ public final class ZygiskHookConfig {
                 + CONFIG_DIR_NAME + "/" + DISABLE_PRIMARY_HOME_ENHANCEMENT
                 + "\" ]; then echo primaryhome_enhancement=0; "
                 + "else echo primaryhome_enhancement=1; fi; "
+                + "if [ -n \"$onestep_module\" ] && [ -e \"$onestep_module/"
+                + CONFIG_DIR_NAME + "/" + ENABLE_IMAGE_DRAG_SHARING
+                + "\" ]; then echo image_drag=1; else echo image_drag=0; fi; "
                 + "if [ -n \"$onestep_module\" ] "
                 + "&& [ -f \"$onestep_module/zygisk/arm64-v8a.so\" ] "
                 + "&& [ -f \"$onestep_module/zygisk/armeabi-v7a.so\" ]; then "
@@ -50,7 +55,8 @@ public final class ZygiskHookConfig {
 
     public static String writeCommand(boolean secureWindowEnabled,
                                       boolean statusBarOverlayEnabled,
-                                      boolean primaryHomeEnhancementEnabled) {
+                                      boolean primaryHomeEnhancementEnabled,
+                                      boolean imageDragSharingEnabled) {
         return moduleDiscoveryCommand()
                 + "[ -n \"$onestep_module\" ] || exit 2; "
                 + "onestep_config=\"$onestep_module/" + CONFIG_DIR_NAME + "\"; "
@@ -61,6 +67,8 @@ public final class ZygiskHookConfig {
                 + updateMarkerCommand(DISABLE_STATUS_BAR_OVERLAY, statusBarOverlayEnabled)
                 + updateMarkerCommand(DISABLE_PRIMARY_HOME_ENHANCEMENT,
                 primaryHomeEnhancementEnabled)
+                + updateEnableMarkerCommand(ENABLE_IMAGE_DRAG_SHARING,
+                imageDragSharingEnabled)
                 + readCommand();
     }
 
@@ -78,6 +86,7 @@ public final class ZygiskHookConfig {
         if (!isBinary(values.get("secure"))
                 || !isBinary(values.get("statusbar"))
                 || !isBinary(values.get("primaryhome_enhancement"))
+                || !isBinary(values.get("image_drag"))
                 || !isBinary(values.get("module"))
                 || !isBinary(values.get("zygisk"))
                 || !isBinary(values.get("lsposed"))
@@ -89,6 +98,7 @@ public final class ZygiskHookConfig {
                 "1".equals(values.get("secure")),
                 "1".equals(values.get("statusbar")),
                 "1".equals(values.get("primaryhome_enhancement")),
+                "1".equals(values.get("image_drag")),
                 "1".equals(values.get("module")),
                 "1".equals(values.get("zygisk")),
                 "1".equals(values.get("lsposed")),
@@ -102,6 +112,14 @@ public final class ZygiskHookConfig {
         }
         return ": > \"$onestep_config/" + marker + "\" || exit 1; "
                 + "chmod 0600 \"$onestep_config/" + marker + "\" || exit 1; ";
+    }
+
+    private static String updateEnableMarkerCommand(String marker, boolean enabled) {
+        if (enabled) {
+            return ": > \"$onestep_config/" + marker + "\" || exit 1; "
+                    + "chmod 0600 \"$onestep_config/" + marker + "\" || exit 1; ";
+        }
+        return "rm -f \"$onestep_config/" + marker + "\" || exit 1; ";
     }
 
     private static String moduleDiscoveryCommand() {
@@ -137,6 +155,7 @@ public final class ZygiskHookConfig {
         public final boolean secureWindowEnabled;
         public final boolean statusBarOverlayEnabled;
         public final boolean primaryHomeEnhancementEnabled;
+        public final boolean imageDragSharingEnabled;
         public final boolean moduleInstalled;
         public final boolean zygiskPayloadActive;
         public final boolean lsposedInstalled;
@@ -145,12 +164,14 @@ public final class ZygiskHookConfig {
 
         State(boolean secureWindowEnabled, boolean statusBarOverlayEnabled,
               boolean primaryHomeEnhancementEnabled,
+              boolean imageDragSharingEnabled,
               boolean moduleInstalled, boolean zygiskPayloadActive,
               boolean lsposedInstalled, boolean lsposedBackendActive,
               boolean standaloneBackendActive) {
             this.secureWindowEnabled = secureWindowEnabled;
             this.statusBarOverlayEnabled = statusBarOverlayEnabled;
             this.primaryHomeEnhancementEnabled = primaryHomeEnhancementEnabled;
+            this.imageDragSharingEnabled = imageDragSharingEnabled;
             this.moduleInstalled = moduleInstalled;
             this.zygiskPayloadActive = zygiskPayloadActive;
             this.lsposedInstalled = lsposedInstalled;

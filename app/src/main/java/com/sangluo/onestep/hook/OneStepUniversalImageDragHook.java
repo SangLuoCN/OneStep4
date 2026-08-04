@@ -18,6 +18,7 @@ import android.view.ViewGroup;
 import android.widget.ImageView;
 
 import com.sangluo.onestep.feature.drag.ImageDragBridgeClient;
+import com.sangluo.onestep.feature.drag.ImageDragFeatureGate;
 import com.sangluo.onestep.feature.drag.ImageDragSourcePolicy;
 
 import java.io.File;
@@ -89,7 +90,8 @@ public final class OneStepUniversalImageDragHook {
 
     public static void install(
             String packageName, String processName, ClassLoader hostClassLoader) {
-        if (!shouldInstall(packageName, processName)
+        if (!ImageDragFeatureGate.isEnabled()
+                || !shouldInstall(packageName, processName)
                 || !INSTALL_REQUESTED.compareAndSet(false, true)) {
             return;
         }

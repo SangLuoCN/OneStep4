@@ -112,7 +112,8 @@ public final class ImageDragBridgeService extends Service {
 
     private boolean isAccepted(
             int callingUid, int sourceDisplayId, String sourcePackage, String mimeType) {
-        return sourceDisplayId > 0
+        return ImageDragFeatureGate.isEnabled()
+                && sourceDisplayId > 0
                 && ImageDragSourcePolicy.isAllowed(sourcePackage, sourceDisplayId)
                 && ImageDragSourcePolicy.isSupportedMediaMimeType(mimeType)
                 && ImageDragBridgeRegistry.canAccept(

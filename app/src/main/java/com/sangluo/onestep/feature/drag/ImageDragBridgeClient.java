@@ -44,7 +44,7 @@ public final class ImageDragBridgeClient {
 
     /** Publishes QQ's decoded source file while its rich-media pipeline still owns it. */
     public static void publishQqOriginalCandidate(String sourcePath) {
-        if (TextUtils.isEmpty(sourcePath)) {
+        if (!ImageDragFeatureGate.isEnabled() || TextUtils.isEmpty(sourcePath)) {
             return;
         }
         File source = new File(sourcePath);
@@ -115,6 +115,9 @@ public final class ImageDragBridgeClient {
     public static boolean transfer(
             Context context, Uri sourceUri, int sourceDisplayId, String sourcePackage,
             String mimeType, long maxBytes, Executor executor) {
+        if (!ImageDragFeatureGate.isEnabled()) {
+            return false;
+        }
         Context applicationContext = context.getApplicationContext();
         Uri localMediaUri = GooglePhotosMediaUriResolver.resolve(sourceUri);
         Uri shareUri = localMediaUri == null ? sourceUri : localMediaUri;
@@ -149,7 +152,7 @@ public final class ImageDragBridgeClient {
     public static boolean transferBitmap(
             Context context, Bitmap bitmap, int sourceDisplayId, String sourcePackage,
             String mimeType, long maxBytes, Executor executor) {
-        if (bitmap == null || bitmap.isRecycled()) {
+        if (!ImageDragFeatureGate.isEnabled() || bitmap == null || bitmap.isRecycled()) {
             return false;
         }
         Bitmap snapshot;
@@ -188,7 +191,8 @@ public final class ImageDragBridgeClient {
     public static boolean transferFile(
             Context context, File sourceFile, int sourceDisplayId, String sourcePackage,
             String mimeType, long maxBytes, Executor executor) {
-        if (sourceFile == null || !sourceFile.isFile() || !sourceFile.canRead()) {
+        if (!ImageDragFeatureGate.isEnabled()
+                || sourceFile == null || !sourceFile.isFile() || !sourceFile.canRead()) {
             return false;
         }
         Context applicationContext = context.getApplicationContext();
@@ -215,7 +219,7 @@ public final class ImageDragBridgeClient {
     public static boolean transferUrl(
             Context context, String sourceUrl, int sourceDisplayId, String sourcePackage,
             String mimeType, long maxBytes, Executor executor) {
-        if (TextUtils.isEmpty(sourceUrl)
+        if (!ImageDragFeatureGate.isEnabled() || TextUtils.isEmpty(sourceUrl)
                 || (!sourceUrl.startsWith("https://") && !sourceUrl.startsWith("http://"))) {
             return false;
         }
@@ -231,7 +235,8 @@ public final class ImageDragBridgeClient {
     public static boolean transferWeChatPath(
             Context context, String sourcePath, int sourceDisplayId, String sourcePackage,
             String mimeType, long maxBytes, Executor executor) {
-        if (!"com.tencent.mm".equals(sourcePackage) || TextUtils.isEmpty(sourcePath)) {
+        if (!ImageDragFeatureGate.isEnabled()
+                || !"com.tencent.mm".equals(sourcePackage) || TextUtils.isEmpty(sourcePath)) {
             return false;
         }
         Context applicationContext = context.getApplicationContext();
@@ -246,7 +251,8 @@ public final class ImageDragBridgeClient {
     public static boolean transferQqMessage(
             Context context, Object qqMessageItem, int sourceDisplayId, String sourcePackage,
             String mimeType, long maxBytes, Executor executor) {
-        if (!"com.tencent.mobileqq".equals(sourcePackage) || qqMessageItem == null) {
+        if (!ImageDragFeatureGate.isEnabled()
+                || !"com.tencent.mobileqq".equals(sourcePackage) || qqMessageItem == null) {
             return false;
         }
         Context applicationContext = context.getApplicationContext();

@@ -14,6 +14,7 @@ import android.view.Display;
 import android.view.View;
 
 import com.sangluo.onestep.feature.drag.ImageDragBridgeClient;
+import com.sangluo.onestep.feature.drag.ImageDragFeatureGate;
 import com.sangluo.onestep.feature.drag.ImageDragSourcePolicy;
 import com.sangluo.onestep.feature.drag.GooglePhotosMediaUriResolver;
 
@@ -62,7 +63,8 @@ public final class OneStepGooglePhotosDragHook {
     }
 
     public static void install(String packageName, String processName) {
-        if (!TextUtils.equals(ImageDragSourcePolicy.GOOGLE_PHOTOS_PACKAGE, packageName)
+        if (!ImageDragFeatureGate.isEnabled()
+                || !TextUtils.equals(ImageDragSourcePolicy.GOOGLE_PHOTOS_PACKAGE, packageName)
                 || !TextUtils.equals(packageName, processName)
                 || !INSTALL_REQUESTED.compareAndSet(false, true)) {
             return;

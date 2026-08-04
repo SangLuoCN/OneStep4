@@ -138,6 +138,7 @@ public final class SettingsPanelController {
         void saveZygiskHookSettings(boolean secureWindowEnabled,
                                     boolean statusBarOverlayEnabled,
                                     boolean primaryHomeEnhancementEnabled,
+                                    boolean imageDragSharingEnabled,
                                     HookSettingsResultCallback callback);
         void rebootDevice();
     }
@@ -192,9 +193,11 @@ public final class SettingsPanelController {
     private TextView secureWindowHookValueView;
     private TextView statusBarOverlayHookValueView;
     private TextView primaryHomeEnhancementValueView;
+    private TextView imageDragSharingValueView;
     private Switch secureWindowHookSwitch;
     private Switch statusBarOverlayHookSwitch;
     private Switch primaryHomeEnhancementSwitch;
+    private Switch imageDragSharingSwitch;
     private LinearLayout applyHookSettingsItem;
     private LinearLayout exportLogItem;
     private int oneStepTriggerAreaScalePct;
@@ -210,6 +213,7 @@ public final class SettingsPanelController {
     private boolean secureWindowHookEnabled = true;
     private boolean statusBarOverlayHookEnabled;
     private boolean primaryHomeEnhancementEnabled = true;
+    private boolean imageDragSharingEnabled;
     private boolean zygiskModuleInstalled;
     private boolean zygiskPayloadActive;
     private boolean lsposedInstalled;
@@ -381,7 +385,8 @@ public final class SettingsPanelController {
                 "开启且Hook生效时增强主屏及壁纸，否则按普通应用打开桌面",
                 primaryHomeEnhancementEnabled,
                 enabled -> updateZygiskHookSettings(
-                        secureWindowHookEnabled, statusBarOverlayHookEnabled, enabled));
+                        secureWindowHookEnabled, statusBarOverlayHookEnabled,
+                        enabled, imageDragSharingEnabled));
         primaryHomeEnhancementValueView = (TextView) primaryHomeEnhancementItem.getTag();
         primaryHomeEnhancementSwitch = findSwitchInItem(primaryHomeEnhancementItem);
         LinearLayout.LayoutParams primaryHomeEnhancementLp = new LinearLayout.LayoutParams(
@@ -502,13 +507,27 @@ public final class SettingsPanelController {
         zygiskStatusLp.topMargin = dp(12);
         list.addView(zygiskHookStatusItem, zygiskStatusLp);
 
+        LinearLayout imageDragSharingItem = createSwitchSettingsItem(
+                "拖拽分享",
+                "开启后支持相册、QQ、微信等应用长按媒体拖拽分享（必需开启Zygisk）",
+                imageDragSharingEnabled,
+                enabled -> updateZygiskHookSettings(
+                        secureWindowHookEnabled, statusBarOverlayHookEnabled,
+                        primaryHomeEnhancementEnabled, enabled));
+        imageDragSharingValueView = (TextView) imageDragSharingItem.getTag();
+        imageDragSharingSwitch = findSwitchInItem(imageDragSharingItem);
+        LinearLayout.LayoutParams imageDragSharingLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(104));
+        imageDragSharingLp.topMargin = dp(12);
+        list.addView(imageDragSharingItem, imageDragSharingLp);
+
         LinearLayout secureWindowHookItem = createSwitchSettingsItem(
                 "隐私窗口显示",
                 "开启可正常显示隐私窗口（必需开启Zygisk）",
                 secureWindowHookEnabled,
                 enabled -> updateZygiskHookSettings(
                         enabled, statusBarOverlayHookEnabled,
-                        primaryHomeEnhancementEnabled));
+                        primaryHomeEnhancementEnabled, imageDragSharingEnabled));
         secureWindowHookValueView = (TextView) secureWindowHookItem.getTag();
         secureWindowHookSwitch = findSwitchInItem(secureWindowHookItem);
         LinearLayout.LayoutParams secureWindowHookLp = new LinearLayout.LayoutParams(
@@ -522,7 +541,7 @@ public final class SettingsPanelController {
                 statusBarOverlayHookEnabled,
                 enabled -> updateZygiskHookSettings(
                         secureWindowHookEnabled, enabled,
-                        primaryHomeEnhancementEnabled));
+                        primaryHomeEnhancementEnabled, imageDragSharingEnabled));
         statusBarOverlayHookValueView = (TextView) statusBarOverlayHookItem.getTag();
         statusBarOverlayHookSwitch = findSwitchInItem(statusBarOverlayHookItem);
         LinearLayout.LayoutParams statusBarOverlayHookLp = new LinearLayout.LayoutParams(
@@ -1341,7 +1360,8 @@ public final class SettingsPanelController {
 
     private void updateZygiskHookSettings(boolean secureWindowEnabled,
                                           boolean statusBarOverlayEnabled,
-                                          boolean primaryHomeEnhancementEnabled) {
+                                          boolean primaryHomeEnhancementEnabled,
+                                          boolean imageDragSharingEnabled) {
         if (updatingHookSwitches || !hookSettingsLoaded || hookSettingsSaving) {
             return;
         }
@@ -1349,9 +1369,11 @@ public final class SettingsPanelController {
         boolean previousStatusBarOverlayEnabled = this.statusBarOverlayHookEnabled;
         boolean previousPrimaryHomeEnhancementEnabled =
                 this.primaryHomeEnhancementEnabled;
+        boolean previousImageDragSharingEnabled = this.imageDragSharingEnabled;
         this.secureWindowHookEnabled = secureWindowEnabled;
         this.statusBarOverlayHookEnabled = statusBarOverlayEnabled;
         this.primaryHomeEnhancementEnabled = primaryHomeEnhancementEnabled;
+        this.imageDragSharingEnabled = imageDragSharingEnabled;
         hookSettingsSaving = true;
         int requestGeneration = ++hookSettingsRequestGeneration;
         refreshZygiskHookSettingsViews();
@@ -1359,6 +1381,7 @@ public final class SettingsPanelController {
                 secureWindowEnabled,
                 statusBarOverlayEnabled,
                 primaryHomeEnhancementEnabled,
+                imageDragSharingEnabled,
                 (state, error) -> activity.runOnUiThread(() -> {
                     if (requestGeneration != hookSettingsRequestGeneration) {
                         return;
@@ -1369,6 +1392,7 @@ public final class SettingsPanelController {
                         this.statusBarOverlayHookEnabled = previousStatusBarOverlayEnabled;
                         this.primaryHomeEnhancementEnabled =
                                 previousPrimaryHomeEnhancementEnabled;
+                        this.imageDragSharingEnabled = previousImageDragSharingEnabled;
                         rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
                         hookSettingsNeedsRoot = !rootAuthorizationGranted;
                         refreshRootAuthorizationView();
@@ -1392,6 +1416,7 @@ public final class SettingsPanelController {
         secureWindowHookEnabled = state.secureWindowEnabled;
         statusBarOverlayHookEnabled = state.statusBarOverlayEnabled;
         primaryHomeEnhancementEnabled = state.primaryHomeEnhancementEnabled;
+        imageDragSharingEnabled = state.imageDragSharingEnabled;
         zygiskModuleInstalled = state.moduleInstalled;
         zygiskPayloadActive = state.zygiskPayloadActive;
         lsposedInstalled = state.lsposedInstalled;
@@ -1416,6 +1441,9 @@ public final class SettingsPanelController {
             primaryHomeEnhancementValueView.setText(
                     formatSwitchValue(primaryHomeEnhancementEnabled));
         }
+        if (imageDragSharingValueView != null) {
+            imageDragSharingValueView.setText(formatSwitchValue(imageDragSharingEnabled));
+        }
         boolean controlsEnabled = hookSettingsLoaded
                 && zygiskModuleInstalled && !hookSettingsSaving;
         updatingHookSwitches = true;
@@ -1425,6 +1453,8 @@ public final class SettingsPanelController {
                     statusBarOverlayHookEnabled, controlsEnabled);
             updateHookSwitch(primaryHomeEnhancementSwitch,
                     primaryHomeEnhancementEnabled, controlsEnabled);
+            updateHookSwitch(imageDragSharingSwitch,
+                    imageDragSharingEnabled, controlsEnabled);
         } finally {
             updatingHookSwitches = false;
         }

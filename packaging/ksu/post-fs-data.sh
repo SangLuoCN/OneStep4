@@ -54,6 +54,11 @@ if [ -e "$MODDIR/hook-config/disable-primary-home-enhancement" ]; then
 else
   primary_home_enhancement=1
 fi
+if [ -e "$MODDIR/hook-config/enable-image-drag-sharing" ]; then
+  set_hook_property onestep.hook.image_drag 1
+else
+  set_hook_property onestep.hook.image_drag 0
+fi
 
 zygisk_next_active() {
   for module_prop in /data/adb/modules/*/module.prop; do
