@@ -12,6 +12,7 @@ for replace_path in \
 done
 REPLACE=""
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
+APK_INSTALLER="$MODPATH/install-module-apk.sh"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 GLOBAL_ZYGISK_TOGGLE="/data/adb/post-fs-data.d/onestep40-zygisk-toggle.sh"
 HOOK_CONFIG_DIR="$MODPATH/hook-config"
@@ -129,6 +130,15 @@ if [ -f "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" ]; then
   set_perm "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" 0 0 0644
 fi
 
+module_version_code="$(sed -n 's/^versionCode=//p' "$MODPATH/module.prop" | head -n 1)"
+if [ ! -f "$APK_INSTALLER" ]; then
+  abort "! 模块中缺少 APK 安装脚本"
+fi
+. "$APK_INSTALLER"
+if ! install_onestep_module_apk "$APK_PATH" "$module_version_code" "$MODPATH"; then
+  abort "! 无法在模块安装阶段更新 OneStep4"
+fi
+
 if pm path "$PACKAGE_NAME" >/dev/null 2>&1; then
   if cmd role get-role-holders --user 0 "$VIRTUAL_DISPLAY_ROLE" 2>/dev/null \
       | grep -qx "$PACKAGE_NAME"; then
@@ -143,4 +153,5 @@ else
   ui_print "- 系统尚未扫描到 OneStep4，将在首次启动时授予可信虚拟显示角色"
 fi
 
+rm -f "$APK_INSTALLER"
 rm -f "$MODPATH/customize.sh"

@@ -57,6 +57,7 @@ done
 REPLACE=""
 
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
+APK_INSTALLER="$MODPATH/install-module-apk.sh"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 HOOK_CONFIG_DIR="$MODPATH/hook-config"
 
@@ -156,7 +157,17 @@ else
   fi
 fi
 
-ui_print "- KernelSU 版本：${KSU_VER:-未知}（版本代码：${KSU_VER_CODE:-未知}）"
-ui_print "- 重启后将为当前 Android 用户恢复 OneStep4"
+module_version_code="$(sed -n 's/^versionCode=//p' "$MODPATH/module.prop" | head -n 1)"
+if [ ! -f "$APK_INSTALLER" ]; then
+  abort "! 模块中缺少 APK 安装脚本"
+fi
+. "$APK_INSTALLER"
+if ! install_onestep_module_apk "$APK_PATH" "$module_version_code" "$MODPATH"; then
+  abort "! 无法在模块安装阶段更新 OneStep4"
+fi
 
+ui_print "- KernelSU 版本：${KSU_VER:-未知}（版本代码：${KSU_VER_CODE:-未知}）"
+ui_print "- 重启后将为当前 Android 用户恢复 OneStep4 状态"
+
+rm -f "$APK_INSTALLER"
 rm -f "$MODPATH/customize.sh"

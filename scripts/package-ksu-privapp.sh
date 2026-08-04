@@ -91,6 +91,8 @@ cp "$ROOT_DIR/packaging/ksu/post-fs-data.sh" "$WORK_DIR/post-fs-data.sh"
 cp "$ROOT_DIR/packaging/ksu/uninstall.sh" "$WORK_DIR/uninstall.sh"
 cp "$ROOT_DIR/packaging/magisk/service.sh" "$WORK_DIR/boot-completed.sh"
 cp "$ROOT_DIR/packaging/root/action.sh" "$WORK_DIR/action.sh"
+cp "$ROOT_DIR/packaging/root/install-module-apk.sh" \
+    "$WORK_DIR/install-module-apk.sh"
 cp "$ROOT_DIR/packaging/root/post-fs-data.sh" \
     "$WORK_DIR/statusbar-post-fs-data.sh"
 cp "$ROOT_DIR/packaging/ksu/sepolicy.rule" "$WORK_DIR/sepolicy.rule"
@@ -129,6 +131,7 @@ chmod 0755 "$WORK_DIR/post-fs-data.sh"
 chmod 0755 "$WORK_DIR/uninstall.sh"
 chmod 0755 "$WORK_DIR/boot-completed.sh"
 chmod 0755 "$WORK_DIR/action.sh"
+chmod 0755 "$WORK_DIR/install-module-apk.sh"
 chmod 0755 "$WORK_DIR/statusbar-post-fs-data.sh"
 chmod 0644 "$WORK_DIR/sepolicy.rule"
 chmod 0644 "$WORK_DIR/$APK_ENTRY"
@@ -161,6 +164,7 @@ unzip -qq "$OUT_ZIP" \
     "boot-completed.sh" \
     "uninstall.sh" \
     "action.sh" \
+    "install-module-apk.sh" \
     "statusbar-post-fs-data.sh" \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk" \
     -d "$VERIFY_DIR"
@@ -177,6 +181,7 @@ for required_entry in \
     "boot-completed.sh" \
     "uninstall.sh" \
     "action.sh" \
+    "install-module-apk.sh" \
     "statusbar-post-fs-data.sh" \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk"; do
     if [[ ! -s "$VERIFY_DIR/$required_entry" ]]; then

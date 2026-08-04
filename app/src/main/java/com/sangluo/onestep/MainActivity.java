@@ -3894,7 +3894,7 @@ public class MainActivity extends Activity {
             showBuiltInDesktopInMain(selectedDesktop);
             return;
         }
-        int desktopSlot = findDesktopHomeSlot();
+        int desktopSlot = findDisplayedDesktopHomeSlot();
         if (desktopSlot == activeMainSlot) {
             desktopHomeRequestPending = false;
             return;
@@ -3907,15 +3907,27 @@ public class MainActivity extends Activity {
             return;
         }
 
+        int staleDesktopSlot = findDesktopHomeSlot();
+        if (staleDesktopSlot >= 0) {
+            windowViews[staleDesktopSlot].hideDesktopHome();
+        }
+
+        int emptyMainSlot = findEmptyInactiveMainSlot();
         int emptySideSlot = findEmptySideSlot();
         boolean mainOccupied = windowApps[activeMainSlot] != null
                 || isInternalSettingsSlot(activeMainSlot);
         AppLaunchPlacement placement = AppLaunchPlacement.decide(
-                activeMainSlot, mainOccupied, emptySideSlot);
+                activeMainSlot, mainOccupied, emptyMainSlot, emptySideSlot, -1);
         switch (placement.action) {
             case START_IN_MAIN:
                 windowViews[activeMainSlot].showDesktopHome();
                 renderWindows();
+                break;
+            case START_IN_EMPTY_MAIN:
+                if (activateMainPane(placement.targetSlot, false)) {
+                    windowViews[placement.targetSlot].showDesktopHome();
+                    renderWindows();
+                }
                 break;
             case START_IN_SIDE_AND_PROMOTE:
                 stageDesktopHomeForMainPromotion(placement.targetSlot);
@@ -3955,8 +3967,12 @@ public class MainActivity extends Activity {
 
     private void showBuiltInDesktopInMain(LauncherApp desktopApp) {
         suppressEmbeddedStarts = false;
-        int desktopSlot = findSlotByComponent(desktopApp.componentName);
+        int desktopSlot = findDisplayedSlotByComponent(desktopApp.componentName);
         if (desktopSlot < 0) {
+            int staleDesktopSlot = findSlotByComponent(desktopApp.componentName);
+            if (staleDesktopSlot >= 0) {
+                clearStalePrimaryDesktopSlot(staleDesktopSlot, desktopApp);
+            }
             addOrFocusApp(desktopApp);
             return;
         }
@@ -4088,6 +4104,15 @@ public class MainActivity extends Activity {
     private int findDesktopHomeSlot() {
         for (int slot = 0; slot < MAX_WINDOWS; slot++) {
             if (isDesktopHomeSlot(slot)) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
+    private int findDisplayedDesktopHomeSlot() {
+        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
+            if (isWindowSlotEnabled(slot) && isDesktopHomeSlot(slot)) {
                 return slot;
             }
         }
@@ -6367,29 +6392,32 @@ public class MainActivity extends Activity {
         if (handleOverlayBack()) {
             return;
         }
-        sendBackToActiveMainHost();
+        showBuiltInDesktopForBack();
     }
 
     private void handleSystemBack() {
         if (handleOverlayBack()) {
             return;
         }
-        if (sendBackToActiveMainHost()) {
+        if (showBuiltInDesktopForBack()) {
             return;
         }
         Log.i(TAG, "Consume root launcher back");
     }
 
-    private boolean sendBackToActiveMainHost() {
+    private boolean showBuiltInDesktopForBack() {
         if (activeMainSlot < 0 || activeMainSlot >= MAX_WINDOWS
-                || windowApps[activeMainSlot] == null) {
+                || (windowApps[activeMainSlot] == null
+                && !isDesktopHomeSlot(activeMainSlot))) {
             return false;
         }
-        EmbeddedAppHost host = embeddedHosts[activeMainSlot];
-        if (host == null) {
-            return false;
+        if (isDisplayedMainDesktopSlot(activeMainSlot)) {
+            Log.i(TAG, "Keep built-in desktop in main after Back: slot=" + activeMainSlot);
+            return true;
         }
-        host.sendBack();
+        Log.i(TAG, "Route Back to built-in desktop without closing main app: slot="
+                + activeMainSlot + ", app=" + windowApps[activeMainSlot].packageName);
+        requestDesktopHomeInMain();
         return true;
     }
 
@@ -7833,6 +7861,20 @@ public class MainActivity extends Activity {
         for (int slot = 0; slot < MAX_WINDOWS; slot++) {
             LauncherApp app = windowApps[slot];
             if (app != null && componentName.equals(app.componentName)) {
+                return slot;
+            }
+        }
+        return -1;
+    }
+
+    private int findDisplayedSlotByComponent(ComponentName componentName) {
+        if (componentName == null) {
+            return -1;
+        }
+        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
+            LauncherApp app = windowApps[slot];
+            if (isWindowSlotEnabled(slot) && app != null
+                    && componentName.equals(app.componentName)) {
                 return slot;
             }
         }
