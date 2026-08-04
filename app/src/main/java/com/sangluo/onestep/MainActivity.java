@@ -4876,6 +4876,9 @@ public class MainActivity extends Activity {
             ImageDragShareEntry entry, Intent share) {
         ImageDragShareTarget target = entry.target;
         LauncherApp targetApp = entry.app;
+        if (!target.usesAppInstance()) {
+            return launchDirectShareInContainer(target, share);
+        }
         int targetSlot = targetApp == null ? -1 : findSlot(targetApp);
         if (targetSlot >= 0) {
             EmbeddedAppHost host = embeddedHosts[targetSlot];
@@ -4900,6 +4903,59 @@ public class MainActivity extends Activity {
             Log.w(TAG, "Cannot start drag share target on display 0: " + target, e);
             return false;
         }
+    }
+
+    /** Keep direct ACTION_SEND targets inside a OneStep virtual display. */
+    private boolean launchDirectShareInContainer(
+            ImageDragShareTarget target, Intent share) {
+        if (share == null || share.getComponent() == null || activityDestroyed) {
+            return false;
+        }
+        EmbeddedAppHost emptyHost = null;
+        int targetSlot = findEmptySideSlot();
+        if (targetSlot < 0) {
+            targetSlot = findEmptyInactiveMainSlot();
+        }
+        if (targetSlot >= 0 && targetSlot < MAX_WINDOWS) {
+            emptyHost = embeddedHosts[targetSlot];
+        }
+        if (targetSlot >= 0 && !(emptyHost instanceof RootVirtualDisplayHost)) {
+            Log.w(TAG, "Cannot place direct share in slot without root display host: slot="
+                    + targetSlot);
+            return false;
+        }
+
+        LauncherApp directShareApp = new LauncherApp(
+                imageDragShareTargetDescription(target),
+                share.getComponent(),
+                getDrawable(imageDragShareTargetDrawable(target)));
+        Intent routedShare = new Intent(share)
+                .putExtra(EXTRA_IMAGE_SHARE_ROUTE, true);
+        routedShare.removeExtra(EXTRA_IMAGE_SHARE_WAIT_FOR_APP_READY);
+        routedLaunchIntents.put(directShareApp.instanceKey(), routedShare);
+
+        if (targetSlot >= 0 && targetSlot != activeMainSlot) {
+            startAppInSlot(targetSlot, directShareApp);
+            Log.i(TAG, "Place direct share in empty OneStep container: target=" + target
+                    + ", slot=" + targetSlot);
+            return true;
+        }
+
+        int mainSlot = activeMainSlot;
+        if (mainSlot < 0 || mainSlot >= MAX_WINDOWS) {
+            routedLaunchIntents.remove(directShareApp.instanceKey());
+            return false;
+        }
+        if (isDesktopHomeSlot(mainSlot)) {
+            replaceDesktopHomeWithApp(directShareApp);
+        } else if (isInternalSettingsSlot(mainSlot)) {
+            replaceInternalSettingsWithApp(directShareApp, -1);
+        } else {
+            replaceAppInSlot(mainSlot, directShareApp);
+        }
+        Log.i(TAG, "Replace active OneStep main container with direct share: target=" + target
+                + ", slot=" + mainSlot);
+        return true;
     }
 
     private void deliverDraggedImage(
