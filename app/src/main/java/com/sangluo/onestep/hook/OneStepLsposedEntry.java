@@ -40,6 +40,9 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
                     loadPackageParam.packageName, loadPackageParam.processName);
             return;
         }
+        OneStepUniversalImageDragHook.install(
+                loadPackageParam.packageName, loadPackageParam.processName,
+                loadPackageParam.classLoader);
         if (!SYSTEM_FRAMEWORK_PACKAGE.equals(loadPackageParam.packageName)
                 && !SETTINGS_PACKAGE.equals(loadPackageParam.packageName)
                 && !SYSTEM_UI_PACKAGE.equals(loadPackageParam.packageName)

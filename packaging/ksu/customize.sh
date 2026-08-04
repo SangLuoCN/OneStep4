@@ -85,6 +85,24 @@ lsposed_active() {
   return 1
 }
 
+zygisk_next_active() {
+  for module_prop in /data/adb/modules/*/module.prop; do
+    [ -f "$module_prop" ] || continue
+    module_dir="${module_prop%/*}"
+    [ "$module_dir" != "$MODPATH" ] || continue
+    [ ! -e "$module_dir/disable" ] || continue
+    [ ! -e "$module_dir/remove" ] || continue
+    if grep -Eiq '^(id|name)=.*(zygisk.?next|zygisksu)' "$module_prop"; then
+      return 0
+    fi
+    if [ -d "$module_dir/zygisk" ] \
+        && grep -Eiq '^(id|name)=.*zygisk' "$module_prop"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 mkdir -p "$HOOK_CONFIG_DIR"
 for hook_marker in disable-secure-window disable-status-bar-overlay \
     disable-primary-home-enhancement enable-hyperos-third-party-gesture; do
@@ -119,21 +137,23 @@ set_perm "$MODPATH/action.sh" 0 0 0755
 set_perm "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" 0 0 0644
 set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
 
-if lsposed_active; then
-  ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
-  ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”、“设置”和“系统桌面”作用域"
-elif [ -d /data/adb/modules/zygisksu ] \
-    && [ -f /data/adb/modules/zygisksu/module.prop ] \
-    && grep -q '^id=zygisksu$' /data/adb/modules/zygisksu/module.prop \
-    && [ ! -e /data/adb/modules/zygisksu/disable ] \
-    && [ ! -e /data/adb/modules/zygisksu/remove ]; then
+if [ -f "$ZYGISK_PAYLOAD_DIR/arm64-v8a.so" ] \
+    && [ -f "$ZYGISK_PAYLOAD_DIR/armeabi-v7a.so" ]; then
   mkdir -p "$MODPATH/zygisk"
   cp -f "$ZYGISK_PAYLOAD_DIR/arm64-v8a.so" "$MODPATH/zygisk/arm64-v8a.so"
   cp -f "$ZYGISK_PAYLOAD_DIR/armeabi-v7a.so" "$MODPATH/zygisk/armeabi-v7a.so"
   set_perm_recursive "$MODPATH/zygisk" 0 0 0755 0644
-  ui_print "- ZygiskNext 已检测到：重启后启用 FLAG_SECURE 显示增强"
+  if lsposed_active; then
+    ui_print "- LSPosed/Vector + Zygisk payload 已准备：系统 Hook 使用 LSPosed，通用应用图片 Hook 使用 ZygiskNext"
+  else
+    ui_print "- Zygisk payload 已准备：重启后由 ZygiskNext 加载"
+  fi
 else
-  ui_print "- ZygiskNext 未启用：以普通页面兼容模式运行"
+  if lsposed_active; then
+    ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
+  else
+    ui_print "- ZygiskNext 未启用：以普通页面兼容模式运行"
+  fi
 fi
 
 ui_print "- KernelSU 版本：${KSU_VER:-未知}（版本代码：${KSU_VER_CODE:-未知}）"

@@ -1,7 +1,6 @@
 #!/system/bin/sh
 
 MODDIR="${0%/*}"
-ZYGISK_NEXT_DIR="/data/adb/modules/zygisksu"
 PAYLOAD_DIR="$MODDIR/zygisk-payload"
 ARM64_PAYLOAD="$PAYLOAD_DIR/arm64-v8a.so"
 ARM32_PAYLOAD="$PAYLOAD_DIR/armeabi-v7a.so"
@@ -35,6 +34,10 @@ set_hook_property() {
 
 rm -f "$LSPOSED_ACTIVE_MARKER" "$STANDALONE_ACTIVE_MARKER" \
   "$PRIMARY_HOME_ACTIVE_MARKER" "$ROOT_DISPLAY_COMPAT_ACTIVE_MARKER"
+lsposed_detected=0
+if lsposed_active; then
+  lsposed_detected=1
+fi
 set_hook_property onestep.hook.primaryhome_enhancement 0
 if [ -e "$MODDIR/hook-config/disable-secure-window" ]; then
   set_hook_property onestep.hook.secure 0
@@ -53,25 +56,32 @@ else
 fi
 
 zygisk_next_active() {
-  [ -d "$ZYGISK_NEXT_DIR" ] \
-    && [ -f "$ZYGISK_NEXT_DIR/module.prop" ] \
-    && grep -q '^id=zygisksu$' "$ZYGISK_NEXT_DIR/module.prop" \
-    && [ ! -e "$ZYGISK_NEXT_DIR/disable" ] \
-    && [ ! -e "$ZYGISK_NEXT_DIR/remove" ]
+  for module_prop in /data/adb/modules/*/module.prop; do
+    [ -f "$module_prop" ] || continue
+    module_dir="${module_prop%/*}"
+    [ "$module_dir" != "$MODDIR" ] || continue
+    [ ! -e "$module_dir/disable" ] || continue
+    [ ! -e "$module_dir/remove" ] || continue
+    if grep -Eiq '^(id|name)=.*(zygisk.?next|zygisksu)' "$module_prop"; then
+      return 0
+    fi
+    if [ -d "$module_dir/zygisk" ] \
+        && grep -Eiq '^(id|name)=.*zygisk' "$module_prop"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
-if lsposed_active; then
+if [ "$lsposed_detected" = "1" ]; then
   set_hook_property onestep.hook.backend lsposed
   set_hook_property onestep.hook.primaryhome_enhancement \
     "$primary_home_enhancement"
-  rm -rf "$MODDIR/zygisk"
-  exit 0
+else
+  set_hook_property onestep.hook.backend standalone
 fi
 
-set_hook_property onestep.hook.backend standalone
-
-if ! zygisk_next_active \
-    || [ ! -f "$ARM64_PAYLOAD" ] \
+if [ ! -f "$ARM64_PAYLOAD" ] \
     || [ ! -f "$ARM32_PAYLOAD" ]; then
   rm -rf "$MODDIR/zygisk"
   exit 0

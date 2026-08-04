@@ -7,12 +7,13 @@ import org.junit.Test;
 
 public class ImageDragSourcePolicyTest {
     @Test
-    public void acceptsOnlyGooglePhotosOnVirtualDisplay() {
+    public void acceptsAnyAppOnVirtualDisplayButNotDisplayZero() {
         assertTrue(ImageDragSourcePolicy.isAllowed(
                 "com.google.android.apps.photos", 7));
         assertFalse(ImageDragSourcePolicy.isAllowed(
                 "com.google.android.apps.photos", 0));
-        assertFalse(ImageDragSourcePolicy.isAllowed("com.example.gallery", 7));
+        assertTrue(ImageDragSourcePolicy.isAllowed("com.example.gallery", 7));
+        assertFalse(ImageDragSourcePolicy.isAllowed("com.sangluo.onestep", 7));
     }
 
     @Test

@@ -1,6 +1,6 @@
 package com.sangluo.onestep.feature.drag;
 
-/** Defines the single gallery source supported by OneStep media dragging. */
+/** Defines which source processes may publish media into OneStep. */
 public final class ImageDragSourcePolicy {
     public static final String GOOGLE_PHOTOS_PACKAGE = "com.google.android.apps.photos";
 
@@ -8,7 +8,11 @@ public final class ImageDragSourcePolicy {
     }
 
     public static boolean isAllowed(String packageName, int displayId) {
-        return displayId > 0 && GOOGLE_PHOTOS_PACKAGE.equals(packageName);
+        return displayId > 0
+                && packageName != null
+                && !packageName.isEmpty()
+                && !"com.sangluo.onestep".equals(packageName)
+                && !"android".equals(packageName);
     }
 
     public static boolean isImageMimeType(String mimeType) {

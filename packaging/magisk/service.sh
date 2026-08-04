@@ -309,6 +309,31 @@ restore_hyperos_gesture_navigation() {
   return 1
 }
 
+prepare_qq_original_media_storage() {
+  user_id="$1"
+  qq_package="com.tencent.mobileqq"
+  if ! pm list packages --user "$user_id" 2>/dev/null \
+      | grep -qx "package:$qq_package"; then
+    write_log "已跳过 QQ 原图目录初始化：用户 $user_id 未安装 QQ"
+    return 0
+  fi
+
+  run_and_log cmd appops set --user "$user_id" --uid "$qq_package" \
+      MANAGE_EXTERNAL_STORAGE allow || true
+  run_and_log cmd appops set --user "$user_id" "$qq_package" \
+      WRITE_EXTERNAL_STORAGE allow || true
+  qq_media_dir="/storage/emulated/$user_id/Tencent/MobileQQ/chatpic/Temp"
+  if mkdir -p "$qq_media_dir" 2>/dev/null; then
+    chmod 0777 "/storage/emulated/$user_id/Tencent" \
+        "/storage/emulated/$user_id/Tencent/MobileQQ" \
+        "/storage/emulated/$user_id/Tencent/MobileQQ/chatpic" \
+        "$qq_media_dir" 2>/dev/null || true
+    write_log "已初始化 QQ 原图媒体目录：$qq_media_dir"
+  else
+    write_log "无法初始化 QQ 原图媒体目录：$qq_media_dir"
+  fi
+}
+
 write_log "正在等待 Android 启动完成"
 if [ -x "$MODDIR/statusbar-post-fs-data.sh" ]; then
   write_log "正在检查可选的 Zygisk 状态栏覆盖层"
@@ -351,9 +376,11 @@ if ! ensure_current_package 0 "$module_version_code"; then
 fi
 
 restore_for_user 0
+prepare_qq_original_media_storage 0
 
 if [ "$current_user" != "0" ]; then
   restore_for_user "$current_user"
+  prepare_qq_original_media_storage "$current_user"
 fi
 
 write_log "OneStep 应用恢复完成"

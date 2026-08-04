@@ -28,6 +28,7 @@ void writeStatusHookDiagnostic(const char *message) {
 }
 
 constexpr const char *kAliuHookDex = "zygisk-runtime/aliuhook.dex";
+constexpr const char *kOneStepPackage = "com.sangluo.onestep";
 constexpr const char *kOneStepApk = "/system/priv-app/OneStep4/OneStep4.apk";
 constexpr const char *kHookClass =
         "com.sangluo.onestep.hook.OneStepSecureWindowHook";
@@ -43,6 +44,8 @@ constexpr const char *kHyperOsSystemUiGestureNavigationHookClass =
         "com.sangluo.onestep.hook.HyperOsSystemUiGestureNavigationBypassHook";
 constexpr const char *kGooglePhotosDragHookClass =
         "com.sangluo.onestep.hook.OneStepGooglePhotosDragHook";
+constexpr const char *kUniversalImageDragHookClass =
+        "com.sangluo.onestep.hook.OneStepUniversalImageDragHook";
 constexpr const char *kMiuiHomeProcess = "com.miui.home";
 constexpr const char *kSystemUiProcess = "com.android.systemui";
 constexpr const char *kGooglePhotosProcess = "com.google.android.apps.photos";
@@ -455,6 +458,22 @@ bool isProcess(JNIEnv *env, jstring niceName, const char *expected) {
     return matches;
 }
 
+bool isUserAppMainProcess(JNIEnv *env, jint uid, jstring niceName) {
+    if (uid < 10000 || niceName == nullptr) {
+        return false;
+    }
+    const char *name = env->GetStringUTFChars(niceName, nullptr);
+    if (jniResultUnavailable(env, name, "read generic image source process name")) {
+        return false;
+    }
+    bool mainProcess = strchr(name, ':') == nullptr
+            && strcmp(name, kOneStepPackage) != 0
+            && strcmp(name, kSystemUiProcess) != 0
+            && strcmp(name, kMiuiHomeProcess) != 0;
+    env->ReleaseStringUTFChars(niceName, name);
+    return mainProcess;
+}
+
 bool isPackageDataDirectory(JNIEnv *env, jstring appDataDir, const char *expected) {
     if (appDataDir == nullptr || expected == nullptr) {
         return false;
@@ -496,18 +515,28 @@ public:
                 && isPackageDataDirectory(
                         env, args->app_data_dir, kGooglePhotosProcess);
         bool isGooglePhotos = googlePhotosNameMatched || googlePhotosDataDirMatched;
-        if (!wantsHyperOsHook && !isGooglePhotos) {
+        bool isGenericImageSource = args != nullptr
+                && isUserAppMainProcess(env, args->uid, args->nice_name)
+                && !isGooglePhotos;
+        if (!wantsHyperOsHook && !isGooglePhotos && !isGenericImageSource) {
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
             return;
         }
-        if (activeLsposedModuleInstalled()) {
-            LOGI("LSPosed backend selected; skip standalone app hook");
+        // LSPosed owns the system/framework hooks, but it is often not scoped to
+        // every user application. Keep the Zygisk app-side media hook available
+        // so generic image extraction does not depend on manually maintaining a
+        // growing LSPosed scope list.
+        if (activeLsposedModuleInstalled() && !isGenericImageSource && !isGooglePhotos) {
+            LOGI("LSPosed backend selected; skip standalone non-app hook");
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
             return;
         }
         if (isGooglePhotos) {
             LOGI("Google Photos source process selected via %s",
                  googlePhotosNameMatched ? "process name" : "app data directory");
+        }
+        if (isGenericImageSource) {
+            LOGI("Generic image source process selected");
         }
         int moduleFd = api->getModuleDir();
         if (moduleFd < 0) {
@@ -533,7 +562,16 @@ public:
                             "load Google Photos drag hook class");
                     if (localSource != nullptr) {
                         googlePhotosDragHookClass = static_cast<jclass>(
-                                env->NewGlobalRef(localSource));
+                            env->NewGlobalRef(localSource));
+                    }
+                }
+                if (isGenericImageSource) {
+                    jclass localUniversal = loadNamedHookClass(
+                            env, appLoader, kUniversalImageDragHookClass,
+                            "load universal image drag hook class");
+                    if (localUniversal != nullptr) {
+                        universalImageDragHookClass = static_cast<jclass>(
+                                env->NewGlobalRef(localUniversal));
                     }
                 }
             }
@@ -544,7 +582,8 @@ public:
                      kAbi, isMiuiHome ? kMiuiHomeProcess : kSystemUiProcess);
             }
             if (hyperOsAppHookClass != nullptr
-                    || googlePhotosDragHookClass != nullptr) {
+                    || googlePhotosDragHookClass != nullptr
+                    || universalImageDragHookClass != nullptr) {
                 appProcessSystemClassLoaderRef = env->NewGlobalRef(systemLoader);
             }
         }
@@ -554,7 +593,7 @@ public:
         }
     }
 
-    void postAppSpecialize(const zygisk::AppSpecializeArgs *) override {
+    void postAppSpecialize(const zygisk::AppSpecializeArgs *args) override {
         JniExceptionGuard exceptionGuard(env, "finish app post-specialization");
         if (appProcessSystemClassLoaderRef == nullptr) {
             return;
@@ -576,6 +615,9 @@ public:
         if (googlePhotosDragHookClass != nullptr) {
             invokeAppHookInstall(googlePhotosDragHookClass, "Google Photos source",
                     kGooglePhotosProcess, kGooglePhotosProcess);
+        }
+        if (universalImageDragHookClass != nullptr) {
+            invokeUniversalImageHookInstall(universalImageDragHookClass, args);
         }
     }
 
@@ -754,6 +796,24 @@ private:
         }
     }
 
+    void invokeUniversalImageHookInstall(
+            jclass targetClass, const zygisk::AppSpecializeArgs *args) {
+        if (targetClass == nullptr || args == nullptr || args->nice_name == nullptr) {
+            return;
+        }
+        jmethodID install = env->GetStaticMethodID(
+                targetClass, "install", "(Ljava/lang/String;Ljava/lang/String;)V");
+        if (jniResultUnavailable(env, install, "find universal image hook install")) {
+            LOGE("Image drag universal hook install method unavailable");
+            return;
+        }
+        env->CallStaticVoidMethod(
+                targetClass, install, args->nice_name, args->nice_name);
+        if (!clearException(env, "run universal image hook install")) {
+            LOGI("Image drag universal hook installed in app process");
+        }
+    }
+
     static void closeStatusHookDiagnostic() {
         if (statusHookDiagnosticFd >= 0) {
             close(statusHookDiagnosticFd);
@@ -768,6 +828,7 @@ private:
     jclass rootDisplayCompatHookClass = nullptr;
     jclass hyperOsAppHookClass = nullptr;
     jclass googlePhotosDragHookClass = nullptr;
+    jclass universalImageDragHookClass = nullptr;
     jobject appClassLoaderRef = nullptr;
     jobject systemClassLoaderRef = nullptr;
     jobject appProcessSystemClassLoaderRef = nullptr;

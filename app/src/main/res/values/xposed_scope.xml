@@ -6,5 +6,8 @@
         <item>com.android.systemui</item>
         <item>com.miui.home</item>
         <item>com.google.android.apps.photos</item>
+        <item>com.tencent.mobileqq</item>
+        <item>com.tencent.mm</item>
+        <item>com.miui.notes</item>
     </string-array>
 </resources>

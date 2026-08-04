@@ -83,14 +83,14 @@ else
 fi
 
 if lsposed_active; then
+  # LSPosed remains responsible for system/framework hooks. Keep the Zygisk
+  # payload for generic app-side media extraction when Zygisk is available.
   resetprop -n onestep.hook.backend lsposed
-  resetprop -n onestep.hook.primaryhome_enhancement \
-    "$primary_home_enhancement"
-  rm -rf "$MODULE_DIR/zygisk"
-  exit 0
+else
+  resetprop -n onestep.hook.backend standalone
 fi
-
-resetprop -n onestep.hook.backend standalone
+resetprop -n onestep.hook.primaryhome_enhancement \
+  "$primary_home_enhancement"
 
 if ! zygisk_enabled; then
   # A top-level zygisk directory makes Magisk ignore the whole module when Zygisk is off.

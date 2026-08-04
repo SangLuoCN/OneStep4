@@ -89,6 +89,9 @@ public final class ImageDragSessionController {
         Bitmap bitmap = decodePreview(imageFile);
         ViewGroup container = callbacks.previewContainer();
         if (bitmap == null || !isDefaultDisplayContainer(container)) {
+            Log.w(TAG, bitmap == null
+                    ? "Cannot decode original image received by OneStep: " + imageFile.length()
+                    : "Display 0 preview container unavailable");
             if (bitmap != null) {
                 bitmap.recycle();
             }

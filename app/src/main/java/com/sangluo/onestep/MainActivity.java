@@ -10,6 +10,8 @@ import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ComponentName;
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -33,11 +35,13 @@ import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
 import android.provider.Settings;
+import android.provider.MediaStore;
 import android.text.TextUtils;
 import android.util.Log;
 import android.util.TypedValue;
@@ -102,9 +106,11 @@ import com.sangluo.onestep.ui.window.WindowLayoutCalculator;
 import com.sangluo.onestep.ui.window.WindowLayoutModePolicy;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -4702,7 +4708,8 @@ public class MainActivity extends Activity {
             int sourceSlot = sourceHost.getSlot();
             LauncherApp sourceApp = sourceSlot >= 0 && sourceSlot < MAX_WINDOWS
                     ? windowApps[sourceSlot] : null;
-            return sourceApp != null && isMainPaneSlot(sourceSlot)
+            return sourceApp != null && isWindowSlotEnabled(sourceSlot)
+                    && !embeddedSlotClosing[sourceSlot]
                     && TextUtils.equals(sourcePackage, sourceApp.packageName);
         }, 500L);
     }
@@ -4760,14 +4767,24 @@ public class MainActivity extends Activity {
         int sourceSlot = sourceHost.getSlot();
         LauncherApp sourceApp = sourceSlot >= 0 && sourceSlot < MAX_WINDOWS
                 ? windowApps[sourceSlot] : null;
-        if (sourceApp == null || !TextUtils.equals(sourcePackage, sourceApp.packageName)
-                || !isMainPaneSlot(sourceSlot)) {
+        if (sourceApp == null || !isWindowSlotEnabled(sourceSlot)
+                || embeddedSlotClosing[sourceSlot]
+                || !TextUtils.equals(sourcePackage, sourceApp.packageName)) {
+            return false;
+        }
+        Uri effectiveSourceUri = sourceUri;
+        if (effectiveSourceUri == null
+                || !"content".equals(effectiveSourceUri.getScheme())) {
+            effectiveSourceUri = localDraggedImageUri(imageFile);
+        }
+        if (effectiveSourceUri == null) {
+            Log.w(TAG, "Cannot expose generic dragged media file to OneStep targets");
             return false;
         }
         boolean started = imageDragSessionController.begin(
                 sourceSlot, imageFile,
                 TextUtils.isEmpty(mimeType) ? "image/*" : mimeType,
-                sourceUri,
+                effectiveSourceUri,
                 sourceHost.getLatestTouchRawX(), sourceHost.getLatestTouchRawY());
         Log.i(TAG, "image drag session started=" + started
                 + ", source=" + sourcePackage + ", slot=" + sourceSlot
@@ -4788,18 +4805,16 @@ public class MainActivity extends Activity {
             return;
         }
         String resolvedMime = TextUtils.isEmpty(mimeType) ? "image/*" : mimeType;
-        Intent share = createImageDragShareTargetIntent(
-                target, sourceUri, resolvedMime);
-        if (share == null) {
-            Log.w(TAG, "Dragged media share target unavailable: " + target);
+        Uri shareUri = grantDraggedImageUri(
+                target.packageName(), sourceUri, imageFile, resolvedMime);
+        if (shareUri == null) {
             deleteImageDragFile(imageFile);
             return;
         }
-        try {
-            grantUriPermission(target.packageName(), sourceUri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Cannot grant dragged media to " + target, e);
+        Intent share = createImageDragShareTargetIntent(
+                target, shareUri, resolvedMime);
+        if (share == null) {
+            Log.w(TAG, "Dragged media share target unavailable: " + target);
             deleteImageDragFile(imageFile);
             return;
         }
@@ -4811,8 +4826,138 @@ public class MainActivity extends Activity {
         Log.i(TAG, "Dragged media share launched: target=" + target
                 + ", user=" + (entry.app == null ? 0 : entry.app.userId())
                 + ", component=" + share.getComponent()
-                + ", sourceAuthority=" + sourceUri.getAuthority());
+                + ", sourceAuthority=" + shareUri.getAuthority());
         scheduleImageDragFileDeletion(imageFile);
+    }
+
+    private Uri grantDraggedImageUri(
+            String packageName, Uri originalUri, File imageFile, String mimeType) {
+        Uri shareUri = originalUri;
+        if (isQqPackage(packageName) && isOneStepDraggedUri(originalUri)) {
+            Uri mediaUri = publishQqCompatibleMedia(imageFile, mimeType);
+            if (mediaUri != null) {
+                shareUri = mediaUri;
+                Log.i(TAG, "Published QQ-compatible media URI: " + mediaUri);
+                scheduleImageDragMediaDeletion(mediaUri);
+            } else {
+                Log.w(TAG, "Cannot publish QQ-compatible media URI; use OneStep cache");
+            }
+        }
+        if (!TextUtils.isEmpty(packageName) && shareUri != null
+                && "content".equals(shareUri.getScheme())) {
+            try {
+                grantUriPermission(packageName, shareUri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                return shareUri;
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Original dragged media grant failed; use OneStep cache", e);
+            }
+        }
+        Uri localUri = localDraggedImageUri(imageFile);
+        if (localUri == null || TextUtils.isEmpty(packageName)) {
+            return null;
+        }
+        try {
+            grantUriPermission(packageName, localUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            return localUri;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "OneStep cached dragged media grant failed", e);
+            return null;
+        }
+    }
+
+    private boolean isQqPackage(String packageName) {
+        return TextUtils.equals(ImageShareTargetPolicy.QQ_PACKAGE, packageName);
+    }
+
+    private boolean isOneStepDraggedUri(Uri uri) {
+        return uri != null
+                && "content".equals(uri.getScheme())
+                && TextUtils.equals(getPackageName() + ".drag-files", uri.getAuthority());
+    }
+
+    /**
+     * QQ resolves shared content URIs to a filesystem path. MediaStore supplies that path,
+     * while the private FileProvider used for the drag preview does not.
+     */
+    private Uri publishQqCompatibleMedia(File imageFile, String mimeType) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                || imageFile == null || !imageFile.isFile()) {
+            return null;
+        }
+        String mediaMime = ImageDragSourcePolicy.isImageMimeType(mimeType)
+                && !TextUtils.equals(mimeType, "image/*") ? mimeType : "image/png";
+        String extension = ImageFileNamePolicy.extensionForMime(mediaMime);
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.MediaColumns.DISPLAY_NAME,
+                "OneStep-" + UUID.randomUUID() + extension);
+        values.put(MediaStore.MediaColumns.MIME_TYPE, mediaMime);
+        values.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                Environment.DIRECTORY_PICTURES + "/OneStep/");
+        values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+        ContentResolver resolver = getContentResolver();
+        Uri mediaUri = null;
+        try {
+            mediaUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            if (mediaUri == null) {
+                return null;
+            }
+            try (InputStream input = new FileInputStream(imageFile);
+                 OutputStream output = resolver.openOutputStream(mediaUri, "w")) {
+                if (output == null) {
+                    throw new IOException("MediaStore returned a null output stream");
+                }
+                byte[] buffer = new byte[128 * 1024];
+                int count;
+                while ((count = input.read(buffer)) >= 0) {
+                    if (count > 0) {
+                        output.write(buffer, 0, count);
+                    }
+                }
+                output.flush();
+            }
+            ContentValues completed = new ContentValues();
+            completed.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            resolver.update(mediaUri, completed, null, null);
+            return mediaUri;
+        } catch (IOException | RuntimeException error) {
+            Log.w(TAG, "Cannot publish QQ-compatible media", error);
+            if (mediaUri != null) {
+                try {
+                    resolver.delete(mediaUri, null, null);
+                } catch (RuntimeException cleanupError) {
+                    Log.w(TAG, "Cannot remove incomplete QQ-compatible media", cleanupError);
+                }
+            }
+            return null;
+        }
+    }
+
+    private void scheduleImageDragMediaDeletion(Uri mediaUri) {
+        if (mediaUri == null) {
+            return;
+        }
+        mainHandler.postDelayed(() -> {
+            try {
+                getContentResolver().delete(mediaUri, null, null);
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Cannot remove temporary QQ-compatible media", error);
+            }
+        }, IMAGE_DRAG_CACHE_TTL_MS);
+    }
+
+    private Uri localDraggedImageUri(File imageFile) {
+        if (imageFile == null || !imageFile.isFile()) {
+            return null;
+        }
+        try {
+            return FileProvider.getUriForFile(
+                    this, getPackageName() + ".drag-files", imageFile);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Cannot create local dragged media URI", e);
+            return null;
+        }
     }
 
     private Intent createImageDragShareTargetIntent(
@@ -4975,16 +5120,13 @@ public class MainActivity extends Activity {
             deleteImageDragFile(imageFile);
             return;
         }
-        Uri uri = sourceUri;
-        try {
-            grantUriPermission(targetApp.packageName, uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Create image drag URI failed", e);
+        String resolvedMime = TextUtils.isEmpty(mimeType) ? "image/png" : mimeType;
+        Uri uri = grantDraggedImageUri(
+                targetApp.packageName, sourceUri, imageFile, resolvedMime);
+        if (uri == null) {
             deleteImageDragFile(imageFile);
             return;
         }
-        String resolvedMime = TextUtils.isEmpty(mimeType) ? "image/png" : mimeType;
         Intent share = createImageShareIntent(
                 targetApp.packageName, uri, resolvedMime);
         if (share == null) {

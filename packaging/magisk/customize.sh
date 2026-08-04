@@ -80,23 +80,27 @@ if [ "$SDK_INT" -ge 37 ]; then
   fi
   ui_print "- 已启用 Android 17 特权应用 ROOT 兼容策略"
 fi
-if lsposed_active; then
-  rm -rf "$MODPATH/zygisk"
-  ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
-  ui_print "! 请在 LSPosed 中启用 OneStep 并勾选“系统框架”、“设置”和“系统桌面”作用域"
-elif [ "$SDK_INT" -lt 29 ]; then
+if [ "$SDK_INT" -lt 29 ]; then
   rm -rf "$MODPATH/zygisk"
   ui_print "- 当前 Android API $SDK_INT：Zygisk Hook 仅支持 Android 10 及以上"
 elif ! zygisk_enabled; then
   rm -rf "$MODPATH/zygisk"
-  ui_print "- Zygisk 未启用：OneStep 普通页面仍可正常使用"
+  if lsposed_active; then
+    ui_print "- LSPosed/Vector 已检测：使用框架 Hook 后端"
+  else
+    ui_print "- Zygisk 未启用：OneStep 普通页面仍可正常使用"
+  fi
   ui_print "! FLAG_SECURE 页面将由系统显示为黑屏；启用 Zygisk 后可正常显示"
 else
   mkdir -p "$MODPATH/zygisk"
   cp -f "$ZYGISK_PAYLOAD_DIR/arm64-v8a.so" "$MODPATH/zygisk/arm64-v8a.so"
   cp -f "$ZYGISK_PAYLOAD_DIR/armeabi-v7a.so" "$MODPATH/zygisk/armeabi-v7a.so"
   set_perm_recursive "$MODPATH/zygisk" 0 0 0755 0644
-  ui_print "- Zygisk 已启用：FLAG_SECURE 虚拟屏显示增强可用"
+  if lsposed_active; then
+    ui_print "- LSPosed/Vector + Zygisk 已检测：系统 Hook 使用 LSPosed，通用应用图片 Hook 使用 Zygisk"
+  else
+    ui_print "- Zygisk 已启用：FLAG_SECURE 虚拟屏显示增强可用"
+  fi
 fi
 
 mkdir -p /data/adb/post-fs-data.d
