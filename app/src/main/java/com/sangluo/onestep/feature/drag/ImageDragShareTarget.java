@@ -29,6 +29,10 @@ public enum ImageDragShareTarget {
         return activityName;
     }
 
+    public boolean initializesAppBeforeColdStartShare() {
+        return this != BLUETOOTH;
+    }
+
     public boolean matchesActivity(String candidateName) {
         if (candidateName == null) {
             return false;

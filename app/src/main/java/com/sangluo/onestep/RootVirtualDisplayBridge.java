@@ -2,6 +2,7 @@ package com.sangluo.onestep;
 
 import android.content.Context;
 import android.content.Intent;
+import android.app.ActivityOptions;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.net.Uri;
@@ -11,6 +12,7 @@ import android.os.Parcel;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.os.UserHandle;
 import android.util.Log;
 import android.view.Display;
 import android.view.Surface;
@@ -51,6 +53,8 @@ public final class RootVirtualDisplayBridge extends Binder {
             IBinder.FIRST_CALL_TRANSACTION + 6;
     public static final int TRANSACTION_UPDATE_LAUNCH_SOURCE =
             IBinder.FIRST_CALL_TRANSACTION + 7;
+    public static final int TRANSACTION_START_ACTIVITY_AS_USER =
+            IBinder.FIRST_CALL_TRANSACTION + 8;
     private static final int ROOT_UID = 0;
     private static final long LAUNCH_BYPASS_TIMEOUT_MS = 3000L;
     private static final long ROUTING_INPUT_ARM_TIMEOUT_MS = 5000L;
@@ -157,6 +161,9 @@ public final class RootVirtualDisplayBridge extends Binder {
                     return true;
                 case TRANSACTION_UPDATE_LAUNCH_SOURCE:
                     handleUpdateLaunchSource(data, reply);
+                    return true;
+                case TRANSACTION_START_ACTIVITY_AS_USER:
+                    handleStartActivityAsUser(data, reply);
                     return true;
                 default:
                     return super.onTransact(code, data, reply, flags);
@@ -464,6 +471,52 @@ public final class RootVirtualDisplayBridge extends Binder {
         }
         reply.writeNoException();
         reply.writeInt(accepted ? 1 : 0);
+    }
+
+    private void handleStartActivityAsUser(Parcel data, Parcel reply) {
+        int sourceUserId = data.readInt();
+        int targetUserId = data.readInt();
+        int displayId = data.readInt();
+        Intent intent = data.readInt() == 0
+                ? null : Intent.CREATOR.createFromParcel(data);
+        boolean launched = false;
+        if (intent != null && targetUserId >= 0 && displayId > Display.DEFAULT_DISPLAY) {
+            long identity = Binder.clearCallingIdentity();
+            try {
+                // Content URIs originating in the owner profile must retain their source
+                // user when ActivityTaskManager grants them to a cloned profile.
+                try {
+                    Method prepareToLeaveUser = Intent.class.getDeclaredMethod(
+                            "prepareToLeaveUser", int.class);
+                    prepareToLeaveUser.setAccessible(true);
+                    prepareToLeaveUser.invoke(intent, sourceUserId);
+                } catch (ReflectiveOperationException | RuntimeException ignored) {
+                    // Older releases may not expose this hidden Intent helper.
+                }
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                ActivityOptions options = ActivityOptions.makeBasic();
+                options.setLaunchDisplayId(displayId);
+                Method startActivityAsUser = Context.class.getDeclaredMethod(
+                        "startActivityAsUser", Intent.class, android.os.Bundle.class,
+                        UserHandle.class);
+                startActivityAsUser.setAccessible(true);
+                java.lang.reflect.Constructor<UserHandle> userHandleConstructor =
+                        UserHandle.class.getDeclaredConstructor(int.class);
+                userHandleConstructor.setAccessible(true);
+                startActivityAsUser.invoke(
+                        context, intent, options.toBundle(),
+                        userHandleConstructor.newInstance(targetUserId));
+                launched = true;
+            } catch (ReflectiveOperationException | RuntimeException e) {
+                Log.e(TAG, "root cross-user share launch failed user=" + targetUserId
+                        + " display=" + displayId, e);
+            } finally {
+                Binder.restoreCallingIdentity(identity);
+            }
+        }
+        reply.writeNoException();
+        reply.writeInt(launched ? 1 : 0);
     }
 
     static void noteVirtualInput(int displayId) {

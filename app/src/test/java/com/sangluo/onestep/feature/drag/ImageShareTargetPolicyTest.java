@@ -37,14 +37,38 @@ public class ImageShareTargetPolicyTest {
 
     @Test
     public void qqDirectShareRouteCanPromoteItsOwnUi() {
+        assertFalse(ImageShareTargetPolicy.isShareUiReady(
+                "com.tencent.mobileqq",
+                "com.tencent.mobileqq/cooperation.qqfav.widget.QfavJumpActivity",
+                "cooperation.qqfav.widget.QfavJumpActivity"));
         assertTrue(ImageShareTargetPolicy.isShareUiReady(
                 "com.tencent.mobileqq",
                 "com.tencent.mobileqq/com.qqfav.FavoriteIpcDelegate",
                 "cooperation.qqfav.widget.QfavJumpActivity"));
-        assertTrue(ImageShareTargetPolicy.isShareUiReady(
+        assertFalse(ImageShareTargetPolicy.isShareUiReady(
                 "com.tencent.mobileqq",
                 "com.tencent.mobileqq/com.tencent.mobileqq.activity.qfileJumpActivity",
                 "com.tencent.mobileqq.activity.qfileJumpActivity"));
+        assertTrue(ImageShareTargetPolicy.isShareUiReady(
+                "com.tencent.mobileqq",
+                "com.tencent.mobileqq/com.tencent.mobileqq.activity.ChatActivity",
+                "com.tencent.mobileqq.activity.qfileJumpActivity"));
+    }
+
+    @Test
+    public void wechatDirectShareWaitsPastLauncherUi() {
+        assertFalse(ImageShareTargetPolicy.isShareUiReady(
+                "com.tencent.mm",
+                "com.tencent.mm/com.tencent.mm.ui.LauncherUI",
+                "com.tencent.mm.ui.tools.ShareToTimeLineUI"));
+        assertTrue(ImageShareTargetPolicy.isShareUiReady(
+                "com.tencent.mm",
+                "com.tencent.mm/com.tencent.mm.plugin.sns.ui.SnsUploadUI",
+                "com.tencent.mm.ui.tools.ShareToTimeLineUI"));
+        assertTrue(ImageShareTargetPolicy.isShareUiReady(
+                "com.tencent.mm",
+                "com.tencent.mm/com.tencent.mm.ui.tools.AddFavoriteUI",
+                "com.tencent.mm.ui.tools.AddFavoriteUI"));
     }
 
     @Test
@@ -59,5 +83,14 @@ public class ImageShareTargetPolicyTest {
                 ImageDragShareTarget.QQ_COMPUTER.activityName());
         assertEquals("com.android.bluetooth.opp.BluetoothOppLauncherActivity",
                 ImageDragShareTarget.BLUETOOTH.activityName());
+    }
+
+    @Test
+    public void appShareTargetsInitializeBeforeColdStartShare() {
+        assertTrue(ImageDragShareTarget.WECHAT_TIMELINE.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.WECHAT_FAVORITE.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.QQ_FAVORITE.initializesAppBeforeColdStartShare());
+        assertTrue(ImageDragShareTarget.QQ_COMPUTER.initializesAppBeforeColdStartShare());
+        assertFalse(ImageDragShareTarget.BLUETOOTH.initializesAppBeforeColdStartShare());
     }
 }

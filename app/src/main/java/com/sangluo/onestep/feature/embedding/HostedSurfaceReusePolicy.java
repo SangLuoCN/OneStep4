@@ -18,4 +18,8 @@ public final class HostedSurfaceReusePolicy {
         }
         return !taskResolved && !revealPending && !keepingVisibleDuringValidation;
     }
+
+    public static boolean shouldValidateReusedTask(boolean imageShareLaunchGuardActive) {
+        return !imageShareLaunchGuardActive;
+    }
 }

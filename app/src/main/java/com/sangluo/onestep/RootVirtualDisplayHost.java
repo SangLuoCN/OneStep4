@@ -257,8 +257,19 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             "userId_called_from_doubleapp_resolver";
     private static final String EXTRA_CLONE_RESOLVER_CALLING_PACKAGE =
             "doubleapp_calling_package";
+    private static final String EXTRA_XSPACE_AUTHORIZED =
+            "android.intent.extra.auth_to_call_xspace";
+    private static final String EXTRA_XSPACE_TARGET_USER =
+            "android.intent.extra.xspace_cached_uid";
     private static final int[] HOSTED_TASK_RESOLUTION_DELAYS_MS = {80, 240, 700, 1500};
-    private static final int[] IMAGE_SHARE_READINESS_DELAYS_MS = {80, 180, 360, 700};
+    private static final int[] IMAGE_SHARE_READINESS_DELAYS_MS = {
+            80, 180, 360, 700, 1200, 2000, 3500, 5000
+    };
+    private static final long IMAGE_SHARE_VALIDATION_GUARD_MS = 6000L;
+    private static final int[] ROUTED_IMAGE_SHARE_APP_READY_RETRY_MS = {
+            300, 300, 300, 300
+    };
+    private static final int ROUTED_IMAGE_SHARE_STABLE_SCANS = 1;
     private static final int[] BACK_EXIT_CHECK_DELAYS_MS = {60, 180, 450};
     private static final long ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS = 240L;
     private static final long HOSTED_SURFACE_REVEAL_AFTER_VISIBLE_MS = 96L;
@@ -345,6 +356,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private boolean hostedTaskValidationInFlight;
     private int routedLaunchGeneration;
     private int imageShareReadinessGeneration;
+    private long imageShareValidationGuardUntilUptimeMs;
     private int backExitCheckGeneration;
     private int systemResumeExitCheckGeneration;
     private boolean surfaceDetached;
@@ -666,6 +678,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (reusingHostedApp) {
             pendingApp = null;
             unavailableReason = "";
+            if (!HostedSurfaceReusePolicy.shouldValidateReusedTask(
+                    isImageShareValidationGuardActive(app))) {
+                Log.i(TAG, "Keep pending image share launch during duplicate host start: slot="
+                        + slot + ", display=" + displayId
+                        + ", package=" + app.packageName);
+                return true;
+            }
             validateReusedHostedApp(app, startEpoch);
             return true;
         }
@@ -679,7 +698,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
         boolean directImageShare = routedLaunchIntent != null
                 && routedLaunchIntent.getBooleanExtra(
-                MainActivity.EXTRA_IMAGE_SHARE_ROUTE, false);
+                MainActivity.EXTRA_IMAGE_SHARE_ROUTE, false)
+                && !routedLaunchIntent.getBooleanExtra(
+                MainActivity.EXTRA_IMAGE_SHARE_WAIT_FOR_APP_READY, false);
         if (directImageShare && systemLaunchAvailable
                 && !skipActivityOptionsLaunch
                 && startWithActivityOptions(
@@ -687,7 +708,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             launchRequestedPackage = app.packageName;
             launchRequestedUserId = app.userId();
             launchRequestedDisplayId = displayId;
+            armImageShareValidationGuard();
             scheduleHostedTaskResolution("direct image share " + app.packageName);
+            ComponentName initialComponent = routedLaunchIntent.getComponent();
+            scheduleImageShareReadinessChecks(app,
+                    initialComponent == null ? null : initialComponent.getClassName());
             unavailableReason = "";
             return true;
         }
@@ -767,10 +792,17 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                             OneStepPrimaryHomePolicy.EXTRA_EMBEDDED_PRIMARY_HOME))
                     .append(" true");
         }
-        if (!app.isHomeEntry() && usesZteCloneResolver()) {
+        if (!app.isHomeEntry() && usesOemCloneResolver()) {
             // The OEM launcher adds these after the user has selected an app instance.
             // Supplying them with an explicit --user makes each top-bar icon launch directly.
             command.append(" --ez ")
+                    .append(shellQuote(EXTRA_XSPACE_AUTHORIZED))
+                    .append(" true")
+                    .append(" --ei ")
+                    .append(shellQuote(EXTRA_XSPACE_TARGET_USER))
+                    .append(' ')
+                    .append(app.userId())
+                    .append(" --ez ")
                     .append(shellQuote(EXTRA_CLONE_RESOLVER_CONFIRMED))
                     .append(" true")
                     .append(" --ei ")
@@ -787,7 +819,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 .toString();
     }
 
-    private boolean usesZteCloneResolver() {
+    private boolean usesOemCloneResolver() {
         return "nubia".equalsIgnoreCase(Build.MANUFACTURER)
                 || "zte".equalsIgnoreCase(Build.MANUFACTURER);
     }
@@ -796,26 +828,123 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                                       int startEpoch, int targetDisplayId) {
         final int generation = ++routedLaunchGeneration;
         final Intent routedIntent = new Intent(routedLaunchIntent);
-        mainHandler.postDelayed(() -> {
-            LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS
-                    ? windowApps[slot] : null;
-            if (generation != routedLaunchGeneration
-                    || targetDisplayId != displayId
-                    || !shouldRunEmbeddedStart(startEpoch)
-                    || embeddedSlotClosing[slot]
-                    || currentApp == null
-                    || !currentApp.isSameInstance(app)) {
-                return;
-            }
-            rootVirtualDisplayBridgeClient.allowNextLaunch(
-                    getRootInputBridgeToken(), app.packageName);
-            boolean routed = startWithActivityOptions(
-                    routedIntent, app, startEpoch, false);
-            scheduleHostedTaskResolution((routed ? "routed launch "
-                    : "launcher fallback after routed launch failure ") + app.packageName);
-            // The launcher task remains visible if an app-owned routing activity exits.
-            unavailableReason = "";
-        }, ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS);
+        if (routedIntent.getBooleanExtra(
+                MainActivity.EXTRA_IMAGE_SHARE_WAIT_FOR_APP_READY, false)) {
+            armImageShareValidationGuard();
+            scheduleRoutedImageShareAppReadyCheck(
+                    generation, app, routedIntent, startEpoch, targetDisplayId,
+                    0, "", 0);
+            return;
+        }
+        mainHandler.postDelayed(() -> launchRoutedIntentIfCurrent(
+                generation, app, routedIntent, startEpoch, targetDisplayId),
+                ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS);
+    }
+
+    private void scheduleRoutedImageShareAppReadyCheck(
+            int generation, LauncherApp app, Intent routedIntent,
+            int startEpoch, int targetDisplayId, int attempt,
+            String previousTopActivity, int stableScans) {
+        if (attempt < 0 || attempt >= ROUTED_IMAGE_SHARE_APP_READY_RETRY_MS.length) {
+            return;
+        }
+        mainHandler.postDelayed(() -> checkRoutedImageShareAppReady(
+                generation, app, routedIntent, startEpoch, targetDisplayId,
+                attempt, previousTopActivity, stableScans),
+                ROUTED_IMAGE_SHARE_APP_READY_RETRY_MS[attempt]);
+    }
+
+    private void checkRoutedImageShareAppReady(
+            int generation, LauncherApp app, Intent routedIntent,
+            int startEpoch, int targetDisplayId, int attempt,
+            String previousTopActivity, int stableScans) {
+        if (!isCurrentRoutedLaunch(
+                generation, app, startEpoch, targetDisplayId)) {
+            return;
+        }
+        try {
+            rootExecutor.execute(() -> {
+                ShellCommandResult stackList = runPrivilegedCommand(
+                        TASK_STACK_LIST_COMMAND,
+                        "wait for routed share app " + app.packageName, false);
+                String topActivity = stackList.exitCode == 0
+                        && !TextUtils.isEmpty(stackList.output)
+                        ? HostedTaskParser.findVisibleTopActivity(
+                        stackList.output, targetDisplayId, app.packageName) : "";
+                int nextStableScans = TextUtils.isEmpty(topActivity) ? 0
+                        : TextUtils.equals(previousTopActivity, topActivity)
+                        ? stableScans + 1 : 1;
+                mainHandler.post(() -> {
+                    if (!isCurrentRoutedLaunch(
+                            generation, app, startEpoch, targetDisplayId)) {
+                        return;
+                    }
+                    boolean finalAttempt = attempt + 1
+                            >= ROUTED_IMAGE_SHARE_APP_READY_RETRY_MS.length;
+                    if (nextStableScans >= ROUTED_IMAGE_SHARE_STABLE_SCANS
+                            || finalAttempt) {
+                        Log.i(TAG, "Routed share app initialization complete: slot=" + slot
+                                + ", display=" + targetDisplayId
+                                + ", package=" + app.packageName
+                                + ", component=" + topActivity
+                                + ", stableScans=" + nextStableScans
+                                + ", fallback=" + (nextStableScans
+                                < ROUTED_IMAGE_SHARE_STABLE_SCANS));
+                        launchRoutedIntentIfCurrent(
+                                generation, app, routedIntent,
+                                startEpoch, targetDisplayId);
+                        return;
+                    }
+                    scheduleRoutedImageShareAppReadyCheck(
+                            generation, app, routedIntent, startEpoch,
+                            targetDisplayId, attempt + 1,
+                            topActivity, nextStableScans);
+                });
+            });
+        } catch (RuntimeException e) {
+            scheduleRoutedImageShareAppReadyCheck(
+                    generation, app, routedIntent, startEpoch,
+                    targetDisplayId, attempt + 1, "", 0);
+        }
+    }
+
+    private void launchRoutedIntentIfCurrent(
+            int generation, LauncherApp app, Intent routedIntent,
+            int startEpoch, int targetDisplayId) {
+        if (!isCurrentRoutedLaunch(
+                generation, app, startEpoch, targetDisplayId)) {
+            return;
+        }
+        rootVirtualDisplayBridgeClient.allowNextLaunch(
+                getRootInputBridgeToken(), app.packageName);
+        boolean routed = startWithActivityOptions(
+                routedIntent, app, startEpoch, false);
+        if (routed && routedIntent.getBooleanExtra(
+                MainActivity.EXTRA_IMAGE_SHARE_ROUTE, false)) {
+            armImageShareValidationGuard();
+            ComponentName initialComponent = routedIntent.getComponent();
+            scheduleImageShareReadinessChecks(app,
+                    initialComponent == null
+                            ? null : initialComponent.getClassName());
+        }
+        scheduleHostedTaskResolution((routed ? "routed launch "
+                : "launcher fallback after routed launch failure ") + app.packageName);
+        // The launcher task remains visible if an app-owned routing activity exits.
+        unavailableReason = "";
+        routedLaunchGeneration++;
+    }
+
+    private boolean isCurrentRoutedLaunch(
+            int generation, LauncherApp app,
+            int startEpoch, int targetDisplayId) {
+        LauncherApp currentApp = slot >= 0 && slot < MAX_WINDOWS
+                ? windowApps[slot] : null;
+        return generation == routedLaunchGeneration
+                && targetDisplayId == displayId
+                && shouldRunEmbeddedStart(startEpoch)
+                && !embeddedSlotClosing[slot]
+                && currentApp != null
+                && currentApp.isSameInstance(app);
     }
 
     private void validateReusedHostedApp(LauncherApp app, int startEpoch) {
@@ -1317,6 +1446,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         hostedTaskValidationGeneration++;
         hostedTaskValidationInFlight = false;
         routedLaunchGeneration++;
+        imageShareValidationGuardUntilUptimeMs = 0L;
     }
 
     boolean hasResolvedHostedTask(LauncherApp app) {
@@ -1712,7 +1842,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     boolean launchImageShareActivity(LauncherApp app, Intent shareIntent) {
-        if (app == null || shareIntent == null || !app.isCurrentUser()
+        if (app == null || shareIntent == null
                 || displayId <= DEFAULT_DISPLAY_ID || !hasVirtualDisplay()
                 || embeddedSlotClosing[slot]) {
             return false;
@@ -1737,6 +1867,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         launchRequestedPackage = app.packageName;
         launchRequestedUserId = app.userId();
         launchRequestedDisplayId = displayId;
+        armImageShareValidationGuard();
         scheduleHostedTaskResolution("image share " + app.packageName);
         ComponentName initialComponent = shareIntent.getComponent();
         scheduleImageShareReadinessChecks(app,
@@ -1794,6 +1925,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         return;
                     }
                     imageShareReadinessGeneration++;
+                    imageShareValidationGuardUntilUptimeMs = 0L;
                     Log.i(TAG, "Image share activity ready: slot=" + slot
                             + ", display=" + targetDisplayId
                             + ", component=" + topActivity
@@ -1807,6 +1939,16 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         } catch (RuntimeException e) {
             Log.w(TAG, "Queue image share readiness check failed for slot " + slot);
         }
+    }
+
+    private void armImageShareValidationGuard() {
+        imageShareValidationGuardUntilUptimeMs =
+                SystemClock.uptimeMillis() + IMAGE_SHARE_VALIDATION_GUARD_MS;
+    }
+
+    private boolean isImageShareValidationGuardActive(LauncherApp app) {
+        return matchesLaunchRequest(app)
+                && SystemClock.uptimeMillis() < imageShareValidationGuardUntilUptimeMs;
     }
 
     void cancelInjectedTouchForImageDrag() {
@@ -3552,17 +3694,42 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
         Intent displayIntent = new Intent(launchIntent);
         displayIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        boolean oemCloneDirectLaunch = !app.isHomeEntry() && usesOemCloneResolver();
+        if (oemCloneDirectLaunch) {
+            // HyperOS resolves both installed instances before ActivityTaskManager applies
+            // the requested user. Its system-app authorization plus cached target user
+            // bypasses that chooser while preserving the explicit user selection.
+            displayIntent.putExtra(EXTRA_XSPACE_AUTHORIZED, true)
+                    .putExtra(EXTRA_XSPACE_TARGET_USER, app.userId())
+                    .putExtra(EXTRA_CLONE_RESOLVER_CONFIRMED, true)
+                    .putExtra(EXTRA_CLONE_RESOLVER_CALLING_USER,
+                            android.os.Process.myUserHandle().hashCode())
+                    .putExtra(EXTRA_CLONE_RESOLVER_CALLING_PACKAGE,
+                            owner.getPackageName());
+        }
         ActivityOptions options = (displayIntent.getFlags()
                 & Intent.FLAG_ACTIVITY_NO_ANIMATION) != 0
                 ? ActivityOptions.makeCustomAnimation(owner, 0, 0)
                 : ActivityOptions.makeBasic();
         options.setLaunchDisplayId(displayId);
         try {
-            if (launcherMainActivity && !app.isHomeEntry() && launcherApps != null) {
+            if (launcherMainActivity && !app.isHomeEntry() && launcherApps != null
+                    && !oemCloneDirectLaunch) {
                 launcherApps.startMainActivity(
                         app.componentName, app.userHandle, null, options.toBundle());
-            } else if (app.isCurrentUser()) {
+            } else if (app.isCurrentUser() || oemCloneDirectLaunch) {
+                // XSpace consumes EXTRA_XSPACE_TARGET_USER while the outbound Binder
+                // caller remains OneStep. This both selects the exact app instance and
+                // lets Android validate/grant the source URI against OneStep's UID.
                 owner.startActivity(displayIntent, options.toBundle());
+            } else if (rootAvailable) {
+                boolean rootStarted = rootVirtualDisplayBridgeClient.startActivityAsUser(
+                        getRootInputBridgeToken(), displayIntent,
+                        android.os.Process.myUserHandle().hashCode(),
+                        app.userId(), displayId);
+                if (!rootStarted) {
+                    return false;
+                }
             } else {
                 return false;
             }

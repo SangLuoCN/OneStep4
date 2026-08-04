@@ -212,6 +212,8 @@ public class MainActivity extends Activity {
     private static final int IMAGE_DRAG_SHARE_ANIMATION_MS = 180;
     static final String EXTRA_IMAGE_SHARE_ROUTE =
             "com.sangluo.onestep.extra.IMAGE_SHARE_ROUTE";
+    static final String EXTRA_IMAGE_SHARE_WAIT_FOR_APP_READY =
+            "com.sangluo.onestep.extra.IMAGE_SHARE_WAIT_FOR_APP_READY";
     private static final long MAX_SHARED_IMAGE_BYTES = 512L * 1024L * 1024L;
     private static final int DEFERRED_MEDIA_SESSION_REFRESH = 1;
     private static final int DEFERRED_MEDIA_UI_REFRESH = 1 << 1;
@@ -506,10 +508,9 @@ public class MainActivity extends Activity {
     private BlurredBackgroundView oneStepBackgroundView;
     private HorizontalScrollView topAppStripScrollView;
     private HorizontalScrollView imageDragShareTargetScrollView;
-    private final View[] imageDragShareTargetViews =
-            new View[ImageDragShareTarget.values().length];
-    private final boolean[] imageDragShareTargetEnabled =
-            new boolean[ImageDragShareTarget.values().length];
+    private View[] imageDragShareTargetViews = new View[0];
+    private boolean[] imageDragShareTargetEnabled = new boolean[0];
+    private List<ImageDragShareEntry> imageDragShareEntries = Collections.emptyList();
     private final Rect imageDragShareHitRect = new Rect();
     private boolean imageDragShareTargetsVisible;
     private int imageDragShareAnimationGeneration;
@@ -2802,13 +2803,21 @@ public class MainActivity extends Activity {
 
         int iconSizeDp = getTopAppIconSizeDp();
         int cellWidthDp = getTopAppStripCellWidthDp(iconSizeDp);
-        ImageDragShareTarget[] targets = ImageDragShareTarget.values();
-        for (int index = 0; index < targets.length; index++) {
-            ImageDragShareTarget target = targets[index];
+        imageDragShareEntries = buildImageDragShareEntries();
+        imageDragShareTargetViews = new View[imageDragShareEntries.size()];
+        imageDragShareTargetEnabled = new boolean[imageDragShareEntries.size()];
+        for (int index = 0; index < imageDragShareEntries.size(); index++) {
+            ImageDragShareEntry entry = imageDragShareEntries.get(index);
+            ImageDragShareTarget target = entry.target;
             AppShortcutView shortcut = new AppShortcutView(
                     this, false, iconSizeDp, 0);
             shortcut.setStatusIndicatorEnabled(false);
-            shortcut.bindIcon(getDrawable(imageDragShareTargetDrawable(target)),
+            Drawable icon = getDrawable(imageDragShareTargetDrawable(target));
+            if (entry.app != null && !entry.app.isCurrentUser()
+                    && launcherAppRepository != null) {
+                icon = launcherAppRepository.addCloneBadge(icon);
+            }
+            shortcut.bindIcon(icon,
                     imageDragShareTargetDescription(target));
             shortcut.setFocusable(false);
             shortcut.setClickable(false);
@@ -2819,6 +2828,52 @@ public class MainActivity extends Activity {
             imageDragShareTargetEnabled[index] = false;
         }
         return scrollView;
+    }
+
+    private List<ImageDragShareEntry> buildImageDragShareEntries() {
+        List<ImageDragShareEntry> entries = new ArrayList<>();
+        for (ImageDragShareTarget target : ImageDragShareTarget.values()) {
+            if (target == ImageDragShareTarget.BLUETOOTH) {
+                entries.add(new ImageDragShareEntry(target, null));
+                continue;
+            }
+            List<LauncherApp> instances = imageDragShareInstances(target.packageName());
+            for (LauncherApp app : instances) {
+                entries.add(new ImageDragShareEntry(target, app));
+            }
+        }
+        return entries;
+    }
+
+    private List<LauncherApp> imageDragShareInstances(String packageName) {
+        List<LauncherApp> candidates = new ArrayList<>();
+        if (launcherAppRepository != null) {
+            try {
+                candidates.addAll(launcherAppRepository.loadLauncherAppsForPackage(packageName));
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Cannot enumerate share target instances: " + packageName, e);
+            }
+        }
+        if (candidates.isEmpty()) {
+            LauncherApp current = createLauncherAppForPackage(packageName);
+            if (current != null) {
+                candidates.add(current);
+            }
+        }
+        List<LauncherApp> result = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (LauncherApp candidate : candidates) {
+            if (candidate != null && seen.add(String.valueOf(candidate.userId()))) {
+                result.add(candidate);
+            }
+        }
+        result.sort((left, right) -> {
+            if (left.isCurrentUser() != right.isCurrentUser()) {
+                return left.isCurrentUser() ? -1 : 1;
+            }
+            return Integer.compare(left.userId(), right.userId());
+        });
+        return result;
     }
 
     private int imageDragShareTargetDrawable(ImageDragShareTarget target) {
@@ -2859,10 +2914,12 @@ public class MainActivity extends Activity {
             return;
         }
         String resolvedMime = TextUtils.isEmpty(mimeType) ? "image/*" : mimeType;
-        ImageDragShareTarget[] targets = ImageDragShareTarget.values();
-        for (int index = 0; index < targets.length; index++) {
+        for (int index = 0; index < imageDragShareEntries.size(); index++) {
+            ImageDragShareEntry entry = imageDragShareEntries.get(index);
             imageDragShareTargetEnabled[index] = resolveImageDragShareActivity(
-                    targets[index], resolvedMime) != null;
+                    entry.target, resolvedMime) != null
+                    && (entry.target == ImageDragShareTarget.BLUETOOTH
+                    || entry.app != null);
         }
         setHoveredImageDragShareTarget(-1);
 
@@ -4670,8 +4727,12 @@ public class MainActivity extends Activity {
 
     private void deliverDraggedImageToShareTarget(
             int targetIndex, File imageFile, String mimeType, Uri sourceUri) {
-        ImageDragShareTarget target = ImageDragShareTarget.fromIndex(targetIndex);
-        if (activityDestroyed || target == null || imageFile == null || !imageFile.isFile()
+        ImageDragShareEntry entry = targetIndex >= 0
+                && targetIndex < imageDragShareEntries.size()
+                ? imageDragShareEntries.get(targetIndex) : null;
+        ImageDragShareTarget target = entry == null ? null : entry.target;
+        if (activityDestroyed || entry == null || target == null
+                || imageFile == null || !imageFile.isFile()
                 || sourceUri == null || !"content".equals(sourceUri.getScheme())) {
             deleteImageDragFile(imageFile);
             return;
@@ -4692,12 +4753,13 @@ public class MainActivity extends Activity {
             deleteImageDragFile(imageFile);
             return;
         }
-        if (!launchImageDragShareTarget(target, share)) {
+        if (!launchImageDragShareTarget(entry, share)) {
             Log.w(TAG, "Dragged media share launch failed: " + target);
             deleteImageDragFile(imageFile);
             return;
         }
         Log.i(TAG, "Dragged media share launched: target=" + target
+                + ", user=" + (entry.app == null ? 0 : entry.app.userId())
                 + ", component=" + share.getComponent()
                 + ", sourceAuthority=" + sourceUri.getAuthority());
         scheduleImageDragFileDeletion(imageFile);
@@ -4717,6 +4779,10 @@ public class MainActivity extends Activity {
                         resolved.activityInfo.packageName, resolved.activityInfo.name))
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        if (target.initializesAppBeforeColdStartShare()) {
+            share.putExtra(EXTRA_IMAGE_SHARE_ROUTE, true)
+                    .putExtra(EXTRA_IMAGE_SHARE_WAIT_FOR_APP_READY, true);
+        }
         share.putExtra(Intent.EXTRA_STREAM, uri);
         share.setClipData(ClipData.newUri(
                 getContentResolver(), "OneStep media", uri));
@@ -4752,25 +4818,23 @@ public class MainActivity extends Activity {
     }
 
     private boolean launchImageDragShareTarget(
-            ImageDragShareTarget target, Intent share) {
-        int targetSlot = findImageDragSharePackageSlot(target.packageName());
+            ImageDragShareEntry entry, Intent share) {
+        ImageDragShareTarget target = entry.target;
+        LauncherApp targetApp = entry.app;
+        int targetSlot = targetApp == null ? -1 : findSlot(targetApp);
         if (targetSlot >= 0) {
-            LauncherApp targetApp = windowApps[targetSlot];
             EmbeddedAppHost host = embeddedHosts[targetSlot];
-            if (targetApp != null && host instanceof RootVirtualDisplayHost
+            if (host instanceof RootVirtualDisplayHost
                     && ((RootVirtualDisplayHost) host)
                     .launchImageShareActivity(targetApp, share)) {
                 armImageSharePromotion(targetSlot, targetApp, share.getComponent());
                 return true;
             }
         }
-        if (target != ImageDragShareTarget.BLUETOOTH) {
-            LauncherApp targetApp = createLauncherAppForPackage(target.packageName());
-            if (targetApp != null) {
-                routedLaunchIntents.put(target.packageName(), share);
-                addOrFocusApp(targetApp);
-                return true;
-            }
+        if (targetApp != null && target != ImageDragShareTarget.BLUETOOTH) {
+            routedLaunchIntents.put(targetApp.instanceKey(), share);
+            addOrFocusApp(targetApp);
+            return true;
         }
         try {
             ActivityOptions options = ActivityOptions.makeBasic();
@@ -4781,18 +4845,6 @@ public class MainActivity extends Activity {
             Log.w(TAG, "Cannot start drag share target on display 0: " + target, e);
             return false;
         }
-    }
-
-    private int findImageDragSharePackageSlot(String packageName) {
-        for (int slot = 0; slot < MAX_WINDOWS; slot++) {
-            LauncherApp app = windowApps[slot];
-            if (app != null && !embeddedSlotClosing[slot]
-                    && isWindowSlotEnabled(slot)
-                    && TextUtils.equals(packageName, app.packageName)) {
-                return slot;
-            }
-        }
-        return -1;
     }
 
     private void deliverDraggedImage(
@@ -4860,7 +4912,7 @@ public class MainActivity extends Activity {
             return;
         }
         pendingImageSharePromotion = new PendingImageSharePromotion(
-                targetSlot, targetApp.packageName,
+                targetSlot, targetApp.packageName, targetApp.instanceKey(),
                 ((RootVirtualDisplayHost) host).getDisplayId(), shareComponent);
     }
 
@@ -4881,8 +4933,8 @@ public class MainActivity extends Activity {
         if (pending.targetSlot < 0 || pending.targetSlot >= MAX_WINDOWS
                 || embeddedSlotClosing[pending.targetSlot]
                 || windowApps[pending.targetSlot] == null
-                || !TextUtils.equals(
-                windowApps[pending.targetSlot].packageName, pending.packageName)) {
+                || !TextUtils.equals(windowApps[pending.targetSlot].instanceKey(),
+                pending.instanceKey)) {
             pendingImageSharePromotion = null;
             return;
         }
@@ -5189,7 +5241,7 @@ public class MainActivity extends Activity {
         if (launch.sharedImageFile != null) {
             scheduleImageDragFileDeletion(launch.sharedImageFile);
         }
-        routedLaunchIntents.put(launch.targetApp.packageName, launch.intent);
+        routedLaunchIntents.put(launch.targetApp.instanceKey(), launch.intent);
         if (existingSlot >= 0 && existingSlot != activeMainSlot
                 && !embeddedSlotClosing[existingSlot]) {
             switchMainSlot(existingSlot, true);
@@ -5257,7 +5309,21 @@ public class MainActivity extends Activity {
         if (app == null || !TextUtils.equals(app.packageName, packageName)) {
             return null;
         }
-        return routedLaunchIntents.remove(packageName);
+        Intent routedIntent = routedLaunchIntents.remove(app.instanceKey());
+        if (routedIntent == null && app.isCurrentUser()) {
+            routedIntent = routedLaunchIntents.remove(packageName);
+        }
+        if (routedIntent != null
+                && routedIntent.getBooleanExtra(EXTRA_IMAGE_SHARE_ROUTE, false)) {
+            armImageSharePromotion(slot, app, routedIntent.getComponent());
+        }
+        return routedIntent;
+    }
+
+    private boolean hasRoutedLaunchIntent(LauncherApp app) {
+        return app != null && (routedLaunchIntents.containsKey(app.instanceKey())
+                || (app.isCurrentUser()
+                && routedLaunchIntents.containsKey(app.packageName)));
     }
 
     private void addOrFocusApp(LauncherApp app) {
@@ -6701,8 +6767,7 @@ public class MainActivity extends Activity {
             showPendingDesktopHomeAfterPromotion(newMainSlot);
             refreshEmbeddedSlotsAfterRoleChange(oldMainSlot, newMainSlot);
             LauncherApp newMainApp = windowApps[newMainSlot];
-            if (newMainApp != null
-                    && routedLaunchIntents.containsKey(newMainApp.packageName)) {
+            if (hasRoutedLaunchIntent(newMainApp)) {
                 syncEmbeddedSlot(newMainSlot);
             }
             if (onLayoutSettled != null) {
@@ -6871,7 +6936,7 @@ public class MainActivity extends Activity {
         updateTopNavigationControls();
         scheduleSideInputProtectionSync();
         LauncherApp activeApp = windowApps[slot];
-        if (activeApp != null && routedLaunchIntents.containsKey(activeApp.packageName)) {
+        if (hasRoutedLaunchIntent(activeApp)) {
             syncEmbeddedSlot(slot);
         }
         if (requestHostedFocus) {
@@ -7677,16 +7742,28 @@ public class MainActivity extends Activity {
     private static final class PendingImageSharePromotion {
         final int targetSlot;
         final String packageName;
+        final String instanceKey;
         final int displayId;
         final ComponentName shareComponent;
 
         PendingImageSharePromotion(
-                int targetSlot, String packageName,
+                int targetSlot, String packageName, String instanceKey,
                 int displayId, ComponentName shareComponent) {
             this.targetSlot = targetSlot;
             this.packageName = packageName;
+            this.instanceKey = instanceKey;
             this.displayId = displayId;
             this.shareComponent = shareComponent;
+        }
+    }
+
+    private static final class ImageDragShareEntry {
+        final ImageDragShareTarget target;
+        final LauncherApp app;
+
+        ImageDragShareEntry(ImageDragShareTarget target, LauncherApp app) {
+            this.target = target;
+            this.app = app;
         }
     }
 

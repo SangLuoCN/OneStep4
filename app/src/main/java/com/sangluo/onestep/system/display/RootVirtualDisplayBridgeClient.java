@@ -121,6 +121,24 @@ public final class RootVirtualDisplayBridgeClient {
                     data.writeInt(displayId);
                     data.writeString(packageName);
                     data.writeInt(enabled ? 1 : 0);
+        });
+    }
+
+    /** Starts an explicit activity on a virtual display as the requested Android user. */
+    public boolean startActivityAsUser(String bridgeToken, Intent intent,
+                                       int sourceUserId, int targetUserId,
+                                       int displayId) {
+        if (intent == null || targetUserId < 0 || displayId <= 0) {
+            return false;
+        }
+        return transactBoolean(
+                bridgeToken, RootVirtualDisplayBridge.TRANSACTION_START_ACTIVITY_AS_USER,
+                data -> {
+                    data.writeInt(sourceUserId);
+                    data.writeInt(targetUserId);
+                    data.writeInt(displayId);
+                    data.writeInt(1);
+                    intent.writeToParcel(data, 0);
                 });
     }
 

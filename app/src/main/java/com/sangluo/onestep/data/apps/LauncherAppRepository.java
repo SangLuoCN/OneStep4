@@ -98,6 +98,25 @@ public final class LauncherAppRepository {
                 ? null : createLauncherApp(preferCurrentUser(launcherActivities));
     }
 
+    /** Returns every launcher instance of one package across visible user profiles. */
+    public List<LauncherApp> loadLauncherAppsForPackage(String packageName) {
+        if (TextUtils.isEmpty(packageName)) {
+            return Collections.emptyList();
+        }
+        List<LauncherActivityEntry> entries = queryLauncherActivities(packageName);
+        List<LauncherApp> apps = new ArrayList<>(entries.size());
+        for (LauncherActivityEntry entry : entries) {
+            apps.add(createLauncherApp(entry));
+        }
+        return apps;
+    }
+
+    /** Applies the same clone marker used by launcher entries to custom shortcut artwork. */
+    public android.graphics.drawable.Drawable addCloneBadge(
+            android.graphics.drawable.Drawable icon) {
+        return themedIconLoader.addCloneBadge(icon);
+    }
+
     private List<LauncherApp> loadLauncherApps(boolean invalidateThemeCaches) {
         List<LauncherActivityEntry> entries = queryLauncherActivities(null);
         entries.sort(Comparator

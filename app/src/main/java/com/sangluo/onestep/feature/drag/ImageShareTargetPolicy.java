@@ -10,6 +10,8 @@ public final class ImageShareTargetPolicy {
     public static final String WECHAT_PACKAGE = "com.tencent.mm";
     public static final String WECHAT_FRIEND_ACTIVITY =
             "com.tencent.mm.ui.tools.ShareImgUI";
+    private static final String WECHAT_LAUNCHER_ACTIVITY =
+            "com.tencent.mm.ui.LauncherUI";
 
     private ImageShareTargetPolicy() {
     }
@@ -41,9 +43,27 @@ public final class ImageShareTargetPolicy {
                 return componentName.endsWith(QQ_FRIEND_PICKER_ACTIVITY)
                         || componentName.endsWith("/.activity.ForwardRecentActivity");
             }
+            if (componentMatchesActivity(
+                    packageName, componentName, initialActivityName)) {
+                return false;
+            }
             return !componentName.endsWith(QQ_FRIEND_ACTIVITY)
                     && !componentName.endsWith("/.activity.JumpActivity");
         }
+        if (WECHAT_PACKAGE.equals(packageName) && initialActivityName != null) {
+            return !componentName.endsWith(WECHAT_LAUNCHER_ACTIVITY)
+                    && !componentName.endsWith("/.ui.LauncherUI");
+        }
         return true;
+    }
+
+    private static boolean componentMatchesActivity(
+            String packageName, String componentName, String activityName) {
+        if (componentName.endsWith(activityName)) {
+            return true;
+        }
+        String prefix = packageName + ".";
+        return activityName.startsWith(prefix)
+                && componentName.endsWith("/." + activityName.substring(prefix.length()));
     }
 }

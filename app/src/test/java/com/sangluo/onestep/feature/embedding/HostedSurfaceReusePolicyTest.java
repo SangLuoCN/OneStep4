@@ -7,6 +7,12 @@ import org.junit.Test;
 
 public class HostedSurfaceReusePolicyTest {
     @Test
+    public void pendingImageShareSkipsStaleTaskValidation() {
+        assertFalse(HostedSurfaceReusePolicy.shouldValidateReusedTask(true));
+        assertTrue(HostedSurfaceReusePolicy.shouldValidateReusedTask(false));
+    }
+
+    @Test
     public void matchingVisibleSurfaceStaysVisibleDuringValidation() {
         assertTrue(HostedSurfaceReusePolicy.shouldKeepVisibleDuringValidation(
                 true, false, true));
