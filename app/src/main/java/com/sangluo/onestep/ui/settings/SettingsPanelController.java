@@ -40,6 +40,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.sangluo.onestep.R;
+import com.sangluo.onestep.feature.embedding.DefaultHomeRoutingPolicy;
 import com.sangluo.onestep.model.LauncherApp;
 import com.sangluo.onestep.system.root.ZygiskHookConfig;
 import com.sangluo.onestep.ui.widget.AspectRatioImageView;
@@ -53,6 +54,7 @@ import androidx.recyclerview.widget.RecyclerView;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -80,6 +82,12 @@ import static com.sangluo.onestep.data.settings.OneStepSettings.sanitizeSideWind
 public final class SettingsPanelController {
     private static final long SLIDER_LIVE_UPDATE_INTERVAL_MS = 100L;
     private static final int TOP_APP_LIST_DIALOG_HEIGHT_DP = 600;
+    private static final ColorStateList DIALOG_CHOICE_TINT = new ColorStateList(
+            new int[][]{
+                    new int[]{android.R.attr.state_checked},
+                    new int[]{-android.R.attr.state_checked}
+            },
+            new int[]{0xff2f7df6, 0xff737373});
 
     public interface Callbacks {
         OneStepWindowView activeMainWindowView();
@@ -351,14 +359,14 @@ public final class SettingsPanelController {
         list.addView(builtInDesktopItem, builtInDesktopLp);
 
         LinearLayout systemHomeItem = createSettingsItem(
-                "设置为系统桌面", "点击设置");
+                "系统默认桌面", "点击设置");
         systemHomeItem.setOnClickListener(v -> openSystemHomeSettings());
         LinearLayout.LayoutParams systemHomeLp = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(68));
         systemHomeLp.topMargin = dp(12);
         list.addView(systemHomeItem, systemHomeLp);
 
-        if (hasHyperOsThirdPartyHomeRestriction()) {
+        if (isHyperOs()) {
             LinearLayout gestureNavigationItem = createSettingsItem(
                     "全面屏手势", "点击设置");
             gestureNavigationItem.setOnClickListener(v -> enableHyperOsGestureNavigation());
@@ -1484,6 +1492,7 @@ public final class SettingsPanelController {
                 break;
             }
         }
+        final int currentCheckedItem = checkedItem;
         List<BuiltInDesktopOption> options = new ArrayList<>();
         options.add(BuiltInDesktopOption.oneStep());
         for (LauncherApp app : builtInDesktopApps) {
@@ -1497,6 +1506,7 @@ public final class SettingsPanelController {
             public View getView(int position, View convertView, ViewGroup parent) {
                 CheckedTextView row = (CheckedTextView) super.getView(
                         position, convertView, parent);
+                styleSingleChoiceRow(row);
                 BuiltInDesktopOption option = getItem(position);
                 if (option == null) {
                     return row;
@@ -1523,7 +1533,7 @@ public final class SettingsPanelController {
         };
         showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("选择内置桌面")
-                .setSingleChoiceItems(adapter, checkedItem, (dialog, which) -> {
+                .setSingleChoiceItems(adapter, currentCheckedItem, (dialog, which) -> {
                     BuiltInDesktopOption option = adapter.getItem(which);
                     if (option != null && option.app == null) {
                         callbacks.saveOneStepDesktop();
@@ -1531,6 +1541,16 @@ public final class SettingsPanelController {
                         builtInDesktopComponentKey = "";
                         refresh();
                     } else if (option != null) {
+                        if (!isOneStepDefaultHome()) {
+                            if (dialog instanceof AlertDialog) {
+                                ((AlertDialog) dialog).getListView().setItemChecked(
+                                        currentCheckedItem, true);
+                            }
+                            Toast.makeText(activity,
+                                    "请先将系统默认桌面设置为 OneStep",
+                                    Toast.LENGTH_SHORT).show();
+                            return;
+                        }
                         callbacks.saveBuiltInDesktop(option.app);
                         oneStepDesktopSelected = false;
                         builtInDesktopComponentKey = option.app.componentKey();
@@ -1666,12 +1686,7 @@ public final class SettingsPanelController {
             CheckBox checkBox = new CheckBox(activity);
             checkBox.setClickable(false);
             checkBox.setFocusable(false);
-            checkBox.setButtonTintList(new ColorStateList(
-                    new int[][]{
-                            new int[]{android.R.attr.state_checked},
-                            new int[]{-android.R.attr.state_checked}
-                    },
-                    new int[]{0xff2f7df6, 0xff8a8a8a}));
+            checkBox.setButtonTintList(DIALOG_CHOICE_TINT);
             row.addView(checkBox, new LinearLayout.LayoutParams(dp(40), dp(52)));
 
             ImageView icon = new ImageView(activity);
@@ -1816,6 +1831,18 @@ public final class SettingsPanelController {
         }
     }
 
+    private boolean isHyperOs() {
+        try {
+            Class<?> properties = Class.forName("android.os.SystemProperties");
+            Method get = properties.getDeclaredMethod("get", String.class, String.class);
+            get.setAccessible(true);
+            Object value = get.invoke(null, "ro.mi.os.version.name", "");
+            return value instanceof String && ((String) value).startsWith("OS");
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return false;
+        }
+    }
+
     private void openHyperOsDefaultHomeChooser() {
         if (callbacks.rootAuthorizationGranted()) {
             rootAuthorizationGranted = true;
@@ -1881,6 +1908,7 @@ public final class SettingsPanelController {
     }
 
     private void showDefaultHomeDialog() {
+        syncState();
         List<LauncherApp> candidates = callbacks.defaultHomeCandidates();
         if (candidates == null || candidates.isEmpty()) {
             Toast.makeText(activity, "未找到可用的桌面应用", Toast.LENGTH_SHORT).show();
@@ -1894,15 +1922,33 @@ public final class SettingsPanelController {
                 break;
             }
         }
+        final int currentCheckedItem = checkedItem;
         ArrayAdapter<LauncherApp> adapter = createHomeAppAdapter(candidates);
         showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("选择系统默认桌面")
-                .setSingleChoiceItems(adapter, checkedItem, (dialog, which) -> {
+                .setSingleChoiceItems(adapter, currentCheckedItem, (dialog, which) -> {
                     LauncherApp app = adapter.getItem(which);
-                    dialog.dismiss();
                     if (app == null) {
+                        dialog.dismiss();
                         return;
                     }
+                    boolean oneStepHome = TextUtils.equals(
+                            app.packageName, activity.getPackageName());
+                    if (!oneStepDesktopSelected && !oneStepHome) {
+                        if (dialog instanceof AlertDialog) {
+                            ((AlertDialog) dialog).getListView().clearChoices();
+                            if (currentCheckedItem >= 0) {
+                                ((AlertDialog) dialog).getListView().setItemChecked(
+                                        currentCheckedItem, true);
+                            }
+                        }
+                        adapter.notifyDataSetChanged();
+                        Toast.makeText(activity,
+                                "请先将内置桌面设置为OneStep桌面",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    dialog.dismiss();
                     callbacks.setDefaultHome(app, (success, message) ->
                             activity.runOnUiThread(() -> Toast.makeText(
                                     activity,
@@ -1928,6 +1974,13 @@ public final class SettingsPanelController {
         }
     }
 
+    private boolean isOneStepDefaultHome() {
+        ComponentName currentHome = resolveCurrentHome();
+        return DefaultHomeRoutingPolicy.shouldInterceptSystemHome(
+                activity.getPackageName(),
+                currentHome == null ? null : currentHome.getPackageName());
+    }
+
     private ArrayAdapter<LauncherApp> createHomeAppAdapter(List<LauncherApp> apps) {
         return new ArrayAdapter<LauncherApp>(activity,
                 android.R.layout.select_dialog_singlechoice, new ArrayList<>(apps)) {
@@ -1935,6 +1988,7 @@ public final class SettingsPanelController {
             public View getView(int position, View convertView, ViewGroup parent) {
                 CheckedTextView row = (CheckedTextView) super.getView(
                         position, convertView, parent);
+                styleSingleChoiceRow(row);
                 LauncherApp app = getItem(position);
                 if (app == null) {
                     return row;
@@ -1968,9 +2022,19 @@ public final class SettingsPanelController {
     private void showSideWindowCountDialog() {
         String[] labels = {"3个", "4个", "5个", "6个"};
         int checked = sanitizeSideWindowCount(sideWindowCount) - MIN_SIDE_WINDOWS;
+        ArrayAdapter<String> adapter = new ArrayAdapter<String>(activity,
+                android.R.layout.select_dialog_singlechoice, labels) {
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                CheckedTextView row = (CheckedTextView) super.getView(
+                        position, convertView, parent);
+                styleSingleChoiceRow(row);
+                return row;
+            }
+        };
         showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("小窗口数量")
-                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                .setSingleChoiceItems(adapter, checked, (dialog, which) -> {
                     int count = MIN_SIDE_WINDOWS + which;
                     if (!canUseSideWindowCount(count)) {
                         Toast.makeText(activity, "不支持该小窗口数量",
@@ -1980,6 +2044,10 @@ public final class SettingsPanelController {
                     saveSideWindowCount(count);
                     dialog.dismiss();
                 }));
+    }
+
+    private void styleSingleChoiceRow(CheckedTextView row) {
+        row.setCheckMarkTintList(DIALOG_CHOICE_TINT);
     }
 
     private AlertDialog showRoundedDialog(AlertDialog.Builder builder) {

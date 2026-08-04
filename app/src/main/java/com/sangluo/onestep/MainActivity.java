@@ -1606,7 +1606,7 @@ public class MainActivity extends Activity {
         wallpaperExecutor.shutdownNow();
         pipDockExecutor.shutdown();
         runningTaskExecutor.shutdownNow();
-        if (supersededOnDefaultDisplay) {
+        if (supersededOnDefaultDisplay && !embeddedResourcesReleased) {
             Log.w(TAG, "Keep superseded virtual displays for "
                     + SUPERSEDED_DISPLAY_RELEASE_GRACE_MS
                     + "ms while Android completes the pending HOME dispatch");
@@ -3344,6 +3344,7 @@ public class MainActivity extends Activity {
         if (app == null || launcherAppRepository == null) {
             return;
         }
+        LauncherApp previousDesktop = oneStepDesktopSelected ? null : builtInDesktopApp;
         LauncherApp resolved;
         try {
             resolved = launcherAppRepository.loadHomeApp(app.componentName);
@@ -3356,6 +3357,8 @@ public class MainActivity extends Activity {
             updateSettingsPageViews();
             return;
         }
+        boolean desktopChanged = previousDesktop == null
+                || !previousDesktop.isSameInstance(resolved);
         builtInDesktopApp = resolved;
         oneStepDesktopSelected = false;
         settingsStore.saveBuiltInDesktopComponent(resolved.componentName);
@@ -3375,18 +3378,135 @@ public class MainActivity extends Activity {
         updateSettingsPageViews();
         Toast.makeText(this, "已将“" + resolved.label + "”设为内置桌面",
                 Toast.LENGTH_SHORT).show();
-        mainHandler.post(this::requestDesktopHomeInMain);
+        if (desktopChanged) {
+            LauncherApp selectedDesktop = resolved;
+            stopPreviousBuiltInDesktop(previousDesktop,
+                    () -> forceStopBuiltInDesktopBeforeRestart(
+                            selectedDesktop, this::restartOneStepTask));
+        }
+    }
+
+    private void stopPreviousBuiltInDesktop(LauncherApp previousDesktop, Runnable completion) {
+        if (previousDesktop == null
+                || TextUtils.equals(previousDesktop.packageName, getPackageName())) {
+            mainHandler.post(completion);
+            return;
+        }
+        int displayedSlot = findSlot(previousDesktop);
+        if (displayedSlot >= 0 && isWindowSlotEnabled(displayedSlot)
+                && windowViews[displayedSlot] != null) {
+            dismissDisplayedBuiltInDesktop(displayedSlot, previousDesktop, completion);
+            return;
+        }
+        String packageName = previousDesktop.packageName;
+        int userId = previousDesktop.userId();
+        boolean currentUser = previousDesktop.isCurrentUser();
+        try {
+            mediaRootExecutor.execute(() -> {
+                ShellCommandResult result = runMainPrivilegedCommand(
+                        "am force-stop --user " + userId + " " + mainShellQuote(packageName),
+                        "force-stop previous built-in desktop " + packageName, true);
+                if (!result.isSuccess() && currentUser) {
+                    result = runMainPrivilegedCommand(
+                            "am force-stop " + mainShellQuote(packageName),
+                            "fallback force-stop previous built-in desktop "
+                                    + packageName, true);
+                }
+                if (!result.isSuccess()) {
+                    Log.e(TAG, "Force-stop previous built-in desktop failed: "
+                            + packageName + " exit=" + result.exitCode);
+                }
+                mainHandler.post(completion);
+            });
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Queue previous built-in desktop stop failed: "
+                    + e.getClass().getSimpleName());
+            mainHandler.post(completion);
+        }
+    }
+
+    private void forceStopBuiltInDesktopBeforeRestart(
+            LauncherApp desktopApp, Runnable completion) {
+        if (desktopApp == null
+                || TextUtils.equals(desktopApp.packageName, getPackageName())) {
+            mainHandler.post(completion);
+            return;
+        }
+        String packageName = desktopApp.packageName;
+        int userId = desktopApp.userId();
+        boolean currentUser = desktopApp.isCurrentUser();
+        try {
+            mediaRootExecutor.execute(() -> {
+                ShellCommandResult result = runMainPrivilegedCommand(
+                        "am force-stop --user " + userId + " " + mainShellQuote(packageName),
+                        "reset selected built-in desktop before OneStep restart "
+                                + packageName, true);
+                if (!result.isSuccess() && currentUser) {
+                    result = runMainPrivilegedCommand(
+                            "am force-stop " + mainShellQuote(packageName),
+                            "fallback reset selected built-in desktop before OneStep restart "
+                                    + packageName, true);
+                }
+                if (!result.isSuccess()) {
+                    Log.e(TAG, "Reset selected built-in desktop failed: "
+                            + packageName + " exit=" + result.exitCode);
+                }
+                mainHandler.post(completion);
+            });
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Queue selected built-in desktop reset failed: "
+                    + e.getClass().getSimpleName());
+            mainHandler.post(completion);
+        }
+    }
+
+    private void restartOneStepTask() {
+        if (activityDestroyed) {
+            return;
+        }
+        prepareEmbeddedResourcesForDesktopRestart();
+        Intent restartIntent = new Intent(this, MainActivity.class)
+                .setAction(Intent.ACTION_MAIN)
+                .addCategory(Intent.CATEGORY_HOME)
+                .putExtra(EXTRA_SHOW_DESKTOP_HOME, true)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_CLEAR_TASK
+                        | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        try {
+            startActivity(restartIntent);
+            overridePendingTransition(0, 0);
+        } catch (ActivityNotFoundException | SecurityException e) {
+            Log.e(TAG, "Unable to restart OneStep after built-in desktop change", e);
+            recreate();
+        }
+    }
+
+    private void prepareEmbeddedResourcesForDesktopRestart() {
+        if (!suppressEmbeddedStarts) {
+            suppressEmbeddedStarts = true;
+            embeddedStartEpoch++;
+            embeddedStartEpochStore.persist(embeddedStartEpoch);
+        }
+        mainSlotSwitchGeneration++;
+        clearPendingMainSlotSwitch();
+        releaseEmbeddedResources(true);
     }
 
     private void saveOneStepDesktop() {
+        LauncherApp previousDesktop = oneStepDesktopSelected ? null : builtInDesktopApp;
         builtInDesktopApp = null;
         oneStepDesktopSelected = true;
         settingsStore.saveOneStepDesktop();
         updateSettingsPageViews();
-        rebuildDesktopHomeViews();
         Toast.makeText(this, "已将“OneStep桌面”设为内置桌面",
                 Toast.LENGTH_SHORT).show();
-        mainHandler.post(this::requestDesktopHomeInMain);
+        stopPreviousBuiltInDesktop(previousDesktop, () -> {
+            if (activityDestroyed) {
+                return;
+            }
+            rebuildDesktopHomeViews();
+            requestDesktopHomeInMain();
+        });
     }
 
     private List<LauncherApp> loadDefaultHomeCandidates() {
@@ -6614,10 +6734,28 @@ public class MainActivity extends Activity {
     }
 
     private void dismissSideWindow(int slot) {
-        if (slot < 0 || slot >= MAX_WINDOWS || isMainPaneSlot(slot)
+        dismissAppWindow(slot, false, null);
+    }
+
+    private void dismissDisplayedBuiltInDesktop(
+            int slot, LauncherApp desktopApp, Runnable completion) {
+        if (slot < 0 || slot >= MAX_WINDOWS || desktopApp == null
+                || windowApps[slot] == null
+                || !desktopApp.isSameInstance(windowApps[slot])) {
+            mainHandler.post(completion);
+            return;
+        }
+        dismissAppWindow(slot, true, completion);
+    }
+
+    private void dismissAppWindow(int slot, boolean allowMainPane, Runnable completion) {
+        if (slot < 0 || slot >= MAX_WINDOWS || (!allowMainPane && isMainPaneSlot(slot))
                 || (windowApps[slot] == null && !isInternalSettingsSlot(slot)
                 && !isDesktopHomeSlot(slot))
                 || embeddedSlotClosing[slot]) {
+            if (completion != null) {
+                mainHandler.post(completion);
+            }
             return;
         }
         if (isDesktopHomeSlot(slot)) {
@@ -6651,7 +6789,7 @@ public class MainActivity extends Activity {
         }
         animator.start();
         closeDismissedSlot(slot, dismissedApp, dismissedHost, windowView,
-                dismissStartedUptime);
+                dismissStartedUptime, allowMainPane, completion);
     }
 
     private void dismissInternalSettingsSideWindow(int slot) {
@@ -6710,9 +6848,10 @@ public class MainActivity extends Activity {
 
     private void closeDismissedSlot(int slot, LauncherApp dismissedApp,
                                     EmbeddedAppHost dismissedHost, OneStepWindowView windowView,
-                                    long dismissStartedUptime) {
+                                    long dismissStartedUptime, boolean allowMainPane,
+                                    Runnable completion) {
         Runnable onClosed = () -> finishDismissedSlotAfterAnimation(slot, dismissedApp,
-                dismissedHost, windowView, dismissStartedUptime);
+                dismissedHost, windowView, dismissStartedUptime, allowMainPane, completion);
         if (dismissedHost == null) {
             onClosed.run();
             return;
@@ -6729,7 +6868,8 @@ public class MainActivity extends Activity {
     private void finishDismissedSlotAfterAnimation(int slot, LauncherApp dismissedApp,
                                                    EmbeddedAppHost dismissedHost,
                                                    OneStepWindowView windowView,
-                                                   long dismissStartedUptime) {
+                                                   long dismissStartedUptime,
+                                                   boolean allowMainPane, Runnable completion) {
         long animationEndUptime = dismissStartedUptime + SIDE_DISMISS_SETTLE_MS + 16L;
         long remainingMs = Math.max(0L, animationEndUptime - SystemClock.uptimeMillis());
         windowView.postDelayed(() -> {
@@ -6737,18 +6877,26 @@ public class MainActivity extends Activity {
                     && windowApps[slot] == dismissedApp
                     && embeddedHosts[slot] == dismissedHost) {
                 windowView.setLiveAppVisible(false);
-                finishDismissedSlot(slot, dismissedApp, dismissedHost, windowView);
+                finishDismissedSlot(slot, dismissedApp, dismissedHost, windowView,
+                        allowMainPane, completion);
+            } else if (completion != null) {
+                completion.run();
             }
         }, remainingMs);
     }
 
     private void finishDismissedSlot(int slot, LauncherApp dismissedApp,
-                                     EmbeddedAppHost dismissedHost, OneStepWindowView windowView) {
+                                     EmbeddedAppHost dismissedHost, OneStepWindowView windowView,
+                                     boolean allowMainPane, Runnable completion) {
         mainHandler.post(() -> {
             if (activityDestroyed || slot < 0 || slot >= MAX_WINDOWS
                     || !embeddedSlotClosing[slot]
-                    || isMainPaneSlot(slot) || embeddedHosts[slot] != dismissedHost
+                    || (!allowMainPane && isMainPaneSlot(slot))
+                    || embeddedHosts[slot] != dismissedHost
                     || windowApps[slot] != dismissedApp) {
+                if (completion != null && !activityDestroyed) {
+                    completion.run();
+                }
                 return;
             }
             windowApps[slot] = null;
@@ -6761,6 +6909,9 @@ public class MainActivity extends Activity {
             windowView.setAlpha(1f);
             renderWindows();
             applyWindowLayout(false);
+            if (completion != null) {
+                completion.run();
+            }
         });
     }
 
