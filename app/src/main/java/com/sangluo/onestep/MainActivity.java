@@ -4886,20 +4886,31 @@ public class MainActivity extends Activity {
                 || imageFile == null || !imageFile.isFile()) {
             return null;
         }
-        String mediaMime = ImageDragSourcePolicy.isImageMimeType(mimeType)
-                && !TextUtils.equals(mimeType, "image/*") ? mimeType : "image/png";
+        boolean video = ImageDragSourcePolicy.isVideoMimeType(mimeType);
+        String mediaMime;
+        if (video) {
+            mediaMime = TextUtils.equals(mimeType, "video/*")
+                    ? "video/mp4" : mimeType;
+        } else {
+            mediaMime = ImageDragSourcePolicy.isImageMimeType(mimeType)
+                    && !TextUtils.equals(mimeType, "image/*") ? mimeType : "image/png";
+        }
         String extension = ImageFileNamePolicy.extensionForMime(mediaMime);
         ContentValues values = new ContentValues();
         values.put(MediaStore.MediaColumns.DISPLAY_NAME,
                 "OneStep-" + UUID.randomUUID() + extension);
         values.put(MediaStore.MediaColumns.MIME_TYPE, mediaMime);
         values.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                Environment.DIRECTORY_PICTURES + "/OneStep/");
+                (video ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES)
+                        + "/OneStep/");
         values.put(MediaStore.MediaColumns.IS_PENDING, 1);
         ContentResolver resolver = getContentResolver();
         Uri mediaUri = null;
         try {
-            mediaUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            mediaUri = resolver.insert(
+                    video ? MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                            : MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    values);
             if (mediaUri == null) {
                 return null;
             }

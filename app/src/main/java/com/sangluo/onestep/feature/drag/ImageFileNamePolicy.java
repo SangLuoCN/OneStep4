@@ -36,6 +36,12 @@ public final class ImageFileNamePolicy {
         if (normalized.contains("webm")) {
             return ".webm";
         }
+        if (normalized.contains("3gpp") || normalized.contains("3gp")) {
+            return ".3gp";
+        }
+        if (normalized.contains("matroska") || normalized.contains("mkv")) {
+            return ".mkv";
+        }
         return ".img";
     }
 

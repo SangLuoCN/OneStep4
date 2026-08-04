@@ -377,13 +377,19 @@ public final class ImageDragBridgeClient {
                         copied = copy(input, output, maxBytes);
                     }
                 } else if (qqMessageItem != null) {
-                    try (InputStream input = openQqOriginal(qqMessageItem)) {
+                    try (InputStream input = openQqMedia(qqMessageItem)) {
                         copied = copy(input, output, maxBytes);
                     }
                 } else if (sourceUrl != null) {
                     copied = copyRemoteUrl(sourceUrl, output, maxBytes);
                 } else if (virtualPath != null) {
-                    copied = writeWeChatOriginal(virtualPath, output, maxBytes);
+                    if (ImageDragSourcePolicy.isVideoMimeType(mimeType)) {
+                        try (InputStream input = openWeChatPath(virtualPath)) {
+                            copied = copy(input, output, maxBytes);
+                        }
+                    } else {
+                        copied = writeWeChatOriginal(virtualPath, output, maxBytes);
+                    }
                 } else if (ImageDragSourcePolicy.isVideoMimeType(mimeType)) {
                     copied = writeVideoThumbnail(output);
                 } else {
@@ -415,6 +421,7 @@ public final class ImageDragBridgeClient {
                 data.writeInt(sourceDisplayId);
                 data.writeString(sourcePackage);
                 data.writeString(mimeType);
+                data.writeInt(payloadContainsOriginalMedia() ? 1 : 0);
                 data.writeString(shareUri == null ? null : shareUri.toString());
                 if (!service.transact(
                         ImageDragBridgeService.TRANSACTION_OPEN_TRANSFER, data, reply, 0)) {
@@ -427,6 +434,14 @@ public final class ImageDragBridgeClient {
                 data.recycle();
                 reply.recycle();
             }
+        }
+
+        private boolean payloadContainsOriginalMedia() {
+            return !ImageDragSourcePolicy.isVideoMimeType(mimeType)
+                    || sourceFile != null
+                    || sourceUrl != null
+                    || virtualPath != null
+                    || qqMessageItem != null;
         }
 
         private void unbind() {
@@ -464,14 +479,16 @@ public final class ImageDragBridgeClient {
             }
         }
 
-        private static long copyRemoteUrl(
+        private long copyRemoteUrl(
                 String sourceUrl, OutputStream output, long maxBytes) throws IOException {
             HttpURLConnection connection = (HttpURLConnection) new URL(sourceUrl)
                     .openConnection();
             connection.setConnectTimeout(10_000);
             connection.setReadTimeout(30_000);
             connection.setInstanceFollowRedirects(true);
-            connection.setRequestProperty("Accept", "image/*");
+            connection.setRequestProperty("Accept",
+                    ImageDragSourcePolicy.isVideoMimeType(mimeType)
+                            ? "video/*" : "image/*");
             try {
                 int responseCode = connection.getResponseCode();
                 if (responseCode < 200 || responseCode >= 300) {
@@ -582,46 +599,67 @@ public final class ImageDragBridgeClient {
             }
         }
 
-        private InputStream openQqOriginal(Object messageItem) throws IOException {
+        private InputStream openQqMedia(Object messageItem) throws IOException {
             try {
-                Object picElement = invokeNoArg(messageItem, "L2");
-                Object msgElement = invokeNoArg(messageItem, "K2");
+                String messageClassName = messageItem.getClass().getName();
+                boolean shortVideoMessage =
+                        "com.tencent.mobileqq.aio.msg.ShortVideoMsgItem".equals(
+                                messageClassName);
+                boolean fileMessage = "com.tencent.mobileqq.aio.msg.FileMsgItem".equals(
+                        messageClassName);
+                boolean video = ImageDragSourcePolicy.isVideoMimeType(mimeType)
+                        || shortVideoMessage;
+                Object mediaElement = invokeNoArg(messageItem,
+                        fileMessage ? "M2" : shortVideoMessage ? "U2" : "L2");
+                Object msgElement = invokeNoArg(messageItem,
+                        fileMessage ? "N2" : shortVideoMessage ? "Q2" : "K2");
                 Object msgRecord = invokeNoArg(messageItem, "getMsgRecord");
-                if (picElement == null || msgElement == null || msgRecord == null) {
+                if (mediaElement == null || msgElement == null || msgRecord == null) {
                     throw new IOException("QQ message model incomplete");
                 }
                 Object service = qqRichMediaService(messageItem.getClass().getClassLoader());
                 if (service == null) {
                     throw new IOException("QQ rich-media service unavailable");
                 }
-                File cached = findQqOriginalFile(service, picElement);
+                File cached = findQqMediaFile(
+                        service, mediaElement, video, fileMessage);
                 if (cached != null) {
-                    Log.i(TAG, "QQ original already cached: bytes=" + cached.length());
+                    Log.i(TAG, "QQ original media already cached: bytes=" + cached.length());
                     return new FileInputStream(cached);
                 }
-                int expectedWidth = numberValue(invokeNoArg(picElement, "getPicWidth"));
-                int expectedHeight = numberValue(invokeNoArg(picElement, "getPicHeight"));
-                clearQqOriginalCandidate();
+                int expectedWidth = numberValue(invokeNoArg(
+                        mediaElement, shortVideoMessage
+                                ? "getThumbWidth" : "getPicWidth"));
+                int expectedHeight = numberValue(invokeNoArg(
+                        mediaElement, shortVideoMessage
+                                ? "getThumbHeight" : "getPicHeight"));
+                if (!video) {
+                    clearQqOriginalCandidate();
+                }
                 requestQqOriginalDownload(service, msgRecord, msgElement);
                 long deadline = android.os.SystemClock.uptimeMillis() + 8_000L;
                 do {
-                    File sourceCandidate = qqOriginalCandidate(
-                            expectedWidth, expectedHeight);
-                    if (sourceCandidate != null) {
-                        return new FileInputStream(sourceCandidate);
+                    if (!video) {
+                        File sourceCandidate = qqOriginalCandidate(
+                                expectedWidth, expectedHeight);
+                        if (sourceCandidate != null) {
+                            return new FileInputStream(sourceCandidate);
+                        }
                     }
-                    cached = findQqOriginalFile(service, picElement);
+                    cached = findQqMediaFile(
+                            service, mediaElement, video, fileMessage);
                     if (cached != null) {
-                        Log.i(TAG, "QQ original download ready: bytes=" + cached.length());
+                        Log.i(TAG, "QQ original media download ready: bytes="
+                                + cached.length());
                         return new FileInputStream(cached);
                     }
                     android.os.SystemClock.sleep(80L);
                 } while (android.os.SystemClock.uptimeMillis() < deadline);
-                throw new IOException("QQ original download timed out");
+                throw new IOException("QQ original media download timed out");
             } catch (IOException e) {
                 throw e;
             } catch (ReflectiveOperationException | RuntimeException e) {
-                throw new IOException("Cannot resolve QQ original image", e);
+                throw new IOException("Cannot resolve QQ original media", e);
             }
         }
 
@@ -668,19 +706,28 @@ public final class ImageDragBridgeClient {
             Log.i(TAG, "QQ original download requested through IRichMediaService");
         }
 
-        private File findQqOriginalFile(Object service, Object picElement)
+        private File findQqMediaFile(
+                Object service, Object mediaElement,
+                boolean video, boolean fileMessage)
                 throws ReflectiveOperationException {
-            String sourcePath = stringValue(invokeNoArg(picElement, "getSourcePath"));
+            String sourcePath = stringValue(invokeNoArg(
+                    mediaElement, video ? "getFilePath" : "getSourcePath"));
             File direct = readableFile(sourcePath);
             if (direct != null) {
                 return direct;
             }
-            String fileName = stringValue(invokeNoArg(picElement, "getFileName"));
-            String md5 = stringValue(invokeNoArg(picElement, "getMd5HexStr"));
-            Method directoriesMethod = findMethod(
-                    service.getClass(), "getPicMediaFileDirs", boolean.class);
-            Object directories = directoriesMethod == null
-                    ? null : directoriesMethod.invoke(service, false);
+            String fileName = stringValue(invokeNoArg(mediaElement, "getFileName"));
+            String md5 = stringValue(invokeNoArg(
+                    mediaElement, fileMessage ? "getFileMd5"
+                            : video ? "getVideoMd5" : "getMd5HexStr"));
+            Method directoriesMethod = fileMessage
+                    ? findMethod(service.getClass(), "getFileMediaFileDirs")
+                    : video
+                    ? findMethod(service.getClass(), "getVideoMediaFileDirs")
+                    : findMethod(service.getClass(), "getPicMediaFileDirs", boolean.class);
+            Object directories = directoriesMethod == null ? null
+                    : fileMessage || video ? directoriesMethod.invoke(service)
+                    : directoriesMethod.invoke(service, false);
             if (!(directories instanceof Collection)) {
                 return null;
             }

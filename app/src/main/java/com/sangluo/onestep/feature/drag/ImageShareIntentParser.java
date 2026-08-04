@@ -7,7 +7,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.text.TextUtils;
 
-/** Extracts the first image URI from Gallery's chooser/share intent variants. */
+/** Extracts the first supported media URI from chooser/share intent variants. */
 public final class ImageShareIntentParser {
     private static final String ACTION_XMAN_SHARE_MANAGER =
             "miui.intent.action.XMAN_SHARE_MANAGER";
@@ -52,7 +52,8 @@ public final class ImageShareIntentParser {
         if (TextUtils.isEmpty(mimeType)) {
             mimeType = "image/*";
         }
-        return mimeType.startsWith("image/") ? new Payload(uri, mimeType) : null;
+        return ImageDragSourcePolicy.isSupportedMediaMimeType(mimeType)
+                ? new Payload(uri, mimeType) : null;
     }
 
     private static Intent nestedIntent(Intent intent) {

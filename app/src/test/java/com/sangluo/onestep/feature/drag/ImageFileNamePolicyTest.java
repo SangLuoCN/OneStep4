@@ -23,6 +23,10 @@ public class ImageFileNamePolicyTest {
     @Test
     public void videoPreviewAlwaysUsesJpegExtension() {
         assertEquals(".mp4", ImageFileNamePolicy.extensionForMime("video/mp4"));
+        assertEquals(".mov", ImageFileNamePolicy.extensionForMime("video/quicktime"));
+        assertEquals(".webm", ImageFileNamePolicy.extensionForMime("video/webm"));
+        assertEquals(".3gp", ImageFileNamePolicy.extensionForMime("video/3gpp"));
+        assertEquals(".mkv", ImageFileNamePolicy.extensionForMime("video/x-matroska"));
         assertEquals(".jpg", ImageFileNamePolicy.previewExtensionForMime("video/mp4"));
     }
 }

@@ -19,6 +19,7 @@ import android.view.Surface;
 
 import com.sangluo.onestep.system.display.DisplayOwnerPolicy;
 import com.sangluo.onestep.system.root.SystemServiceFailurePolicy;
+import com.sangluo.onestep.feature.drag.ImageDragSourcePolicy;
 import com.sangluo.onestep.feature.drag.ImageShareIntentParser;
 
 import java.io.BufferedReader;
@@ -602,7 +603,7 @@ public final class RootVirtualDisplayBridge extends Binder {
         ImageShareIntentParser.Payload sharedImage =
                 ImageShareIntentParser.find(intent);
         ParcelFileDescriptor sharedDescriptor = sharedImage == null
-                ? null : openSharedImage(sharedImage.uri);
+                ? null : openSharedMedia(sharedImage.uri, sharedImage.mimeType);
         boolean routed;
         try {
             routed = callback != null && callback.route(
@@ -624,7 +625,7 @@ public final class RootVirtualDisplayBridge extends Binder {
         return routed;
     }
 
-    private ParcelFileDescriptor openSharedImage(Uri uri) {
+    private ParcelFileDescriptor openSharedMedia(Uri uri, String mimeType) {
         if (uri == null) {
             return null;
         }
@@ -640,7 +641,9 @@ public final class RootVirtualDisplayBridge extends Binder {
         }
         try {
             android.content.res.AssetFileDescriptor asset = context.getContentResolver()
-                    .openTypedAssetFileDescriptor(uri, "image/*", null);
+                    .openTypedAssetFileDescriptor(uri,
+                            ImageDragSourcePolicy.isSupportedMediaMimeType(mimeType)
+                                    ? mimeType : "*/*", null);
             if (asset != null) {
                 try {
                     return ParcelFileDescriptor.dup(asset.getParcelFileDescriptor().getFileDescriptor());

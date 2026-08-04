@@ -10,6 +10,7 @@ import android.graphics.PixelFormat;
 import android.graphics.PorterDuff;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.media.MediaMetadataRetriever;
 import android.net.Uri;
 import android.util.Log;
 import android.view.Display;
@@ -21,6 +22,7 @@ import android.view.ViewGroup;
 import android.widget.FrameLayout;
 
 import java.io.File;
+import java.io.IOException;
 
 /** Owns the image preview view attached to the OneStep display-0 content hierarchy. */
 public final class ImageDragSessionController {
@@ -86,7 +88,7 @@ public final class ImageDragSessionController {
         if (sourceSlot < 0 || imageFile == null || !imageFile.isFile()) {
             return false;
         }
-        Bitmap bitmap = decodePreview(imageFile);
+        Bitmap bitmap = decodePreview(imageFile, mimeType);
         ViewGroup container = callbacks.previewContainer();
         if (bitmap == null || !isDefaultDisplayContainer(container)) {
             Log.w(TAG, bitmap == null
@@ -130,21 +132,61 @@ public final class ImageDragSessionController {
         return display != null && display.getDisplayId() == Display.DEFAULT_DISPLAY;
     }
 
-    private static Bitmap decodePreview(File imageFile) {
+    private static Bitmap decodePreview(File imageFile, String mimeType) {
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         BitmapFactory.decodeFile(imageFile.getAbsolutePath(), bounds);
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+        if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+            int sampleSize = 1;
+            int largestEdge = Math.max(bounds.outWidth, bounds.outHeight);
+            while (largestEdge / (sampleSize * 2) >= PREVIEW_DECODE_EDGE_PX) {
+                sampleSize *= 2;
+            }
+            BitmapFactory.Options preview = new BitmapFactory.Options();
+            preview.inSampleSize = sampleSize;
+            return BitmapFactory.decodeFile(imageFile.getAbsolutePath(), preview);
+        }
+        if (!ImageDragSourcePolicy.isVideoMimeType(mimeType)) {
             return null;
         }
-        int sampleSize = 1;
-        int largestEdge = Math.max(bounds.outWidth, bounds.outHeight);
-        while (largestEdge / (sampleSize * 2) >= PREVIEW_DECODE_EDGE_PX) {
-            sampleSize *= 2;
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(imageFile.getAbsolutePath());
+            int width = parsePositiveInt(retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
+            int height = parsePositiveInt(retriever.extractMetadata(
+                    MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
+            int largestEdge = Math.max(width, height);
+            if (largestEdge > 0) {
+                float scale = Math.min(1f,
+                        (float) PREVIEW_DECODE_EDGE_PX / largestEdge);
+                return retriever.getScaledFrameAtTime(
+                        -1L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                        Math.max(1, Math.round(width * scale)),
+                        Math.max(1, Math.round(height * scale)));
+            }
+            return retriever.getFrameAtTime(
+                    -1L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Cannot decode video drag preview", error);
+            return null;
+        } finally {
+            try {
+                retriever.release();
+            } catch (IOException | RuntimeException ignored) {
+            }
         }
-        BitmapFactory.Options preview = new BitmapFactory.Options();
-        preview.inSampleSize = sampleSize;
-        return BitmapFactory.decodeFile(imageFile.getAbsolutePath(), preview);
+    }
+
+    private static int parsePositiveInt(String value) {
+        if (value == null) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Integer.parseInt(value));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     public boolean isActiveForSource(int slot) {

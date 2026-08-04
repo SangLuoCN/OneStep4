@@ -56,6 +56,7 @@ public final class ImageDragBridgeService extends Service {
             int sourceDisplayId = data.readInt();
             String sourcePackage = data.readString();
             String mimeType = data.readString();
+            boolean payloadContainsOriginalMedia = data.readInt() != 0;
             Uri sourceUri = parseContentUri(data.readString());
             ParcelFileDescriptor writeEnd = null;
             try {
@@ -67,7 +68,8 @@ public final class ImageDragBridgeService extends Service {
                     reply.writeInt(0);
                     return true;
                 }
-                File destination = newDestinationFile(mimeType);
+                File destination = newDestinationFile(
+                        mimeType, payloadContainsOriginalMedia);
                 ParcelFileDescriptor[] pipe = ParcelFileDescriptor.createPipe();
                 ParcelFileDescriptor readEnd = pipe[0];
                 writeEnd = pipe[1];
@@ -117,13 +119,16 @@ public final class ImageDragBridgeService extends Service {
                 callingUid, sourceDisplayId, sourcePackage);
     }
 
-    private File newDestinationFile(String mimeType) throws IOException {
+    private File newDestinationFile(
+            String mimeType, boolean payloadContainsOriginalMedia) throws IOException {
         File directory = new File(getCacheDir(), "drag");
         if ((!directory.isDirectory() && !directory.mkdirs()) || !directory.isDirectory()) {
             throw new IOException("drag cache directory unavailable");
         }
         return new File(directory, "incoming-" + UUID.randomUUID()
-                + ImageFileNamePolicy.previewExtensionForMime(mimeType));
+                + (payloadContainsOriginalMedia
+                ? ImageFileNamePolicy.extensionForMime(mimeType)
+                : ImageFileNamePolicy.previewExtensionForMime(mimeType)));
     }
 
     private void receivePreview(
