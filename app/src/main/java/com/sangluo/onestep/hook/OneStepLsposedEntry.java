@@ -3,6 +3,7 @@ package com.sangluo.onestep.hook;
 import android.util.Log;
 
 import com.sangluo.onestep.feature.drag.ImageDragFeatureGate;
+import com.sangluo.onestep.feature.drag.ImageDragSourcePolicy;
 
 import java.io.File;
 import java.io.IOException;
@@ -46,7 +47,9 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
             }
             return;
         }
-        if (imageDragSharingEnabled) {
+        if (imageDragSharingEnabled
+                && ImageDragSourcePolicy.isUniversalSourcePackage(
+                loadPackageParam.packageName)) {
             OneStepUniversalImageDragHook.install(
                     loadPackageParam.packageName, loadPackageParam.processName,
                     loadPackageParam.classLoader);

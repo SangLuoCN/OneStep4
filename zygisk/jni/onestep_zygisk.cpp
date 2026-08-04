@@ -49,6 +49,8 @@ constexpr const char *kUniversalImageDragHookClass =
 constexpr const char *kMiuiHomeProcess = "com.miui.home";
 constexpr const char *kSystemUiProcess = "com.android.systemui";
 constexpr const char *kGooglePhotosProcess = "com.google.android.apps.photos";
+constexpr const char *kQqProcess = "com.tencent.mobileqq";
+constexpr const char *kWeChatProcess = "com.tencent.mm";
 constexpr const char *kHyperOsVersionProperty = "ro.mi.os.version.name";
 constexpr const char *kImageDragSharingProperty = "onestep.hook.image_drag";
 constexpr const char *kDisableSecureWindowHook =
@@ -464,7 +466,7 @@ bool isUserAppMainProcess(JNIEnv *env, jint uid, jstring niceName) {
         return false;
     }
     const char *name = env->GetStringUTFChars(niceName, nullptr);
-    if (jniResultUnavailable(env, name, "read generic image source process name")) {
+    if (jniResultUnavailable(env, name, "read universal image source process name")) {
         return false;
     }
     bool mainProcess = strchr(name, ':') == nullptr
@@ -523,18 +525,23 @@ public:
                         env, args->app_data_dir, kGooglePhotosProcess);
         bool isGooglePhotos = imageDragSharingEnabled
                 && (googlePhotosNameMatched || googlePhotosDataDirMatched);
-        bool isGenericImageSource = imageDragSharingEnabled && args != nullptr
+        bool universalProcessNameMatched = args != nullptr
+                && (isProcess(env, args->nice_name, kQqProcess)
+                || isProcess(env, args->nice_name, kWeChatProcess));
+        bool universalDataDirMatched = args != nullptr
+                && (isPackageDataDirectory(env, args->app_data_dir, kQqProcess)
+                || isPackageDataDirectory(env, args->app_data_dir, kWeChatProcess));
+        bool isUniversalImageSource = imageDragSharingEnabled && args != nullptr
                 && isUserAppMainProcess(env, args->uid, args->nice_name)
-                && !isGooglePhotos;
-        if (!wantsHyperOsHook && !isGooglePhotos && !isGenericImageSource) {
+                && (universalProcessNameMatched || universalDataDirMatched);
+        if (!wantsHyperOsHook && !isGooglePhotos && !isUniversalImageSource) {
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
             return;
         }
         // LSPosed owns the system/framework hooks, but it is often not scoped to
-        // every user application. Keep the Zygisk app-side media hook available
-        // so generic image extraction does not depend on manually maintaining a
-        // growing LSPosed scope list.
-        if (activeLsposedModuleInstalled() && !isGenericImageSource && !isGooglePhotos) {
+        // QQ and WeChat. Keep those app-side media hooks available even when the
+        // LSPosed scope does not include both packages.
+        if (activeLsposedModuleInstalled() && !isUniversalImageSource && !isGooglePhotos) {
             LOGI("LSPosed backend selected; skip standalone non-app hook");
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
             return;
@@ -543,8 +550,8 @@ public:
             LOGI("Google Photos source process selected via %s",
                  googlePhotosNameMatched ? "process name" : "app data directory");
         }
-        if (isGenericImageSource) {
-            LOGI("Generic image source process selected");
+        if (isUniversalImageSource) {
+            LOGI("QQ/WeChat universal image source process selected");
         }
         int moduleFd = api->getModuleDir();
         if (moduleFd < 0) {
@@ -573,7 +580,7 @@ public:
                             env->NewGlobalRef(localSource));
                     }
                 }
-                if (isGenericImageSource) {
+                if (isUniversalImageSource) {
                     jclass localUniversal = loadNamedHookClass(
                             env, appLoader, kUniversalImageDragHookClass,
                             "load universal image drag hook class");

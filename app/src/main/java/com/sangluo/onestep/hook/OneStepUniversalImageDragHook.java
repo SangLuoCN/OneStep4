@@ -41,10 +41,7 @@ import de.robv.android.xposed.XposedBridge;
 /** Generic source-side media extraction for apps that render content in ImageView. */
 public final class OneStepUniversalImageDragHook {
     private static final String TAG = "OneStep40-UniversalDrag";
-    private static final String ONE_STEP_PACKAGE = "com.sangluo.onestep";
-    private static final String QQ_PACKAGE = "com.tencent.mobileqq";
-    private static final String GOOGLE_PHOTOS_PACKAGE =
-            ImageDragSourcePolicy.GOOGLE_PHOTOS_PACKAGE;
+    private static final String QQ_PACKAGE = ImageDragSourcePolicy.QQ_PACKAGE;
     private static final long LONG_PRESS_DEDUP_MS = 1500L;
     private static final long IMAGE_URI_RETENTION_MS = 5000L;
     private static final long QQ_TEMP_REDIRECT_MS = 12_000L;
@@ -324,14 +321,8 @@ public final class OneStepUniversalImageDragHook {
     }
 
     private static boolean shouldInstall(String packageName, String processName) {
-        return !TextUtils.isEmpty(packageName)
-                && TextUtils.equals(packageName, processName)
-                && !TextUtils.equals(packageName, ONE_STEP_PACKAGE)
-                && !TextUtils.equals(packageName, GOOGLE_PHOTOS_PACKAGE)
-                && !TextUtils.equals(packageName, "android")
-                && !packageName.startsWith("com.android.systemui")
-                && !packageName.startsWith("com.android.settings")
-                && !packageName.startsWith("com.miui.home");
+        return ImageDragSourcePolicy.isUniversalSourcePackage(packageName)
+                && TextUtils.equals(packageName, processName);
     }
 
     private static void hookImageSourceMethods() throws NoSuchMethodException {
