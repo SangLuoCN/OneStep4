@@ -91,6 +91,7 @@ import com.sangluo.onestep.feature.embedding.HostedSurfaceReusePolicy;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
 import com.sangluo.onestep.feature.drag.ImageShareTargetPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
+import com.sangluo.onestep.feature.embedding.VirtualDisplayImePolicyReadinessPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayViewportPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualNavigationInputPolicy;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
@@ -231,6 +232,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int ROOT_INPUT_BRIDGE_READY_TIMEOUT_MS = 2000;
     private static final int ROOT_INPUT_BRIDGE_READY_RETRY_MS = 50;
     private static final int ROOT_DISPLAY_REGISTRATION_TIMEOUT_MS = 800;
+    private static final int DISPLAY_IME_POLICY_READY_TIMEOUT_MS = 2000;
+    private static final int DISPLAY_IME_POLICY_READY_RETRY_MS = 32;
     private static final String TASK_STACK_LIST_COMMAND =
             "cmd activity stack list 2>/dev/null || am stack list";
     private static final int VIRTUAL_DISPLAY_RELEASE_RETRY_MS = 120;
@@ -2679,8 +2682,37 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     void checkDisplayImeLocalPolicy(String reason, Runnable onConfirmed,
                                             Runnable onRejected) {
+        long readyDeadlineUptimeMs = SystemClock.uptimeMillis()
+                + DISPLAY_IME_POLICY_READY_TIMEOUT_MS;
+        checkDisplayImeLocalPolicyUntilReady(reason, onConfirmed, onRejected,
+                readyDeadlineUptimeMs, 0);
+    }
+
+    private void checkDisplayImeLocalPolicyUntilReady(
+            String reason, Runnable onConfirmed, Runnable onRejected,
+            long readyDeadlineUptimeMs, int readinessAttempt) {
         final int targetDisplayId = displayId;
-        if (targetDisplayId <= DEFAULT_DISPLAY_ID || !hasVirtualDisplay()) {
+        VirtualDisplayImePolicyReadinessPolicy.Decision readiness =
+                VirtualDisplayImePolicyReadinessPolicy.evaluate(
+                        targetDisplayId, hasVirtualDisplay(), embeddedSlotClosing[slot],
+                        SystemClock.uptimeMillis(), readyDeadlineUptimeMs);
+        if (readiness == VirtualDisplayImePolicyReadinessPolicy.Decision.RETRY) {
+            if (readinessAttempt == 0) {
+                Log.i(TAG, "Wait for virtual display before IME policy: slot=" + slot
+                        + ", display=" + targetDisplayId + ", reason=" + reason);
+            }
+            mainHandler.postDelayed(() -> checkDisplayImeLocalPolicyUntilReady(
+                            reason, onConfirmed, onRejected, readyDeadlineUptimeMs,
+                            readinessAttempt + 1),
+                    DISPLAY_IME_POLICY_READY_RETRY_MS);
+            return;
+        }
+        if (readiness == VirtualDisplayImePolicyReadinessPolicy.Decision.REJECT) {
+            Log.w(TAG, "Virtual display was not ready for IME policy: slot=" + slot
+                    + ", display=" + targetDisplayId
+                    + ", attempts=" + readinessAttempt
+                    + ", closing=" + embeddedSlotClosing[slot]
+                    + ", reason=" + reason);
             mainHandler.post(onRejected);
             return;
         }
@@ -2708,7 +2740,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 boolean configured = applyDisplayImeLocalPolicy(targetDisplayId, reason);
                 mainHandler.post(() -> {
                     if (targetDisplayId != displayId || !hasVirtualDisplay()) {
-                        onRejected.run();
+                        checkDisplayImeLocalPolicyUntilReady(
+                                reason, onConfirmed, onRejected,
+                                readyDeadlineUptimeMs, readinessAttempt + 1);
                     } else if (configured) {
                         onConfirmed.run();
                     } else {
