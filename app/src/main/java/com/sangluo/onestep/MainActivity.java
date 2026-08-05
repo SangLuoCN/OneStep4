@@ -2205,9 +2205,7 @@ public class MainActivity extends Activity {
             } else {
                 refreshAllEmbeddedSlotLayouts();
             }
-            // The virtual display must follow the settled host frame. Keeping an old aspect
-            // ratio makes SurfaceView crop the buffer and leaves part of the pane uncovered.
-            scheduleEmbeddedSlotRefresh(true);
+            scheduleEmbeddedSlotRefresh();
         };
 
         if (!animate || !hasLaidOutWindowFrames()) {
@@ -2688,7 +2686,7 @@ public class MainActivity extends Activity {
         updateShortcutAppStatuses();
         requestRunningTaskStatusRefresh();
         applyWindowLayout(false);
-        scheduleEmbeddedSlotRefresh(true);
+        scheduleEmbeddedSlotRefresh();
     }
 
     private void addCornerTriggers(FrameLayout root) {
@@ -4589,6 +4587,7 @@ public class MainActivity extends Activity {
         }
         updateSettingsPageViews();
         rebuildTopChromeContent();
+        scheduleEmbeddedSlotRefresh(true);
     }
 
     private void saveStatusBarSpacingEnabled(boolean enabled) {
@@ -4600,7 +4599,7 @@ public class MainActivity extends Activity {
         applyStatusBarForCurrentMode();
         updateSettingsPageViews();
         rebuildTopChromeContent();
-        scheduleEmbeddedSlotRefresh();
+        scheduleEmbeddedSlotRefresh(true);
     }
 
     private void saveVerticalWindowLayout(boolean enabled) {
