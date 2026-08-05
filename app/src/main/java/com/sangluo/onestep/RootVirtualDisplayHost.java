@@ -16,6 +16,7 @@ import android.content.pm.LauncherApps;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
+import android.content.res.Resources;
 import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Outline;
@@ -91,6 +92,7 @@ import com.sangluo.onestep.feature.embedding.HostedTaskParser;
 import com.sangluo.onestep.feature.drag.ImageShareTargetPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayViewportPolicy;
+import com.sangluo.onestep.feature.embedding.VirtualNavigationInputPolicy;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
 import com.sangluo.onestep.feature.media.MediaSessionCoordinator;
 import com.sangluo.onestep.hook.OneStepPrimaryHomePolicy;
@@ -243,6 +245,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS_HIDDEN =
             1 << 9;
     private static final int DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN = 1 << 14;
+    private static final int DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS_HIDDEN = 1 << 6;
     private static final int VIRTUAL_DISPLAY_FLAG_TRUSTED_HIDDEN = 1 << 10;
     private static final int VIRTUAL_DISPLAY_FLAG_OWN_FOCUS_HIDDEN = 1 << 14;
     private static final int DISPLAY_IME_POLICY_LOCAL_HIDDEN = 0;
@@ -274,6 +277,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int[] BACK_EXIT_CHECK_DELAYS_MS = {60, 180, 450};
     private static final long ROUTED_LAUNCH_AFTER_MAIN_DELAY_MS = 240L;
     private static final long HOSTED_SURFACE_REVEAL_AFTER_VISIBLE_MS = 96L;
+    private static final int VIRTUAL_NAVIGATION_BAR_FALLBACK_HEIGHT_DP = 48;
+    private static final String[] VIRTUAL_NAVIGATION_BAR_HEIGHT_RESOURCES = {
+            "navigation_bar_height",
+            "navigation_bar_height_landscape",
+            "navigation_bar_frame_height",
+            "navigation_bar_gesture_height"
+    };
     private final MainActivity owner;
     private final Callbacks callbacks;
     private final PackageManager packageManager;
@@ -322,6 +332,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private int displayWidth;
     private int displayHeight;
     private int displayDensityDpi;
+    private int virtualNavigationBarHeightPx;
+    private boolean virtualDisplayHasSystemDecorations;
     private boolean displayUsesDualMainLayout;
     private int lastViewWidth;
     private int lastViewHeight;
@@ -1793,10 +1805,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                         && callbacks.activateMainSlot(slot);
                 touchSequenceSuppressed = false;
                 touchFocusRequestGeneration = 0;
-                activeTouchTraceId = touchStartedOnMain ? ++touchTraceSequence : 0L;
+                activeTouchTraceId = 0L;
                 if (touchStartedOnMain) {
-                    touchFocusRequestGeneration = ++focusRequestGeneration;
-                    syncLaunchRoutingSource();
                     touchTargetDisplayId = displayId;
                     touchTargetDisplayWidth = displayWidth;
                     touchTargetDisplayHeight = displayHeight;
@@ -1804,6 +1814,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     touchTargetViewHeight = Math.max(1, surfaceView.getHeight());
                     touchTargetDisplayRotation = getTargetDisplayRotation();
                     configureTouchCoordinateTransform();
+                    touchSequenceSuppressed = startsInHiddenVirtualNavigationRegion(event);
+                    if (!touchSequenceSuppressed) {
+                        activeTouchTraceId = ++touchTraceSequence;
+                        touchFocusRequestGeneration = ++focusRequestGeneration;
+                        syncLaunchRoutingSource();
+                    }
                 } else {
                     touchTargetDisplayId = -1;
                 }
@@ -2064,6 +2080,17 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             });
         } else {
             touchCoordinateTransform.setScale(scaleX, scaleY);
+        }
+    }
+
+    private boolean startsInHiddenVirtualNavigationRegion(MotionEvent sourceEvent) {
+        MotionEvent transformedEvent = obtainTransformedMotionEvent(sourceEvent);
+        try {
+            return VirtualNavigationInputPolicy.startsInReservedBottomRegion(
+                    transformedEvent.getY(), touchTargetDisplayHeight,
+                    virtualNavigationBarHeightPx);
+        } finally {
+            transformedEvent.recycle();
         }
     }
 
@@ -3257,6 +3284,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             releaseVirtualDisplay();
             return;
         }
+        virtualDisplayHasSystemDecorations = actualDisplayFlags >= 0
+                ? (actualDisplayFlags
+                & DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS_HIDDEN) != 0
+                : (selectedFlags
+                & VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS_HIDDEN) != 0;
+        virtualNavigationBarHeightPx = virtualDisplayHasSystemDecorations
+                ? resolveVirtualNavigationBarHeight(hostedDisplay) : 0;
         if ((selectedFlags & VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN) == 0
                 || (actualDisplayFlags >= 0
                 && (actualDisplayFlags & DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN) == 0)) {
@@ -3270,6 +3304,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 + ", view=" + viewWidth + "x" + viewHeight
                 + ", virtual=" + spec.width + "x" + spec.height
                 + ", densityDpi=" + spec.densityDpi
+                + ", hiddenNavigationHeight=" + virtualNavigationBarHeightPx
                 + ", displayFlags=0x" + Integer.toHexString(actualDisplayFlags)
                 + ", rotatesWithContent="
                 + ((selectedFlags & VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN) != 0)
@@ -3466,6 +3501,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         displayWidth = spec.width;
         displayHeight = spec.height;
         displayDensityDpi = spec.densityDpi;
+        virtualNavigationBarHeightPx = virtualDisplayHasSystemDecorations
+                ? resolveVirtualNavigationBarHeight(displayManager.getDisplay(displayId)) : 0;
         Log.i(TAG, "Virtual display resized to match container aspect: slot=" + slot
                 + ", display=" + displayId
                 + ", old=" + oldWidth + "x" + oldHeight
@@ -3597,11 +3634,40 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         displayWidth = 0;
         displayHeight = 0;
         displayDensityDpi = 0;
+        virtualNavigationBarHeightPx = 0;
+        virtualDisplayHasSystemDecorations = false;
         displayUsesDualMainLayout = false;
         lastViewWidth = 0;
         lastViewHeight = 0;
         surfaceDetached = false;
         return true;
+    }
+
+    private int resolveVirtualNavigationBarHeight(Display display) {
+        int densityDpi = displayDensityDpi > 0 ? displayDensityDpi
+                : owner.getResources().getDisplayMetrics().densityDpi;
+        int fallback = Math.max(1, Math.round(
+                VIRTUAL_NAVIGATION_BAR_FALLBACK_HEIGHT_DP
+                        * Math.max(1, densityDpi) / 160f));
+        if (display == null) {
+            return Math.min(Math.max(0, displayHeight), fallback);
+        }
+        int resolved = 0;
+        try {
+            Resources resources = owner.createDisplayContext(display).getResources();
+            for (String resourceName : VIRTUAL_NAVIGATION_BAR_HEIGHT_RESOURCES) {
+                int resourceId = resources.getIdentifier(resourceName, "dimen", "android");
+                if (resourceId != 0) {
+                    resolved = Math.max(resolved,
+                            resources.getDimensionPixelSize(resourceId));
+                }
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Could not resolve virtual navigation height for display "
+                    + display.getDisplayId() + ": " + e.getClass().getSimpleName());
+        }
+        int height = resolved > 0 ? resolved : fallback;
+        return Math.min(Math.max(0, displayHeight), height);
     }
 
     private void releaseVirtualDisplayWithRetry(String reason, Runnable onReleased) {

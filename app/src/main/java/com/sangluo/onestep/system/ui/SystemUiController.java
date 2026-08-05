@@ -53,9 +53,9 @@ public final class SystemUiController implements AutoCloseable {
                     || !defaultDisplayFocusWindow.isShowing())) {
                 activity.getWindow().getDecorView().post(this::ensureDefaultDisplayFocusWindow);
             }
-            hideDefaultDisplayNavigationBar(activity.getWindow());
+            showDefaultDisplayNavigationBar(activity.getWindow());
             if (defaultDisplayFocusWindow != null && defaultDisplayFocusWindow.isShowing()) {
-                hideDefaultDisplayNavigationBar(defaultDisplayFocusWindow.getWindow());
+                showDefaultDisplayNavigationBar(defaultDisplayFocusWindow.getWindow());
             }
             return;
         }
@@ -67,7 +67,7 @@ public final class SystemUiController implements AutoCloseable {
             showStatusBar();
         }
         applyHostWindowFocus();
-        hideDefaultDisplayNavigationBar(activity.getWindow());
+        showDefaultDisplayNavigationBar(activity.getWindow());
     }
 
     public void invalidateAppliedState() {
@@ -156,7 +156,7 @@ public final class SystemUiController implements AutoCloseable {
             focusWindow.show();
             registerDefaultDisplayBackCallback(focusWindow);
             window.setLayout(1, 1);
-            hideDefaultDisplayNavigationBar(window);
+            showDefaultDisplayNavigationBar(window);
             content.requestFocus();
             Log.i(TAG, "Default display key focus anchor shown");
         } catch (RuntimeException e) {
@@ -237,7 +237,7 @@ public final class SystemUiController implements AutoCloseable {
         }
     }
 
-    private void hideDefaultDisplayNavigationBar(Window window) {
+    private void showDefaultDisplayNavigationBar(Window window) {
         Display display = activity.getWindowManager().getDefaultDisplay();
         if (window == null || (display != null
                 && display.getDisplayId() != Display.DEFAULT_DISPLAY)) {
@@ -258,9 +258,8 @@ public final class SystemUiController implements AutoCloseable {
         }
         int visibility = decorView.getSystemUiVisibility()
                 | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+        visibility &= ~View.SYSTEM_UI_FLAG_HIDE_NAVIGATION;
         if (isSystemAppInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             visibility &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         }
@@ -270,12 +269,9 @@ public final class SystemUiController implements AutoCloseable {
             android.view.WindowInsetsController controller =
                     decorView.getWindowInsetsController();
             if (controller != null) {
-                controller.hide(android.view.WindowInsets.Type.navigationBars());
-                controller.setSystemBarsBehavior(
-                        android.view.WindowInsetsController
-                                .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                controller.show(android.view.WindowInsets.Type.navigationBars());
             } else {
-                decorView.postDelayed(() -> hideDefaultDisplayNavigationBar(window), 16);
+                decorView.postDelayed(() -> showDefaultDisplayNavigationBar(window), 16);
             }
         }
     }

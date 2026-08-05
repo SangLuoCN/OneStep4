@@ -38,7 +38,11 @@ public final class OneStepNativeStatusBarHook {
 
     /** Standalone Zygisk entry, installed before SystemUI's APK class loader exists. */
     public static synchronized void bootstrap(ClassLoader frameworkClassLoader) {
-        if (loaderHookInstalled || targetHookInstalled || frameworkClassLoader == null) {
+        if (frameworkClassLoader == null) {
+            return;
+        }
+        OneStepVirtualNavigationBarHook.install(frameworkClassLoader);
+        if (loaderHookInstalled || targetHookInstalled) {
             return;
         }
         try {
@@ -74,6 +78,7 @@ public final class OneStepNativeStatusBarHook {
         if (targetHookInstalled || classLoader == null) {
             return;
         }
+        OneStepVirtualNavigationBarHook.install(classLoader);
         try {
             HookBridgeCompat.disableHiddenApiRestrictions();
             Class<?> starterClass = Class.forName(STARTER_CLASS, false, classLoader);
