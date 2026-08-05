@@ -855,7 +855,7 @@ public final class SettingsPanelController {
     }
 
     private String getAppVersionLabel() {
-        String versionName = "1.0.3";
+        String versionName = "1.0.5";
         try {
             String configuredVersion = activity.getPackageManager()
                     .getPackageInfo(activity.getPackageName(), 0).versionName;

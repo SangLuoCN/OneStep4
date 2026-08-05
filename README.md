@@ -5,7 +5,7 @@
 <h1 align="center">OneStep4.0</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Version-1.0.3-4caf50" alt="当前版本 1.0.3">
+  <img src="https://img.shields.io/badge/Version-1.0.5-4caf50" alt="当前版本 1.0.5">
   <img src="https://img.shields.io/badge/Android-7.0%2B-3ddc84" alt="支持 Android 7.0 及以上版本">
   <img src="https://img.shields.io/badge/API-24--36-1976d2" alt="Android API 24 至 36">
   <img src="https://img.shields.io/badge/Root-Required-e53935" alt="需要 Root 或系统特权权限">

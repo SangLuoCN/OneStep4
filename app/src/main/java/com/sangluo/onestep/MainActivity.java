@@ -529,6 +529,12 @@ public class MainActivity extends Activity {
     private View statusGestureShield;
     private View leftCornerTrigger;
     private View rightCornerTrigger;
+    private boolean cornerTriggerTracking;
+    private boolean cornerTriggerFromLeft;
+    private boolean cornerTriggerConsumed;
+    private float cornerTriggerDownX;
+    private float cornerTriggerDownY;
+    private final int[] cornerTriggerLocationOnScreen = new int[2];
     private FrameLayout cornerTriggerPreviewLayer;
     private View leftCornerTriggerPreview;
     private View rightCornerTriggerPreview;
@@ -767,6 +773,77 @@ public class MainActivity extends Activity {
             return;
         }
         resumeFullHome();
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent event) {
+        if (event == null) {
+            return false;
+        }
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            cornerTriggerTracking = false;
+            cornerTriggerConsumed = false;
+            if (!multiWindowMode) {
+                View trigger = findCornerTrigger(event.getRawX(), event.getRawY());
+                if (trigger != null) {
+                    cornerTriggerTracking = true;
+                    cornerTriggerFromLeft = trigger == leftCornerTrigger;
+                    cornerTriggerDownX = event.getRawX();
+                    cornerTriggerDownY = event.getRawY();
+                }
+            }
+        } else if (cornerTriggerConsumed) {
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                cornerTriggerConsumed = false;
+            }
+            return true;
+        } else if (cornerTriggerTracking) {
+            if (action == MotionEvent.ACTION_POINTER_DOWN) {
+                cornerTriggerTracking = false;
+            } else if (action == MotionEvent.ACTION_MOVE
+                    && CornerTriggerGesturePolicy.matches(
+                    cornerTriggerFromLeft,
+                    event.getRawX() - cornerTriggerDownX,
+                    event.getRawY() - cornerTriggerDownY,
+                    getCornerTriggerDistancePx())) {
+                cornerTriggerTracking = false;
+                cornerTriggerConsumed = true;
+                MotionEvent cancelEvent = MotionEvent.obtain(event);
+                try {
+                    cancelEvent.setAction(MotionEvent.ACTION_CANCEL);
+                    super.dispatchTouchEvent(cancelEvent);
+                } finally {
+                    cancelEvent.recycle();
+                }
+                enterOneStepMode(cornerTriggerFromLeft);
+                return true;
+            } else if (action == MotionEvent.ACTION_UP
+                    || action == MotionEvent.ACTION_CANCEL) {
+                cornerTriggerTracking = false;
+            }
+        }
+        return super.dispatchTouchEvent(event);
+    }
+
+    private View findCornerTrigger(float rawX, float rawY) {
+        if (isPointInsideCornerTrigger(leftCornerTrigger, rawX, rawY)) {
+            return leftCornerTrigger;
+        }
+        return isPointInsideCornerTrigger(rightCornerTrigger, rawX, rawY)
+                ? rightCornerTrigger : null;
+    }
+
+    private boolean isPointInsideCornerTrigger(View trigger, float rawX, float rawY) {
+        if (trigger == null || !trigger.isShown()
+                || trigger.getWidth() <= 0 || trigger.getHeight() <= 0) {
+            return false;
+        }
+        trigger.getLocationOnScreen(cornerTriggerLocationOnScreen);
+        int left = cornerTriggerLocationOnScreen[0];
+        int top = cornerTriggerLocationOnScreen[1];
+        return rawX >= left && rawX < left + trigger.getWidth()
+                && rawY >= top && rawY < top + trigger.getHeight();
     }
 
     private void resumeFullHome() {
@@ -2637,8 +2714,8 @@ public class MainActivity extends Activity {
         cornerTriggerPreviewLayer.addView(rightCornerTriggerPreview);
         root.addView(cornerTriggerPreviewLayer, matchFrame());
 
-        leftCornerTrigger = createCornerTrigger(true);
-        rightCornerTrigger = createCornerTrigger(false);
+        leftCornerTrigger = createCornerTrigger();
+        rightCornerTrigger = createCornerTrigger();
         FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(getCornerTriggerSizePx(),
                 getCornerTriggerSizePx(),
                 Gravity.START | Gravity.TOP);
@@ -2655,39 +2732,12 @@ public class MainActivity extends Activity {
         return Math.max(dp(28), getStatusBarHeight() + dp(8));
     }
 
-    private View createCornerTrigger(boolean left) {
+    private View createCornerTrigger() {
         View trigger = new View(this);
         trigger.setBackgroundColor(Color.TRANSPARENT);
-        final float[] downX = new float[1];
-        final float[] downY = new float[1];
-        final boolean[] triggered = new boolean[1];
-        trigger.setOnTouchListener((view, event) -> {
-            if (multiWindowMode) {
-                return false;
-            }
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    downX[0] = event.getRawX();
-                    downY[0] = event.getRawY();
-                    triggered[0] = false;
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    float dx = event.getRawX() - downX[0];
-                    float dy = event.getRawY() - downY[0];
-                    int triggerDistance = getCornerTriggerDistancePx();
-                    if (!triggered[0] && CornerTriggerGesturePolicy.matches(
-                            left, dx, dy, triggerDistance)) {
-                        triggered[0] = true;
-                        enterOneStepMode(left);
-                    }
-                    return true;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    return true;
-                default:
-                    return true;
-            }
-        });
+        trigger.setClickable(false);
+        trigger.setFocusable(false);
+        trigger.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         return trigger;
     }
 
