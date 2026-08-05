@@ -67,6 +67,15 @@ for required_file in \
     fi
 done
 
+for zygisk_library in \
+    "$ZYGISK_LIB_DIR/arm64-v8a/libonestep_zygisk.so" \
+    "$ZYGISK_LIB_DIR/armeabi-v7a/libonestep_zygisk.so"; do
+    if ! strings "$zygisk_library" | grep 'OneStepNativeStatusBarHook' >/dev/null; then
+        echo "Zygisk 构建产物缺少原生多显示器状态栏 Hook：$zygisk_library" >&2
+        exit 1
+    fi
+done
+
 APK_SHA256="$(sha256_file "$APK_PATH")"
 OUT_ZIP="$OUT_DIR/OneStep4-$APP_VERSION_NAME-magisk-$(date +%Y%m%d-%H%M%S).zip"
 
@@ -189,6 +198,15 @@ for required_entry in \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk"; do
     if [[ ! -s "$VERIFY_DIR/$required_entry" ]]; then
         echo "Magisk ZIP 内缺少 Zygisk Hook：$required_entry" >&2
+        exit 1
+    fi
+done
+for packaged_zygisk_library in \
+    "$VERIFY_DIR/zygisk-payload/arm64-v8a.so" \
+    "$VERIFY_DIR/zygisk-payload/armeabi-v7a.so"; do
+    if ! strings "$packaged_zygisk_library" \
+        | grep 'OneStepNativeStatusBarHook' >/dev/null; then
+        echo "Magisk ZIP 缺少原生多显示器状态栏 Hook：$packaged_zygisk_library" >&2
         exit 1
     fi
 done

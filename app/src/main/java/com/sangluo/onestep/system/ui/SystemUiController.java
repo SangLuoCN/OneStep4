@@ -6,6 +6,7 @@ import android.app.Dialog;
 import android.graphics.Color;
 import android.os.Build;
 import android.util.Log;
+import android.view.Display;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.View;
@@ -52,6 +53,10 @@ public final class SystemUiController implements AutoCloseable {
                     || !defaultDisplayFocusWindow.isShowing())) {
                 activity.getWindow().getDecorView().post(this::ensureDefaultDisplayFocusWindow);
             }
+            hideDefaultDisplayNavigationBar(activity.getWindow());
+            if (defaultDisplayFocusWindow != null && defaultDisplayFocusWindow.isShowing()) {
+                hideDefaultDisplayNavigationBar(defaultDisplayFocusWindow.getWindow());
+            }
             return;
         }
         appliedHideStatusBar = shouldHideStatusBar;
@@ -62,7 +67,7 @@ public final class SystemUiController implements AutoCloseable {
             showStatusBar();
         }
         applyHostWindowFocus();
-        applyNavigationBarForInstallMode();
+        hideDefaultDisplayNavigationBar(activity.getWindow());
     }
 
     public void invalidateAppliedState() {
@@ -151,6 +156,7 @@ public final class SystemUiController implements AutoCloseable {
             focusWindow.show();
             registerDefaultDisplayBackCallback(focusWindow);
             window.setLayout(1, 1);
+            hideDefaultDisplayNavigationBar(window);
             content.requestFocus();
             Log.i(TAG, "Default display key focus anchor shown");
         } catch (RuntimeException e) {
@@ -231,36 +237,45 @@ public final class SystemUiController implements AutoCloseable {
         }
     }
 
-    private void applyNavigationBarForInstallMode() {
-        if (!systemAppInstall.getAsBoolean()) {
+    private void hideDefaultDisplayNavigationBar(Window window) {
+        Display display = activity.getWindowManager().getDefaultDisplay();
+        if (window == null || (display != null
+                && display.getDisplayId() != Display.DEFAULT_DISPLAY)) {
             return;
         }
-        Window window = activity.getWindow();
         View decorView = window.getDecorView();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+        boolean isSystemAppInstall = systemAppInstall.getAsBoolean();
+        if (isSystemAppInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
             window.clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
             window.setNavigationBarColor(Color.TRANSPARENT);
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        if (isSystemAppInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.setNavigationBarDividerColor(Color.TRANSPARENT);
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (isSystemAppInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.setNavigationBarContrastEnforced(false);
         }
         int visibility = decorView.getSystemUiVisibility()
                 | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY;
+        if (isSystemAppInstall && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             visibility &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         }
         decorView.setSystemUiVisibility(visibility);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
             android.view.WindowInsetsController controller =
                     decorView.getWindowInsetsController();
             if (controller != null) {
-                controller.setSystemBarsAppearance(0,
-                        android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+                controller.hide(android.view.WindowInsets.Type.navigationBars());
+                controller.setSystemBarsBehavior(
+                        android.view.WindowInsetsController
+                                .BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            } else {
+                decorView.postDelayed(() -> hideDefaultDisplayNavigationBar(window), 16);
             }
         }
     }

@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
 
-/** Adds the zero-height framework overlay before virtual-display apps bind. */
+/** Removes the status-bar resource inset only on OneStep displays without system decorations. */
 public final class OneStepStatusBarOverlayHook {
     private static final String TAG = "OneStepStatusOverlay";
     private static final String DISPLAY_NAME_PREFIX = "OneStepSlot-";
@@ -352,8 +352,8 @@ public final class OneStepStatusBarOverlayHook {
 
     private static void handleActivityStart(Object supervisor, Object activityRecord)
             throws ReflectiveOperationException {
-        Boolean oneStepDisplay = isOneStepDisplay(activityRecord);
-        if (oneStepDisplay == null) {
+        Boolean overlayRequired = requiresZeroStatusBarOverlay(activityRecord);
+        if (overlayRequired == null) {
             return;
         }
         ActivityInfo activityInfo = activityInfoFor(activityRecord);
@@ -363,7 +363,7 @@ public final class OneStepStatusBarOverlayHook {
         ApplicationInfo originalAppInfo = activityInfo.applicationInfo;
         String processName = processNameFor(activityRecord, activityInfo);
         String key = processKey(originalAppInfo.uid, processName);
-        if (oneStepDisplay && crashGuard.isDisabled(key)) {
+        if (overlayRequired && crashGuard.isDisabled(key)) {
             pendingProcesses.remove(key);
             overlaidProcesses.remove(key);
             crashGuard.clearApplied(key);
@@ -377,25 +377,25 @@ public final class OneStepStatusBarOverlayHook {
             }
             return;
         }
-        if (oneStepDisplay && !overlayReady()) {
+        if (overlayRequired && !overlayReady()) {
             logOverlayNotReady();
             return;
         }
-        if (!oneStepDisplay
+        if (!overlayRequired
                 && !pendingProcesses.containsKey(key)
                 && !overlaidProcesses.contains(key)
                 && !hasOverlayPath(originalAppInfo)) {
             return;
         }
 
-        ApplicationInfo adjustedAppInfo = copyWithOverlay(originalAppInfo, oneStepDisplay);
+        ApplicationInfo adjustedAppInfo = copyWithOverlay(originalAppInfo, overlayRequired);
         ActivityInfo adjustedActivityInfo = new ActivityInfo(activityInfo);
         adjustedActivityInfo.applicationInfo = adjustedAppInfo;
         if (!writeActivityInfo(activityRecord, adjustedActivityInfo)) {
             Log.w(TAG, "ActivityRecord info field unavailable; leaving resources unchanged");
             return;
         }
-        if (oneStepDisplay) {
+        if (overlayRequired) {
             pendingProcesses.put(key, android.os.SystemClock.uptimeMillis());
         } else {
             pendingProcesses.remove(key);
@@ -405,11 +405,11 @@ public final class OneStepStatusBarOverlayHook {
         boolean sentToRunningProcess = scheduleApplicationInfoChanged(
                 supervisor, activityRecord, processName, adjustedAppInfo);
         Log.i(TAG, "virtual-display resource decision: process=" + processName
-                + ", enabled=" + oneStepDisplay
+                + ", enabled=" + overlayRequired
                 + ", running=" + sentToRunningProcess);
         if (sentToRunningProcess) {
             pendingProcesses.remove(key);
-            if (oneStepDisplay) {
+            if (overlayRequired) {
                 overlaidProcesses.add(key);
                 crashGuard.markApplied(key, android.os.SystemClock.uptimeMillis());
             } else {
@@ -553,16 +553,17 @@ public final class OneStepStatusBarOverlayHook {
         return uid + ":" + String.valueOf(processName);
     }
 
-    private static Boolean isOneStepDisplay(Object activityRecord) {
+    private static Boolean requiresZeroStatusBarOverlay(Object activityRecord) {
         try {
             Object displayContent = invokeCompatible(activityRecord, "getDisplayContent");
             if (displayContent == null) {
                 displayContent = readFieldOrNull(activityRecord, "mDisplayContent");
             }
             if (displayContent != null) {
-                String displayName = displayNameFromInfoOwner(displayContent);
-                if (displayName != null) {
-                    return displayName.startsWith(DISPLAY_NAME_PREFIX);
+                Object displayInfo = displayInfoFromOwner(displayContent);
+                Boolean result = overlayRequirement(displayInfo);
+                if (result != null) {
+                    return result;
                 }
             }
             Object displayId = invokeCompatible(activityRecord, "getDisplayId");
@@ -572,22 +573,33 @@ public final class OneStepStatusBarOverlayHook {
             Class<?> managerClass = Class.forName("android.hardware.display.DisplayManagerGlobal");
             Object manager = invokeStaticCompatible(managerClass, "getInstance");
             Object displayInfo = invokeCompatible(manager, "getDisplayInfo", displayId);
-            Object name = readFieldOrNull(displayInfo, "name");
-            return name instanceof String ? ((String) name).startsWith(DISPLAY_NAME_PREFIX) : null;
+            return overlayRequirement(displayInfo);
         } catch (Throwable ignored) {
             return null;
         }
     }
 
-    private static String displayNameFromInfoOwner(Object displayContent) {
+    private static Object displayInfoFromOwner(Object displayContent) {
         Object displayInfo;
         try {
             displayInfo = invokeCompatible(displayContent, "getDisplayInfo");
         } catch (ReflectiveOperationException ignored) {
             displayInfo = readFieldOrNull(displayContent, "mDisplayInfo");
         }
+        return displayInfo;
+    }
+
+    private static Boolean overlayRequirement(Object displayInfo) {
         Object name = readFieldOrNull(displayInfo, "name");
-        return name instanceof String ? (String) name : null;
+        if (!(name instanceof String)) {
+            return null;
+        }
+        if (!((String) name).startsWith(DISPLAY_NAME_PREFIX)) {
+            return false;
+        }
+        Object flags = readFieldOrNull(displayInfo, "flags");
+        return flags instanceof Integer
+                && StatusBarOverlayDisplayPolicy.shouldApply((Integer) flags);
     }
 
     private static Object findActivityRecordArgument(Object[] args) {

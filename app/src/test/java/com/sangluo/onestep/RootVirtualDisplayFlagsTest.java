@@ -31,7 +31,7 @@ public class RootVirtualDisplayFlagsTest {
         assertEquals(0, actual & DisplayManager.VIRTUAL_DISPLAY_FLAG_SECURE);
         assertNotEquals(0, actual & DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY);
         assertEquals(0, actual & VIRTUAL_DISPLAY_FLAG_CAN_SHOW_WITH_INSECURE_KEYGUARD);
-        assertEquals(0, actual & VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
+        assertNotEquals(0, actual & VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
         assertNotEquals(0, actual & VIRTUAL_DISPLAY_FLAG_TRUSTED);
     }
 
@@ -48,13 +48,14 @@ public class RootVirtualDisplayFlagsTest {
     }
 
     @Test
-    public void privateCandidateCannotRequestSystemDecorations() {
+    public void privateTrustedCandidatePreservesSystemDecorations() {
         int requested = DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
                 | VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS;
 
         int actual = RootVirtualDisplayFlags.forRootBridge(requested, ANDROID_11_SDK);
 
-        assertEquals(0, actual & VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
+        assertNotEquals(0, actual & VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS);
+        assertNotEquals(0, actual & VIRTUAL_DISPLAY_FLAG_TRUSTED);
     }
 
     @Test

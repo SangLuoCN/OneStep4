@@ -77,6 +77,7 @@ public final class OneStepLsposedEntry implements IXposedHookLoadPackage {
                 && SYSTEM_UI_STARTED.compareAndSet(false, true)) {
             HyperOsSystemUiGestureNavigationBypassHook.install(
                     loadPackageParam.classLoader);
+            OneStepNativeStatusBarHook.install(loadPackageParam.classLoader);
             return;
         }
         if (!SYSTEM_FRAMEWORK_PACKAGE.equals(loadPackageParam.packageName)

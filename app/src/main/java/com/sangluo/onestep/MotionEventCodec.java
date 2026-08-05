@@ -28,7 +28,7 @@ public final class MotionEventCodec {
         }
     }
 
-    static MotionEvent decode(String encoded) {
+    public static MotionEvent decode(String encoded) {
         if (encoded == null || encoded.isEmpty()
                 || encoded.length() > MAX_ENCODED_EVENT_LENGTH) {
             throw new IllegalArgumentException("invalid encoded motion event length");

@@ -10,7 +10,6 @@ import android.os.Build;
  */
 final class RootVirtualDisplayFlags {
     private static final int VIRTUAL_DISPLAY_FLAG_CAN_SHOW_WITH_INSECURE_KEYGUARD = 1 << 5;
-    private static final int VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS = 1 << 9;
     private static final int VIRTUAL_DISPLAY_FLAG_TRUSTED = 1 << 10;
     private static final int DISPLAY_FLAG_TRUSTED = 1 << 7;
     private static final int ANDROID_11_SDK = 30;
@@ -36,7 +35,6 @@ final class RootVirtualDisplayFlags {
             // Android 14 rejects PUBLIC together with SHOW_WHEN_LOCKED_INSECURE.
             flags &= ~VIRTUAL_DISPLAY_FLAG_CAN_SHOW_WITH_INSECURE_KEYGUARD;
         }
-        flags &= ~VIRTUAL_DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS;
         flags &= ~DisplayManager.VIRTUAL_DISPLAY_FLAG_SECURE;
         return flags;
     }

@@ -281,17 +281,6 @@ public final class RootVirtualDisplayBridge extends Binder {
                 }
             }
         }
-        if (displayId > Display.DEFAULT_DISPLAY) {
-            VirtualDisplaySystemDecorController.Result decorResult =
-                    VirtualDisplaySystemDecorController.disable(context, displayId);
-            int priority = decorResult.isConfirmedDisabled() ? Log.INFO : Log.WARN;
-            Log.println(priority, TAG, "system decorations policy"
-                    + " display=" + displayId
-                    + " requested=" + decorResult.requested
-                    + " actual=" + decorResult.actualValue()
-                    + (decorResult.failure.isEmpty()
-                    ? "" : " failure=" + decorResult.failure));
-        }
         if (displayId <= Display.DEFAULT_DISPLAY) {
             if (surface != null) {
                 surface.release();

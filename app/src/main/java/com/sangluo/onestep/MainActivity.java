@@ -1515,6 +1515,9 @@ public class MainActivity extends Activity {
                         | Intent.FLAG_ACTIVITY_CLEAR_TOP
                         | Intent.FLAG_ACTIVITY_SINGLE_TOP
                         | Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        if (!moveIntoHostedDesktop) {
+            restoreIntent.putExtra(EXTRA_SHOW_DESKTOP_HOME, true);
+        }
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 ActivityOptions options = ActivityOptions.makeBasic();

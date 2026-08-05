@@ -6,14 +6,33 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.net.Credentials;
+import android.net.LocalServerSocket;
+import android.net.LocalSocket;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.Parcel;
 import android.util.Log;
+import android.util.Base64;
 import android.view.Display;
+import android.view.MotionEvent;
 import android.view.View;
 
+import com.sangluo.onestep.system.input.MiuiGestureBridgeClient;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.lang.ref.WeakReference;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -22,6 +41,7 @@ import de.robv.android.xposed.XposedBridge;
 public final class HyperOsGestureNavigationBypassHook {
     private static final String TAG = "OneStepHyperOsGesture";
     private static final String MIUI_HOME_PACKAGE = "com.miui.home";
+    private static final String ONE_STEP_PACKAGE = "com.sangluo.onestep";
     private static final String LOADED_APK_CLASS = "android.app.LoadedApk";
     private static final String BUILD_CONFIG_UTILS_CLASS =
             "com.miui.home.common.utils.BuildConfigUtils";
@@ -45,6 +65,10 @@ public final class HyperOsGestureNavigationBypassHook {
     private static boolean loaderHookInstalled;
     private static boolean targetHooksInstalled;
     private static boolean localOverviewHomeLogged;
+    private static boolean nativeGestureBridgeStarted;
+    private static Method getLauncherApplicationMethod;
+    private static Method getRecentsImplMethod;
+    private static Method getNavStubViewMethod;
     private static WeakReference<Activity> embeddedLauncher = new WeakReference<>(null);
     private static final ThreadLocal<Activity> localOverviewLauncher = new ThreadLocal<>();
 
@@ -132,15 +156,181 @@ public final class HyperOsGestureNavigationBypassHook {
                     targetClassLoader);
             boolean hostedTaskLaunchHookInstalled = installHostedTaskLaunchHook(
                     targetClassLoader);
+            boolean gestureBridgeStarted = startNativeGestureBridge(targetClassLoader);
             targetHooksInstalled = true;
             Log.i(TAG, "HyperOS third-party HOME gesture bypass installed; embeddedHome="
                     + embeddedHomeHookInstalled + ", localOverviewHome="
                     + localOverviewHomeHookInstalled + ", hostedTaskLaunch="
-                    + hostedTaskLaunchHookInstalled);
+                    + hostedTaskLaunchHookInstalled + ", nativeGestureBridge="
+                    + gestureBridgeStarted);
         } catch (ClassNotFoundException | NoSuchMethodException e) {
             Log.i(TAG, "target MIUI Home gesture restriction is not present");
         } catch (Throwable t) {
             Log.e(TAG, "could not install HyperOS gesture bypass", t);
+        }
+    }
+
+    private static synchronized boolean startNativeGestureBridge(
+            ClassLoader targetClassLoader) {
+        if (nativeGestureBridgeStarted) {
+            return true;
+        }
+        try {
+            Class<?> applicationClass = Class.forName(
+                    MIUI_HOME_APPLICATION_CLASS, false, targetClassLoader);
+            Class<?> recentsClass = Class.forName(
+                    BASE_RECENTS_IMPL_CLASS, false, targetClassLoader);
+            getLauncherApplicationMethod = applicationClass.getDeclaredMethod(
+                    "getLauncherApplication");
+            getRecentsImplMethod = applicationClass.getDeclaredMethod("getRecentsImpl");
+            getNavStubViewMethod = recentsClass.getDeclaredMethod("getNavStubView");
+            getLauncherApplicationMethod.setAccessible(true);
+            getRecentsImplMethod.setAccessible(true);
+            getNavStubViewMethod.setAccessible(true);
+            Thread serverThread = new Thread(
+                    HyperOsGestureNavigationBypassHook::serveNativeGestures,
+                    "OneStepMiuiGestureBridge");
+            serverThread.setDaemon(true);
+            serverThread.start();
+            nativeGestureBridgeStarted = true;
+            return true;
+        } catch (ClassNotFoundException | NoSuchMethodException | RuntimeException e) {
+            Log.w(TAG, "MIUI native gesture bridge is unavailable", e);
+            return false;
+        }
+    }
+
+    private static void serveNativeGestures() {
+        try (LocalServerSocket serverSocket = new LocalServerSocket(
+                MiuiGestureBridgeClient.SOCKET_NAME)) {
+            Log.i(TAG, "MIUI native gesture bridge listening");
+            while (true) {
+                LocalSocket socket = serverSocket.accept();
+                Thread clientThread = new Thread(
+                        () -> handleNativeGestureClient(socket),
+                        "OneStepMiuiGestureClient");
+                clientThread.setDaemon(true);
+                clientThread.start();
+            }
+        } catch (IOException | RuntimeException e) {
+            Log.e(TAG, "MIUI native gesture bridge stopped", e);
+        }
+    }
+
+    private static void handleNativeGestureClient(LocalSocket socket) {
+        try (LocalSocket acceptedSocket = socket;
+             BufferedReader reader = new BufferedReader(
+                     new InputStreamReader(acceptedSocket.getInputStream()));
+             BufferedWriter writer = new BufferedWriter(
+                     new OutputStreamWriter(acceptedSocket.getOutputStream()))) {
+            if (!isAllowedGestureClient(acceptedSocket)) {
+                Log.w(TAG, "Reject MIUI gesture bridge client");
+                return;
+            }
+            String line;
+            while ((line = reader.readLine()) != null) {
+                boolean handled = false;
+                MotionEvent event = decodeGestureMotion(line);
+                if (event != null) {
+                    try {
+                        handled = dispatchToNativeGestureStateMachine(event);
+                    } finally {
+                        event.recycle();
+                    }
+                }
+                writer.write(handled ? "ok" : "unavailable");
+                writer.write('\n');
+                writer.flush();
+            }
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "MIUI gesture bridge client disconnected: "
+                    + e.getClass().getSimpleName());
+        }
+    }
+
+    private static boolean isAllowedGestureClient(LocalSocket socket) throws IOException {
+        Credentials credentials = socket.getPeerCredentials();
+        int allowedUid = resolveOneStepUid();
+        return credentials != null && allowedUid >= 0
+                && (credentials.getUid() == allowedUid || credentials.getUid() == 0);
+    }
+
+    private static int resolveOneStepUid() {
+        try {
+            Object application = getLauncherApplicationMethod.invoke(null);
+            if (!(application instanceof Context)) {
+                return -1;
+            }
+            return ((Context) application).getPackageManager().getPackageUid(
+                    ONE_STEP_PACKAGE, 0);
+        } catch (PackageManager.NameNotFoundException | ReflectiveOperationException
+                 | RuntimeException e) {
+            return -1;
+        }
+    }
+
+    private static MotionEvent decodeGestureMotion(String line) {
+        if (line == null || !line.startsWith("motion ")) {
+            return null;
+        }
+        String encoded = line.substring("motion ".length());
+        if (encoded.isEmpty() || encoded.length() > 256 * 1024) {
+            return null;
+        }
+        Parcel parcel = Parcel.obtain();
+        try {
+            byte[] bytes = Base64.decode(encoded, Base64.NO_WRAP);
+            parcel.unmarshall(bytes, 0, bytes.length);
+            parcel.setDataPosition(0);
+            return MotionEvent.CREATOR.createFromParcel(parcel);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Reject malformed MIUI gesture event");
+            return null;
+        } finally {
+            parcel.recycle();
+        }
+    }
+
+    private static boolean dispatchToNativeGestureStateMachine(MotionEvent event) {
+        try {
+            Object application = getLauncherApplicationMethod.invoke(null);
+            Object recents = application == null
+                    ? null : getRecentsImplMethod.invoke(application);
+            Object navStub = recents == null ? null : getNavStubViewMethod.invoke(recents);
+            if (!(navStub instanceof View)) {
+                return false;
+            }
+            View navStubView = (View) navStub;
+            Handler handler = navStubView.getHandler();
+            if (handler == null) {
+                return false;
+            }
+            if (Looper.myLooper() == handler.getLooper()) {
+                navStubView.onTouchEvent(event);
+                return true;
+            }
+            CountDownLatch dispatched = new CountDownLatch(1);
+            AtomicBoolean delivered = new AtomicBoolean();
+            MotionEvent queuedEvent = MotionEvent.obtain(event);
+            if (!handler.post(() -> {
+                try {
+                    navStubView.onTouchEvent(queuedEvent);
+                    delivered.set(true);
+                } finally {
+                    queuedEvent.recycle();
+                    dispatched.countDown();
+                }
+            })) {
+                queuedEvent.recycle();
+                return false;
+            }
+            return dispatched.await(750L, TimeUnit.MILLISECONDS) && delivered.get();
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            Log.w(TAG, "Dispatch to MIUI native gesture state machine failed", e);
+            return false;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

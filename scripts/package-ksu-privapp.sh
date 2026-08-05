@@ -74,6 +74,10 @@ for zygisk_library in \
         echo "Zygisk 构建产物仍包含已移除的 QQ 目标 Hook：$zygisk_library" >&2
         exit 1
     fi
+    if ! strings "$zygisk_library" | grep 'OneStepNativeStatusBarHook' >/dev/null; then
+        echo "Zygisk 构建产物缺少原生多显示器状态栏 Hook：$zygisk_library" >&2
+        exit 1
+    fi
 done
 
 APK_SHA256="$(sha256_file "$APK_PATH")"
@@ -194,6 +198,11 @@ for packaged_zygisk_library in \
     "$VERIFY_DIR/zygisk-payload/armeabi-v7a.so"; do
     if strings "$packaged_zygisk_library" | grep -q 'OneStepImageDragTargetHook'; then
         echo "KernelSU ZIP 仍包含已移除的 QQ 目标 Hook：$packaged_zygisk_library" >&2
+        exit 1
+    fi
+    if ! strings "$packaged_zygisk_library" \
+        | grep 'OneStepNativeStatusBarHook' >/dev/null; then
+        echo "KernelSU ZIP 缺少原生多显示器状态栏 Hook：$packaged_zygisk_library" >&2
         exit 1
     fi
 done

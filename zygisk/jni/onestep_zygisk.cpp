@@ -42,6 +42,8 @@ constexpr const char *kHyperOsGestureNavigationHookClass =
         "com.sangluo.onestep.hook.HyperOsGestureNavigationBypassHook";
 constexpr const char *kHyperOsSystemUiGestureNavigationHookClass =
         "com.sangluo.onestep.hook.HyperOsSystemUiGestureNavigationBypassHook";
+constexpr const char *kNativeStatusBarHookClass =
+        "com.sangluo.onestep.hook.OneStepNativeStatusBarHook";
 constexpr const char *kGooglePhotosDragHookClass =
         "com.sangluo.onestep.hook.OneStepGooglePhotosDragHook";
 constexpr const char *kUniversalImageDragHookClass =
@@ -517,6 +519,7 @@ public:
         bool isSystemUi = args != nullptr
                 && isProcess(env, args->nice_name, kSystemUiProcess);
         bool wantsHyperOsHook = (isMiuiHome || isSystemUi) && isHyperOs();
+        bool wantsNativeStatusBarHook = isSystemUi;
         bool imageDragSharingEnabled = isPropertyEnabled(kImageDragSharingProperty);
         bool googlePhotosNameMatched = args != nullptr
                 && isProcess(env, args->nice_name, kGooglePhotosProcess);
@@ -534,7 +537,8 @@ public:
         bool isUniversalImageSource = imageDragSharingEnabled && args != nullptr
                 && isUserAppMainProcess(env, args->uid, args->nice_name)
                 && (universalProcessNameMatched || universalDataDirMatched);
-        if (!wantsHyperOsHook && !isGooglePhotos && !isUniversalImageSource) {
+        if (!wantsHyperOsHook && !wantsNativeStatusBarHook
+                && !isGooglePhotos && !isUniversalImageSource) {
             api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
             return;
         }
@@ -565,6 +569,7 @@ public:
         if (aliuhookLoader != nullptr && initializeAliuHook(env, aliuhookLoader)) {
             jobject appLoader = makeAppClassLoader(env, aliuhookLoader);
             jclass localGestureHookClass = nullptr;
+            jclass localNativeStatusBarHookClass = nullptr;
             if (appLoader != nullptr) {
                 if (wantsHyperOsHook) {
                     localGestureHookClass = isMiuiHome
@@ -579,6 +584,11 @@ public:
                         googlePhotosDragHookClass = static_cast<jclass>(
                             env->NewGlobalRef(localSource));
                     }
+                }
+                if (wantsNativeStatusBarHook) {
+                    localNativeStatusBarHookClass = loadNamedHookClass(
+                            env, appLoader, kNativeStatusBarHookClass,
+                            "load native status bar hook class");
                 }
                 if (isUniversalImageSource) {
                     jclass localUniversal = loadNamedHookClass(
@@ -596,7 +606,13 @@ public:
                 LOGI("HyperOS gesture hook runtime prepared for %s in %s",
                      kAbi, isMiuiHome ? kMiuiHomeProcess : kSystemUiProcess);
             }
+            if (localNativeStatusBarHookClass != nullptr) {
+                nativeStatusBarHookClass = static_cast<jclass>(
+                        env->NewGlobalRef(localNativeStatusBarHookClass));
+                LOGI("Native multi-display status bar hook runtime prepared for %s", kAbi);
+            }
             if (hyperOsAppHookClass != nullptr
+                    || nativeStatusBarHookClass != nullptr
                     || googlePhotosDragHookClass != nullptr
                     || universalImageDragHookClass != nullptr) {
                 appProcessSystemClassLoaderRef = env->NewGlobalRef(systemLoader);
@@ -624,6 +640,21 @@ public:
                         hyperOsAppHookClass, bootstrap, appProcessSystemClassLoaderRef);
                 if (!clearException(env, "run HyperOS gesture hook bootstrap")) {
                     LOGI("HyperOS gesture hook bootstrap started");
+                }
+            }
+        }
+        if (nativeStatusBarHookClass != nullptr) {
+            jmethodID bootstrap = env->GetStaticMethodID(
+                    nativeStatusBarHookClass, "bootstrap", "(Ljava/lang/ClassLoader;)V");
+            if (jniResultUnavailable(
+                    env, bootstrap, "find native status bar hook bootstrap")) {
+                LOGE("Native multi-display status bar hook bootstrap was unavailable");
+            } else {
+                env->CallStaticVoidMethod(
+                        nativeStatusBarHookClass, bootstrap,
+                        appProcessSystemClassLoaderRef);
+                if (!clearException(env, "run native status bar hook bootstrap")) {
+                    LOGI("Native multi-display status bar hook bootstrap started");
                 }
             }
         }
@@ -842,6 +873,7 @@ private:
     jclass primaryHomeHookClass = nullptr;
     jclass rootDisplayCompatHookClass = nullptr;
     jclass hyperOsAppHookClass = nullptr;
+    jclass nativeStatusBarHookClass = nullptr;
     jclass googlePhotosDragHookClass = nullptr;
     jclass universalImageDragHookClass = nullptr;
     jobject appClassLoaderRef = nullptr;

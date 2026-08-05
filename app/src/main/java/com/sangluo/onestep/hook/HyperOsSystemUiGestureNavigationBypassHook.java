@@ -1,6 +1,9 @@
 package com.sangluo.onestep.hook;
 
+import android.app.ActivityManager;
 import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
 import android.util.Log;
 
 import java.lang.reflect.Field;
@@ -16,9 +19,15 @@ public final class HyperOsSystemUiGestureNavigationBypassHook {
     private static final String LOADED_APK_CLASS = "android.app.LoadedApk";
     private static final String PHONE_STATE_MONITOR_CONTROLLER_CLASS =
             "com.android.systemui.assist.PhoneStateMonitorController";
+    private static final String MIUI_DECORATION_HOME_BOTTOM_CLASS =
+            "com.android.wm.shell.multitasking.miuimultiwinswitch.miuiwindowdecor."
+                    + "decoration.MiuiDecorationHomeBottom";
 
     private static boolean loaderHookInstalled;
     private static boolean targetHookInstalled;
+    private static boolean gestureRestrictionHookInstalled;
+    private static boolean homeBottomCaptionHookInstalled;
+    private static boolean homeBottomCaptionSuppressedLogged;
 
     private HyperOsSystemUiGestureNavigationBypassHook() {
     }
@@ -71,6 +80,22 @@ public final class HyperOsSystemUiGestureNavigationBypassHook {
         }
         try {
             HookBridgeCompat.disableHiddenApiRestrictions();
+            boolean captionHookInstalled = installDefaultDisplayHomeBottomCaptionHook(
+                    targetClassLoader);
+            boolean gestureHookInstalled = installGestureRestrictionHook(targetClassLoader);
+            targetHookInstalled = captionHookInstalled || gestureHookInstalled;
+            Log.i(TAG, "HyperOS SystemUI hooks installed; homeBottomCaption="
+                    + captionHookInstalled + ", gestureRestriction=" + gestureHookInstalled);
+        } catch (Throwable t) {
+            Log.e(TAG, "could not install SystemUI gesture bypass", t);
+        }
+    }
+
+    private static boolean installGestureRestrictionHook(ClassLoader targetClassLoader) {
+        if (gestureRestrictionHookInstalled) {
+            return true;
+        }
+        try {
             Class<?> controllerClass = Class.forName(
                     PHONE_STATE_MONITOR_CONTROLLER_CLASS, false, targetClassLoader);
             Method defaultHomeChanged = controllerClass.getDeclaredMethod(
@@ -85,13 +110,102 @@ public final class HyperOsSystemUiGestureNavigationBypassHook {
                 }
             });
             HookBridgeCompat.deoptimizeMethod(defaultHomeChanged);
-            targetHookInstalled = true;
-            Log.i(TAG, "HyperOS SystemUI third-party HOME gesture restriction removed");
+            gestureRestrictionHookInstalled = true;
+            return true;
         } catch (ClassNotFoundException | NoSuchMethodException e) {
             Log.i(TAG, "target SystemUI gesture restriction is not present");
-        } catch (Throwable t) {
-            Log.e(TAG, "could not install SystemUI gesture bypass", t);
+            return false;
         }
+    }
+
+    private static boolean installDefaultDisplayHomeBottomCaptionHook(
+            ClassLoader targetClassLoader) {
+        if (homeBottomCaptionHookInstalled) {
+            return true;
+        }
+        try {
+            Class<?> homeBottomClass = Class.forName(
+                    MIUI_DECORATION_HOME_BOTTOM_CLASS, false, targetClassLoader);
+            Method needCaption = homeBottomClass.getDeclaredMethod("needCaption");
+            needCaption.setAccessible(true);
+            XposedBridge.hookMethod(needCaption, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    try {
+                        ActivityManager.RunningTaskInfo taskInfo = taskInfo(param.thisObject);
+                        Context context = context(param.thisObject);
+                        if (taskInfo != null && DefaultDisplayHomeBottomCaptionPolicy
+                                .shouldSuppress(displayId(taskInfo),
+                                        defaultHomePackage(context))) {
+                            param.setResult(false);
+                            if (!homeBottomCaptionSuppressedLogged) {
+                                homeBottomCaptionSuppressedLogged = true;
+                                Log.i(TAG, "Suppress default-display MIUI home bottom caption");
+                            }
+                        }
+                    } catch (Throwable t) {
+                        Log.e(TAG, "could not evaluate MIUI home bottom caption", t);
+                    }
+                }
+            });
+            HookBridgeCompat.deoptimizeMethod(needCaption);
+            homeBottomCaptionHookInstalled = true;
+            return true;
+        } catch (ClassNotFoundException | NoSuchMethodException | RuntimeException e) {
+            Log.w(TAG, "MIUI home bottom-caption hook is unavailable", e);
+            return false;
+        }
+    }
+
+    private static ActivityManager.RunningTaskInfo taskInfo(Object decoration)
+            throws ReflectiveOperationException {
+        Object value = readField(decoration, "mRunningTaskInfo");
+        return value instanceof ActivityManager.RunningTaskInfo
+                ? (ActivityManager.RunningTaskInfo) value : null;
+    }
+
+    private static Context context(Object decoration) throws ReflectiveOperationException {
+        Object value = readField(decoration, "mContext");
+        return value instanceof Context ? (Context) value : null;
+    }
+
+    private static int displayId(ActivityManager.RunningTaskInfo taskInfo)
+            throws ReflectiveOperationException {
+        Object value = readField(taskInfo, "displayId");
+        return value instanceof Number ? ((Number) value).intValue() : -1;
+    }
+
+    private static String defaultHomePackage(Context context) {
+        if (context == null) {
+            return null;
+        }
+        try {
+            Intent homeIntent = new Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_HOME);
+            ComponentName component = homeIntent.resolveActivity(
+                    context.getPackageManager());
+            return component == null ? null : component.getPackageName();
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    private static Object readField(Object target, String name)
+            throws ReflectiveOperationException {
+        if (target == null) {
+            return null;
+        }
+        Class<?> type = target.getClass();
+        while (type != null) {
+            try {
+                Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                return field.get(target);
+            } catch (NoSuchFieldException ignored) {
+                type = type.getSuperclass();
+            }
+        }
+        throw new NoSuchFieldException(name);
     }
 
     private static boolean isSystemUiLoadedApk(Object loadedApk) {
