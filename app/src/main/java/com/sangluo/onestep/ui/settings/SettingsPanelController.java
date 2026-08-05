@@ -1571,7 +1571,7 @@ public final class SettingsPanelController {
                         builtInDesktopComponentKey = "";
                         refresh();
                     } else if (option != null) {
-                        if (!isOneStepDefaultHome()) {
+                        if (option.app.isSystemHome() && !isOneStepDefaultHome()) {
                             if (dialog instanceof AlertDialog) {
                                 ((AlertDialog) dialog).getListView().setItemChecked(
                                         currentCheckedItem, true);

@@ -230,7 +230,18 @@ public final class LauncherAppRepository {
         return LauncherApp.createHomeEntry(
                 String.valueOf(resolveInfo.loadLabel(packageManager)),
                 componentNameOf(resolveInfo),
-                themedIconLoader.loadIcon(resolveInfo));
+                themedIconLoader.loadIcon(resolveInfo), isSystemHome(resolveInfo));
+    }
+
+    private boolean isSystemHome(ResolveInfo resolveInfo) {
+        if (resolveInfo == null || resolveInfo.activityInfo == null
+                || resolveInfo.activityInfo.applicationInfo == null) {
+            return false;
+        }
+        android.content.pm.ApplicationInfo applicationInfo =
+                resolveInfo.activityInfo.applicationInfo;
+        return HomeActivityPolicy.isSystemHome(
+                applicationInfo.flags, applicationInfo.sourceDir);
     }
 
     private LauncherActivityEntry preferCurrentUser(List<LauncherActivityEntry> entries) {

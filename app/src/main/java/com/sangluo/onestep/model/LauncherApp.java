@@ -15,6 +15,7 @@ public final class LauncherApp {
     public final ComponentName componentName;
     public final Drawable icon;
     public final UserHandle userHandle;
+    private final boolean systemHome;
     private final String launchCategory;
 
     public LauncherApp(String label, ComponentName componentName, Drawable icon) {
@@ -23,26 +24,33 @@ public final class LauncherApp {
 
     public LauncherApp(String label, ComponentName componentName, Drawable icon,
                        UserHandle userHandle) {
-        this(label, componentName, icon, Intent.CATEGORY_LAUNCHER, userHandle);
+        this(label, componentName, icon, Intent.CATEGORY_LAUNCHER, userHandle, false);
     }
 
     public static LauncherApp createHomeEntry(
             String label, ComponentName componentName, Drawable icon) {
-        return new LauncherApp(label, componentName, icon, Intent.CATEGORY_HOME);
+        return createHomeEntry(label, componentName, icon, false);
+    }
+
+    public static LauncherApp createHomeEntry(
+            String label, ComponentName componentName, Drawable icon, boolean systemHome) {
+        return new LauncherApp(label, componentName, icon, Intent.CATEGORY_HOME,
+                Process.myUserHandle(), systemHome);
     }
 
     private LauncherApp(String label, ComponentName componentName, Drawable icon,
                         String launchCategory) {
-        this(label, componentName, icon, launchCategory, Process.myUserHandle());
+        this(label, componentName, icon, launchCategory, Process.myUserHandle(), false);
     }
 
     private LauncherApp(String label, ComponentName componentName, Drawable icon,
-                        String launchCategory, UserHandle userHandle) {
+                        String launchCategory, UserHandle userHandle, boolean systemHome) {
         this.label = label;
         this.componentName = componentName;
         this.packageName = componentName.getPackageName();
         this.icon = icon;
         this.userHandle = userHandle == null ? Process.myUserHandle() : userHandle;
+        this.systemHome = systemHome;
         this.launchCategory = launchCategory;
     }
 
@@ -66,6 +74,10 @@ public final class LauncherApp {
 
     public boolean isHomeEntry() {
         return Intent.CATEGORY_HOME.equals(launchCategory);
+    }
+
+    public boolean isSystemHome() {
+        return systemHome;
     }
 
     public String componentKey() {
