@@ -1250,6 +1250,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     @Override
     public void refreshContainerSize() {
+        refreshContainerSize(false);
+    }
+
+    @Override
+    public void refreshContainerSize(boolean forceVirtualDisplayResize) {
         if (embeddedSlotClosing[slot]) {
             return;
         }
@@ -1261,7 +1266,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (callbacks.isWindowFrameAnimationRunning()) {
             return;
         }
-        refreshVirtualDisplaySize(surfaceView.getHolder(), viewWidth, viewHeight);
+        refreshVirtualDisplaySize(
+                surfaceView.getHolder(), viewWidth, viewHeight, forceVirtualDisplayResize);
     }
 
     @Override
@@ -1719,7 +1725,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 return;
             }
             if (viewWidth != lastViewWidth || viewHeight != lastViewHeight) {
-                refreshVirtualDisplaySize(holder, viewWidth, viewHeight);
+                refreshVirtualDisplaySize(holder, viewWidth, viewHeight, false);
             }
         }
         if (appToStart != null && displayId >= 0) {
@@ -3365,7 +3371,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private void refreshVirtualDisplaySize(SurfaceHolder holder,
-                                           int viewWidth, int viewHeight) {
+                                           int viewWidth, int viewHeight,
+                                           boolean forceVirtualDisplayResize) {
         if (!hasVirtualDisplay() || displayId < 0) {
             createVirtualDisplay(holder, viewWidth, viewHeight);
             return;
@@ -3373,13 +3380,15 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         boolean targetDualMainLayout = callbacks.isDualMainLayout();
         boolean leavingDualMainLayout = displayUsesDualMainLayout
                 && !targetDualMainLayout;
-        if (!VirtualDisplayViewportPolicy.shouldResizeForContainerLayout(
+        if (!forceVirtualDisplayResize
+                && !VirtualDisplayViewportPolicy.shouldResizeForContainerLayout(
                 callbacks.isLargeScreenDevice(), targetDualMainLayout, leavingDualMainLayout)) {
             keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
             return;
         }
         Rect layoutReferenceRect = getReferenceRenderRect();
-        if (!hasMatchingAspectRatio(viewWidth, viewHeight,
+        if (!forceVirtualDisplayResize
+                && !hasMatchingAspectRatio(viewWidth, viewHeight,
                 layoutReferenceRect.width(), layoutReferenceRect.height())) {
             keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);
             return;
@@ -3389,8 +3398,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 ? makeWorkspaceVirtualDisplaySpec() : makeTargetVirtualDisplaySpec();
         boolean targetAspectMatches = hasMatchingAspectRatio(
                 displayWidth, displayHeight, targetSpec.width, targetSpec.height);
+        boolean targetSizeMatches = displayWidth == targetSpec.width
+                && displayHeight == targetSpec.height;
+        boolean targetGeometryMatches = forceVirtualDisplayResize
+                ? targetSizeMatches : targetAspectMatches;
         boolean targetDensityMatches = displayDensityDpi == targetSpec.densityDpi;
-        if ((!targetAspectMatches || !targetDensityMatches)
+        if ((!targetGeometryMatches || !targetDensityMatches)
                 && resizeVirtualDisplay(targetSpec)) {
             displayUsesDualMainLayout = targetDualMainLayout;
             holder.setFixedSize(displayWidth, displayHeight);
@@ -3398,7 +3411,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             lastViewHeight = viewHeight;
             return;
         }
-        if (targetAspectMatches && targetDensityMatches) {
+        if (targetGeometryMatches && targetDensityMatches) {
             displayUsesDualMainLayout = targetDualMainLayout;
         }
         keepVirtualDisplaySurfaceSize(holder, viewWidth, viewHeight);

@@ -294,6 +294,7 @@ public class MainActivity extends Activity {
     };
     private final Runnable refreshAllEmbeddedSlotLayoutsRunnable =
             this::runScheduledEmbeddedSlotRefresh;
+    private boolean forceEmbeddedLayoutRefresh;
     private ViewTreeObserver embeddedLayoutRefreshObserver;
     private ViewTreeObserver.OnPreDrawListener embeddedLayoutRefreshPreDrawListener;
     private final Runnable syncSideInputProtectionRunnable =
@@ -2608,6 +2609,7 @@ public class MainActivity extends Activity {
         updateShortcutAppStatuses();
         requestRunningTaskStatusRefresh();
         applyWindowLayout(false);
+        scheduleEmbeddedSlotRefresh(true);
     }
 
     private void addCornerTriggers(FrameLayout root) {
@@ -6583,8 +6585,12 @@ public class MainActivity extends Activity {
     }
 
     private void refreshAllEmbeddedSlotLayouts() {
+        refreshAllEmbeddedSlotLayouts(false);
+    }
+
+    private void refreshAllEmbeddedSlotLayouts(boolean forceVirtualDisplayResize) {
         if (isWindowAnimationRunning()) {
-            scheduleEmbeddedSlotRefresh();
+            scheduleEmbeddedSlotRefresh(forceVirtualDisplayResize);
             return;
         }
         for (int slot = 0; slot < MAX_WINDOWS; slot++) {
@@ -6600,15 +6606,20 @@ public class MainActivity extends Activity {
                     hostView.requestLayout();
                     hostView.invalidate();
                 }
-                host.refreshContainerSize();
+                host.refreshContainerSize(forceVirtualDisplayResize);
             }
         }
     }
 
     private void scheduleEmbeddedSlotRefresh() {
+        scheduleEmbeddedSlotRefresh(false);
+    }
+
+    private void scheduleEmbeddedSlotRefresh(boolean forceVirtualDisplayResize) {
         if (workspace == null) {
             return;
         }
+        forceEmbeddedLayoutRefresh |= forceVirtualDisplayResize;
         workspace.removeCallbacks(refreshAllEmbeddedSlotLayoutsRunnable);
         removeEmbeddedLayoutRefreshPreDrawListener();
         workspace.requestLayout();
@@ -6622,8 +6633,7 @@ public class MainActivity extends Activity {
                         return true;
                     }
                     workspace.removeCallbacks(refreshAllEmbeddedSlotLayoutsRunnable);
-                    removeEmbeddedLayoutRefreshPreDrawListener();
-                    refreshAllEmbeddedSlotLayouts();
+                    runScheduledEmbeddedSlotRefresh();
                     return true;
                 }
             };
@@ -6635,13 +6645,16 @@ public class MainActivity extends Activity {
 
     private void runScheduledEmbeddedSlotRefresh() {
         removeEmbeddedLayoutRefreshPreDrawListener();
-        refreshAllEmbeddedSlotLayouts();
+        boolean forceVirtualDisplayResize = forceEmbeddedLayoutRefresh;
+        forceEmbeddedLayoutRefresh = false;
+        refreshAllEmbeddedSlotLayouts(forceVirtualDisplayResize);
     }
 
     private void cancelScheduledEmbeddedSlotRefresh() {
         if (workspace != null) {
             workspace.removeCallbacks(refreshAllEmbeddedSlotLayoutsRunnable);
         }
+        forceEmbeddedLayoutRefresh = false;
         removeEmbeddedLayoutRefreshPreDrawListener();
     }
 

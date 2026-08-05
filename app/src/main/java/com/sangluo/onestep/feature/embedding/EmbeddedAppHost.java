@@ -22,6 +22,14 @@ public interface EmbeddedAppHost {
 
     void refreshContainerSize();
 
+    /**
+     * Refreshes the host after a layout change. Virtual-display implementations may use the
+     * force flag when a stable settings change alters the logical viewport.
+     */
+    default void refreshContainerSize(boolean forceVirtualDisplayResize) {
+        refreshContainerSize();
+    }
+
     void sendBack();
 
     void sendHome();
