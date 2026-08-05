@@ -555,6 +555,8 @@ public class MainActivity extends Activity {
     private boolean directBootUnlockReceiverRegistered;
     private boolean directBootInitializationRequested;
     private boolean fullHomeInitialized;
+    private int lastHostDisplayWidth;
+    private int lastHostDisplayHeight;
     private FrameLayout directBootRootContainer;
     private RootVirtualDisplayHost directBootBridgePrewarmHost;
     private LauncherApp directBootPrewarmDesktopApp;
@@ -753,6 +755,7 @@ public class MainActivity extends Activity {
         mainHandler.post(this::requestDesktopHomeInMain);
         initMediaMonitoring();
         initAmapNavigationMonitoring();
+        recordHostDisplaySize();
         fullHomeInitialized = true;
         requestLauncherIconRefresh("initial HOME load");
         mainHandler.postDelayed(this::releaseDirectBootBridgePrewarmHost,
@@ -873,6 +876,7 @@ public class MainActivity extends Activity {
             return;
         }
         if (!nonDefaultDisplayHomeRelay) {
+            boolean hostDisplaySizeChanged = recordHostDisplaySize();
             applyOneStepRotationPolicy(newConfig);
             requestLauncherIconRefresh("configuration changed");
             boolean mainPaneCountChanged = reconcileMainPaneCount(newConfig);
@@ -882,9 +886,27 @@ public class MainActivity extends Activity {
                     if (mainPaneCountChanged) {
                         configureMainPaneImePolicies();
                     }
+                    if (hostDisplaySizeChanged) {
+                        scheduleEmbeddedSlotRefresh(true);
+                    }
                 });
             }
         }
+    }
+
+    private boolean recordHostDisplaySize() {
+        int width = getResources().getDisplayMetrics().widthPixels;
+        int height = getResources().getDisplayMetrics().heightPixels;
+        boolean changed = lastHostDisplayWidth > 0 && lastHostDisplayHeight > 0
+                && (lastHostDisplayWidth != width || lastHostDisplayHeight != height);
+        if (changed) {
+            Log.i(TAG, "Host display size changed: old="
+                    + lastHostDisplayWidth + "x" + lastHostDisplayHeight
+                    + ", new=" + width + "x" + height);
+        }
+        lastHostDisplayWidth = width;
+        lastHostDisplayHeight = height;
+        return changed;
     }
 
     private void registerLauncherIconChangeReceiver() {
@@ -1674,7 +1696,7 @@ public class MainActivity extends Activity {
     }
 
     private boolean shouldHideStatusBarForOneStep() {
-        return multiWindowMode && !exitOneStepPending && !statusBarSpacingEnabled;
+        return !multiWindowMode || exitOneStepPending || !statusBarSpacingEnabled;
     }
 
     private synchronized Set<String> getRecordedSensorUidOverrides() {
