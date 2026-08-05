@@ -2128,7 +2128,9 @@ public class MainActivity extends Activity {
             } else {
                 refreshAllEmbeddedSlotLayouts();
             }
-            scheduleEmbeddedSlotRefresh();
+            // The virtual display must follow the settled host frame. Keeping an old aspect
+            // ratio makes SurfaceView crop the buffer and leaves part of the pane uncovered.
+            scheduleEmbeddedSlotRefresh(true);
         };
 
         if (!animate || !hasLaidOutWindowFrames()) {

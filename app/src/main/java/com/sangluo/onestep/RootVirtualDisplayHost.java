@@ -239,6 +239,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX = 1080;
     private static final int VIRTUAL_DISPLAY_MIN_AREA_PX =
             VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX * VIRTUAL_DISPLAY_MIN_SHORT_EDGE_PX;
+    private static final int VIRTUAL_DISPLAY_FALLBACK_MAX_LONG_EDGE_PX = 2480;
     private static final float VIRTUAL_DISPLAY_ASPECT_RATIO_TOLERANCE = 0.005f;
     private static final int VIRTUAL_DISPLAY_FLAG_SUPPORTS_TOUCH_HIDDEN = 1 << 6;
     private static final int VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT_HIDDEN = 1 << 7;
@@ -3461,6 +3462,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             virtualWidth = Math.max(1, Math.round(virtualWidth * qualityScale));
             virtualHeight = Math.max(1, Math.round(virtualHeight * qualityScale));
         }
+        int[] cappedDimensions = VirtualDisplaySizePolicy.capLongEdge(
+                virtualWidth, virtualHeight, getHostDisplayMaxLongEdge());
+        virtualWidth = cappedDimensions[0];
+        virtualHeight = cappedDimensions[1];
         boolean largeScreenDevice = callbacks.isLargeScreenDevice();
         boolean useTabletDensity = largeScreenDevice && !callbacks.isDualMainLayout();
         int densityDpi = VirtualDisplayDensityPolicy.calculateDensityDpi(
@@ -3477,7 +3482,18 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             virtualWidth = Math.max(1, Math.round(virtualWidth * tabletPixelScale));
             virtualHeight = Math.max(1, Math.round(virtualHeight * tabletPixelScale));
         }
+        cappedDimensions = VirtualDisplaySizePolicy.capLongEdge(
+                virtualWidth, virtualHeight, getHostDisplayMaxLongEdge());
+        virtualWidth = cappedDimensions[0];
+        virtualHeight = cappedDimensions[1];
         return new VirtualDisplaySpec(virtualWidth, virtualHeight, densityDpi);
+    }
+
+    private int getHostDisplayMaxLongEdge() {
+        int width = owner.getResources().getDisplayMetrics().widthPixels;
+        int height = owner.getResources().getDisplayMetrics().heightPixels;
+        int maxLongEdge = Math.max(width, height);
+        return maxLongEdge > 0 ? maxLongEdge : VIRTUAL_DISPLAY_FALLBACK_MAX_LONG_EDGE_PX;
     }
 
     private boolean resizeVirtualDisplay(VirtualDisplaySpec spec) {
