@@ -100,6 +100,7 @@ import com.sangluo.onestep.ui.widget.AppShortcutView;
 import com.sangluo.onestep.ui.widget.FixedViewportFrameLayout;
 import com.sangluo.onestep.ui.widget.PagingHorizontalScrollView;
 import com.sangluo.onestep.ui.window.AppLaunchPlacement;
+import com.sangluo.onestep.ui.window.EmptySideSlotClickPolicy;
 import com.sangluo.onestep.ui.window.MainPaneFullscreenPolicy;
 import com.sangluo.onestep.ui.window.OneStepWindowView;
 import com.sangluo.onestep.ui.window.SideWindowInputShieldController;
@@ -2055,7 +2056,7 @@ public class MainActivity extends Activity {
                 if (isMainPaneSlot(slot)) {
                     activateMainPane(slot, true);
                 } else {
-                    swapWithMain(slot);
+                    handleSideSlotClick(slot);
                 }
             });
             windowViews[i].setOnLongClickListener(v -> {
@@ -7023,6 +7024,45 @@ public class MainActivity extends Activity {
             }
         }
         switchMainSlot(slot, true);
+    }
+
+    private void handleSideSlotClick(int slot) {
+        boolean emptySideSlot = slot >= 0 && slot < MAX_WINDOWS
+                && !isMainPaneSlot(slot) && isWindowSlotEnabled(slot)
+                && !hasWindowContent(slot) && !embeddedSlotClosing[slot];
+        LauncherApp mainApp = activeMainSlot >= 0 && activeMainSlot < MAX_WINDOWS
+                ? windowApps[activeMainSlot] : null;
+        boolean interactionBlocked = activityDestroyed || suppressEmbeddedStarts
+                || exitOneStepPending || isCrossAppRouteUiBusy();
+        EmptySideSlotClickPolicy.Action action = EmptySideSlotClickPolicy.decide(
+                emptySideSlot, findDisplayedMainDesktopSlot() >= 0,
+                mainApp != null && !mainApp.isHomeEntry(), interactionBlocked);
+        switch (action) {
+            case SHOW_DESKTOP_ALREADY_DISPLAYED:
+                Toast.makeText(this, "当前已显示内置桌面", Toast.LENGTH_SHORT).show();
+                return;
+            case SHOW_DESKTOP_AND_PROMOTE:
+                showBuiltInDesktopInEmptySideSlot(slot);
+                return;
+            case IGNORE:
+            default:
+                swapWithMain(slot);
+        }
+    }
+
+    private void showBuiltInDesktopInEmptySideSlot(int slot) {
+        if (dualMainLayout) {
+            int middleMainSlot = getMiddleMainSlot();
+            if (middleMainSlot < 0 || !activateMainPane(middleMainSlot, false)) {
+                return;
+            }
+        }
+        LauncherApp desktopApp = resolveBuiltInDesktopApp();
+        if (desktopApp != null) {
+            stageAppForMainPromotion(slot, desktopApp);
+        } else {
+            stageDesktopHomeForMainPromotion(slot);
+        }
     }
 
     private void dismissSideWindow(int slot) {
