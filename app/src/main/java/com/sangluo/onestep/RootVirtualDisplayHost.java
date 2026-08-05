@@ -17,7 +17,6 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
-import android.graphics.Insets;
 import android.graphics.Matrix;
 import android.graphics.Outline;
 import android.graphics.PixelFormat;
@@ -43,7 +42,6 @@ import android.provider.Settings;
 import android.service.notification.NotificationListenerService;
 import android.text.TextUtils;
 import android.util.Log;
-import android.util.DisplayMetrics;
 import android.util.TypedValue;
 import android.view.AttachedSurfaceControl;
 import android.view.Display;
@@ -61,7 +59,6 @@ import android.view.ViewOutlineProvider;
 import android.view.ViewPropertyAnimator;
 import android.view.ViewParent;
 import android.view.Window;
-import android.view.WindowInsets;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
@@ -87,13 +84,11 @@ import com.sangluo.onestep.feature.embedding.EmbeddedStartEpochStore;
 import com.sangluo.onestep.feature.embedding.HiddenActivityViewHost;
 import com.sangluo.onestep.feature.embedding.HostedBackDispatchPolicy;
 import com.sangluo.onestep.feature.embedding.HostedBackExitPolicy;
-import com.sangluo.onestep.feature.embedding.HostedBottomNavigationGesturePolicy;
 import com.sangluo.onestep.feature.embedding.HostedDisplayRotationController;
 import com.sangluo.onestep.feature.embedding.HostedInputFocusPolicy;
 import com.sangluo.onestep.feature.embedding.HostedSurfaceReusePolicy;
 import com.sangluo.onestep.feature.embedding.HostedTaskParser;
 import com.sangluo.onestep.feature.drag.ImageShareTargetPolicy;
-import com.sangluo.onestep.feature.embedding.HostedTouchFocusPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayHomeKeyPolicy;
 import com.sangluo.onestep.feature.embedding.VirtualDisplayViewportPolicy;
 import com.sangluo.onestep.feature.navigation.NavigationDisplayFormatter;
@@ -107,7 +102,6 @@ import com.sangluo.onestep.system.root.PersistentRootShell;
 import com.sangluo.onestep.system.root.RootBridgePolicyCompat;
 import com.sangluo.onestep.system.root.ShellCommandResult;
 import com.sangluo.onestep.system.input.RootInputBridgeClient;
-import com.sangluo.onestep.system.input.MiuiGestureBridgeClient;
 import com.sangluo.onestep.system.ui.SystemUiController;
 import com.sangluo.onestep.ui.topbar.TopComponentPage;
 import com.sangluo.onestep.ui.topbar.TopComponentPagerAdapter;
@@ -305,11 +299,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private final Object inputDispatchLock = new Object();
     private final ArrayDeque<PendingMotionEvent> pendingMotionEvents = new ArrayDeque<>();
     private final Matrix touchCoordinateTransform = new Matrix();
-    private final int[] rootViewLocationOnScreen = new int[2];
     private final RootInputBridgeClient rootInputBridgeClient =
             new RootInputBridgeClient();
-    private final MiuiGestureBridgeClient miuiGestureBridgeClient =
-            new MiuiGestureBridgeClient();
     private final RootVirtualDisplayBridgeClient rootVirtualDisplayBridgeClient =
             new RootVirtualDisplayBridgeClient();
     private final int slot;
@@ -352,8 +343,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private long activeTouchTraceId;
     private boolean touchMoved;
     private boolean touchStartedOnMain;
-    private boolean touchReservedForHostedBottomNavigation;
-    private boolean touchReservedForSystemNavigation;
     private boolean touchSequenceSuppressed;
     private int touchFocusRequestGeneration;
     private boolean skipActivityOptionsLaunch;
@@ -1689,7 +1678,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         releaseVirtualDisplayWithRetry("host release", null);
         releaseStaleWindowAnimationLeash();
         rootInputBridgeClient.close();
-        miuiGestureBridgeClient.close();
         rootExecutor.shutdownNow();
     }
 
@@ -1787,17 +1775,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             return true;
         }
         int actionMasked = event.getActionMasked();
-        if (touchStartedOnMain && touchReservedForHostedBottomNavigation
-                && actionMasked != MotionEvent.ACTION_DOWN
-                && (displayId < 0 || callbacks.mainSlotSwitchPendingSlot() >= 0
-                || callbacks.isWindowFrameAnimationRunning())) {
-            injectMotionToSystemNavigation(event);
-            if (actionMasked == MotionEvent.ACTION_UP
-                    || actionMasked == MotionEvent.ACTION_CANCEL) {
-                clearTouchState();
-            }
-            return true;
-        }
         if (displayId < 0 || callbacks.mainSlotSwitchPendingSlot() >= 0
                 || callbacks.isWindowFrameAnimationRunning()) {
             if (actionMasked == MotionEvent.ACTION_DOWN) {
@@ -1814,32 +1791,12 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 touchMoved = false;
                 touchStartedOnMain = callbacks.isMainPaneSlot(slot)
                         && callbacks.activateMainSlot(slot);
-                touchReservedForHostedBottomNavigation = false;
-                touchReservedForSystemNavigation = false;
                 touchSequenceSuppressed = false;
                 touchFocusRequestGeneration = 0;
                 activeTouchTraceId = touchStartedOnMain ? ++touchTraceSequence : 0L;
                 if (touchStartedOnMain) {
-                    touchReservedForHostedBottomNavigation =
-                            isTouchInHostedBottomNavigationArea(event);
-                    // HyperOS creates the visible secondary navigation bar without a QuickStep
-                    // input consumer. Forward its complete event stream to the real system
-                    // GestureStubHome; that system component decides HOME versus overview.
-                    touchReservedForSystemNavigation =
-                            !touchReservedForHostedBottomNavigation
-                                    && isTouchReservedForSystemNavigation(event);
-                    if (touchReservedForHostedBottomNavigation) {
-                        touchSequenceSuppressed = true;
-                        routeDefaultDisplaySystemNavigation(
-                                "hosted navigation gesture started");
-                    } else if (touchReservedForSystemNavigation) {
-                        touchSequenceSuppressed = true;
-                        routeDefaultDisplaySystemNavigation(
-                                "physical system gesture started");
-                    } else {
-                        touchFocusRequestGeneration = ++focusRequestGeneration;
-                        syncLaunchRoutingSource();
-                    }
+                    touchFocusRequestGeneration = ++focusRequestGeneration;
+                    syncLaunchRoutingSource();
                     touchTargetDisplayId = displayId;
                     touchTargetDisplayWidth = displayWidth;
                     touchTargetDisplayHeight = displayHeight;
@@ -1854,32 +1811,20 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 if (parent != null) {
                     parent.requestDisallowInterceptTouchEvent(true);
                 }
-                if (touchStartedOnMain) {
-                    if (touchReservedForHostedBottomNavigation) {
-                        injectMotionToSystemNavigation(event);
-                    } else if (!touchSequenceSuppressed) {
-                        injectMotionDirect(event);
-                    }
+                if (touchStartedOnMain && !touchSequenceSuppressed) {
+                    injectMotionDirect(event);
                 }
                 return true;
             case MotionEvent.ACTION_MOVE:
                 touchMoved |= movedPastTouchSlop(event.getX(), event.getY());
-                if (touchStartedOnMain) {
-                    if (touchReservedForHostedBottomNavigation) {
-                        injectMotionToSystemNavigation(event);
-                    } else if (!touchSequenceSuppressed) {
-                        injectMotionDirect(event);
-                    }
+                if (touchStartedOnMain && !touchSequenceSuppressed) {
+                    injectMotionDirect(event);
                 }
                 return true;
             case MotionEvent.ACTION_POINTER_DOWN:
             case MotionEvent.ACTION_POINTER_UP:
-                if (touchStartedOnMain) {
-                    if (touchReservedForHostedBottomNavigation) {
-                        injectMotionToSystemNavigation(event);
-                    } else if (!touchSequenceSuppressed) {
-                        injectMotionDirect(event);
-                    }
+                if (touchStartedOnMain && !touchSequenceSuppressed) {
+                    injectMotionDirect(event);
                 }
                 return true;
             case MotionEvent.ACTION_UP:
@@ -1894,15 +1839,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                     return true;
                 }
                 if (touchSequenceSuppressed) {
-                    if (touchReservedForHostedBottomNavigation) {
-                        injectMotionToSystemNavigation(event);
-                        clearTouchState();
-                        return true;
-                    }
-                    routeDefaultDisplaySystemNavigation(
-                            touchReservedForSystemNavigation
-                                    ? "physical system gesture completed"
-                                    : "host touch dispatch unavailable");
                     clearTouchState();
                     return true;
                 }
@@ -1910,17 +1846,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 clearTouchState();
                 return true;
             case MotionEvent.ACTION_CANCEL:
-                if (touchStartedOnMain) {
-                    if (touchReservedForHostedBottomNavigation) {
-                        injectMotionToSystemNavigation(event);
-                    } else if (!touchSequenceSuppressed) {
-                        injectMotionDirect(event);
-                    }
-                }
-                if (touchReservedForSystemNavigation
-                        && !touchReservedForHostedBottomNavigation) {
-                    routeDefaultDisplaySystemNavigation(
-                            "physical system gesture cancelled");
+                if (touchStartedOnMain && !touchSequenceSuppressed) {
+                    injectMotionDirect(event);
                 }
                 clearTouchState();
                 return true;
@@ -1931,8 +1858,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     private void clearTouchState() {
         touchStartedOnMain = false;
-        touchReservedForHostedBottomNavigation = false;
-        touchReservedForSystemNavigation = false;
         touchSequenceSuppressed = false;
         touchFocusRequestGeneration = 0;
         activeTouchTraceId = 0L;
@@ -2071,8 +1996,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     boolean hasActiveTouchForImageDrag() {
-        return touchStartedOnMain && !touchReservedForHostedBottomNavigation
-                && !touchReservedForSystemNavigation
+        return touchStartedOnMain && !touchSequenceSuppressed
                 && touchTargetDisplayId == displayId;
     }
 
@@ -2089,32 +2013,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         float dy = y - touchDownY;
         float touchSlop = dp(8);
         return dx * dx + dy * dy > touchSlop * touchSlop;
-    }
-
-    private boolean isTouchReservedForSystemNavigation(MotionEvent event) {
-        WindowInsets windowInsets = surfaceView.getRootWindowInsets();
-        View rootView = surfaceView.getRootView();
-        if (windowInsets == null || rootView == null
-                || rootView.getWidth() <= 0 || rootView.getHeight() <= 0) {
-            return false;
-        }
-        Insets gestureInsets = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
-                ? windowInsets.getInsets(WindowInsets.Type.systemGestures())
-                : windowInsets.getSystemGestureInsets();
-        rootView.getLocationOnScreen(rootViewLocationOnScreen);
-        int windowLeft = rootViewLocationOnScreen[0];
-        int windowTop = rootViewLocationOnScreen[1];
-        return HostedTouchFocusPolicy.shouldReserveForSystemNavigation(
-                event.getRawX(), event.getRawY(),
-                windowLeft, windowTop,
-                windowLeft + rootView.getWidth(), windowTop + rootView.getHeight(),
-                gestureInsets.left, gestureInsets.top,
-                gestureInsets.right, gestureInsets.bottom);
-    }
-
-    private boolean isTouchInHostedBottomNavigationArea(MotionEvent event) {
-        return HostedBottomNavigationGesturePolicy.startsInNavigationRegion(
-                event.getY(), surfaceView.getHeight(), displayHeight, displayDensityDpi);
     }
 
     private void injectMotionDirect(MotionEvent event) {
@@ -2140,34 +2038,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 touchSequenceSuppressed = true;
             }
             logMotionUnavailable(targetDisplayId);
-        }
-    }
-
-    private void injectMotionToSystemNavigation(MotionEvent event) {
-        if (!touchStartedOnMain || touchTargetDisplayId <= DEFAULT_DISPLAY_ID) {
-            return;
-        }
-        Display defaultDisplay = displayManager.getDisplay(DEFAULT_DISPLAY_ID);
-        if (defaultDisplay == null) {
-            return;
-        }
-        DisplayMetrics metrics = new DisplayMetrics();
-        defaultDisplay.getRealMetrics(metrics);
-        MotionEvent transformedEvent = obtainTransformedMotionEvent(event);
-        Matrix defaultDisplayTransform = new Matrix();
-        defaultDisplayTransform.setScale(
-                metrics.widthPixels / Math.max(1f, touchTargetDisplayWidth),
-                metrics.heightPixels / Math.max(1f, touchTargetDisplayHeight));
-        transformedEvent.transform(defaultDisplayTransform);
-        int actionMasked = event.getActionMasked();
-        long traceId = activeTouchTraceId;
-        logTouchTraceHost(traceId, DEFAULT_DISPLAY_ID, actionMasked,
-                event.getDownTime(), event.getEventTime(),
-                transformedEvent.getX(), transformedEvent.getY(),
-                transformedEvent.getPointerCount());
-        if (!sendMotionThroughRootBridge(
-                DEFAULT_DISPLAY_ID, transformedEvent, traceId, 0)) {
-            logMotionUnavailable(DEFAULT_DISPLAY_ID);
         }
     }
 
@@ -2210,7 +2080,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             }
             PendingMotionEvent last = pendingMotionEvents.peekLast();
             if (motion.actionMasked == MotionEvent.ACTION_MOVE
-                    && motion.displayId != DEFAULT_DISPLAY_ID
                     && last != null
                     && last.actionMasked == MotionEvent.ACTION_MOVE
                     && last.traceId == motion.traceId
@@ -2266,9 +2135,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                                 + ", display=" + motion.displayId);
                     }
                 }
-                sent = motion.displayId == DEFAULT_DISPLAY_ID
-                        ? miuiGestureBridgeClient.sendMotion(motion.event)
-                        : rootInputBridgeClient.sendMotion(
+                sent = rootInputBridgeClient.sendMotion(
                         getRootInputBridgeToken(), motion.displayId,
                         motion.event, motion.traceId);
             } finally {
@@ -2392,15 +2259,6 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
 
     void dismissHostedSystemRecents() {
         injectKeyDirectAsync(KeyEvent.KEYCODE_BACK, "dismiss recents display " + displayId);
-    }
-
-    boolean routeDefaultDisplaySystemNavigation(String reason) {
-        focusRequestGeneration++;
-        rootVirtualDisplayBridgeClient.updateLaunchSource(
-                getRootInputBridgeToken(), DEFAULT_DISPLAY_ID, "", false);
-        Log.i(TAG, "Route default-display system navigation without changing IME focus: "
-                + reason);
-        return rootAvailable;
     }
 
     private void logMotionUnavailable(int targetDisplayId) {

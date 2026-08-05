@@ -3,7 +3,6 @@ allow priv_app default_android_service service_manager find
 allow priv_app ksu binder { call transfer }
 allow ksu priv_app binder { call transfer }
 allow priv_app ksu unix_stream_socket connectto
-allow priv_app platform_app unix_stream_socket connectto
 allow ksu priv_app fd use
 allow ksu surfaceflinger_service service_manager find
 allow ksu surfaceflinger binder { call transfer }

@@ -22,12 +22,16 @@ public final class HyperOsSystemUiGestureNavigationBypassHook {
     private static final String MIUI_DECORATION_HOME_BOTTOM_CLASS =
             "com.android.wm.shell.multitasking.miuimultiwinswitch.miuiwindowdecor."
                     + "decoration.MiuiDecorationHomeBottom";
+    private static final String NAVIGATION_BAR_CONTROLLER_CLASS =
+            "com.android.systemui.navigationbar.NavigationBarControllerImpl";
 
     private static boolean loaderHookInstalled;
     private static boolean targetHookInstalled;
     private static boolean gestureRestrictionHookInstalled;
     private static boolean homeBottomCaptionHookInstalled;
     private static boolean homeBottomCaptionSuppressedLogged;
+    private static boolean defaultDisplayNavigationHookInstalled;
+    private static boolean defaultDisplayNavigationSuppressedLogged;
 
     private HyperOsSystemUiGestureNavigationBypassHook() {
     }
@@ -82,12 +86,59 @@ public final class HyperOsSystemUiGestureNavigationBypassHook {
             HookBridgeCompat.disableHiddenApiRestrictions();
             boolean captionHookInstalled = installDefaultDisplayHomeBottomCaptionHook(
                     targetClassLoader);
+            boolean navigationHookInstalled = installDefaultDisplayNavigationHook(
+                    targetClassLoader);
             boolean gestureHookInstalled = installGestureRestrictionHook(targetClassLoader);
-            targetHookInstalled = captionHookInstalled || gestureHookInstalled;
+            targetHookInstalled = captionHookInstalled || navigationHookInstalled
+                    || gestureHookInstalled;
             Log.i(TAG, "HyperOS SystemUI hooks installed; homeBottomCaption="
-                    + captionHookInstalled + ", gestureRestriction=" + gestureHookInstalled);
+                    + captionHookInstalled + ", defaultDisplayNavigation="
+                    + navigationHookInstalled + ", gestureRestriction="
+                    + gestureHookInstalled);
         } catch (Throwable t) {
             Log.e(TAG, "could not install SystemUI gesture bypass", t);
+        }
+    }
+
+    private static boolean installDefaultDisplayNavigationHook(
+            ClassLoader targetClassLoader) {
+        if (defaultDisplayNavigationHookInstalled) {
+            return true;
+        }
+        try {
+            Class<?> controllerClass = Class.forName(
+                    NAVIGATION_BAR_CONTROLLER_CLASS, false, targetClassLoader);
+            Method shouldCreate = controllerClass.getDeclaredMethod(
+                    "shouldCreateNavBarAndTaskBar", int.class);
+            shouldCreate.setAccessible(true);
+            XposedBridge.hookMethod(shouldCreate, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    if (param.args.length != 1 || !(param.args[0] instanceof Integer)) {
+                        return;
+                    }
+                    try {
+                        int displayId = (Integer) param.args[0];
+                        Context context = context(param.thisObject);
+                        if (DefaultDisplayHomeBottomCaptionPolicy.shouldSuppress(
+                                displayId, defaultHomePackage(context))) {
+                            param.setResult(false);
+                            if (!defaultDisplayNavigationSuppressedLogged) {
+                                defaultDisplayNavigationSuppressedLogged = true;
+                                Log.i(TAG, "Remove default-display navigation bar and gesture host");
+                            }
+                        }
+                    } catch (Throwable t) {
+                        Log.e(TAG, "could not evaluate default-display navigation", t);
+                    }
+                }
+            });
+            HookBridgeCompat.deoptimizeMethod(shouldCreate);
+            defaultDisplayNavigationHookInstalled = true;
+            return true;
+        } catch (ClassNotFoundException | NoSuchMethodException | RuntimeException e) {
+            Log.w(TAG, "default-display navigation hook is unavailable", e);
+            return false;
         }
     }
 
