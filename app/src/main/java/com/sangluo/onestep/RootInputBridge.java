@@ -35,6 +35,7 @@ import java.util.Locale;
 @SuppressLint({"BlockedPrivateApi", "DiscouragedPrivateApi", "PrivateApi"})
 public final class RootInputBridge {
     private static final String TAG = "OneStepInputBridge";
+    private static final int DISPLAY_IME_POLICY_FALLBACK_DISPLAY = 1;
     private static final int INJECT_INPUT_EVENT_MODE_ASYNC = 0;
     private static final int INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH = 2;
     private static final int VIRTUAL_TOUCH_DEVICE_ID = 0;
@@ -467,17 +468,20 @@ public final class RootInputBridge {
             return "focusHostedDisplay " + displayId + " false false";
         }
         String imePolicyResponse = setDisplayImePolicy(new String[]{
-                "imePolicy", Integer.toString(displayId), "0"
+                "imePolicy", Integer.toString(displayId),
+                Integer.toString(DISPLAY_IME_POLICY_FALLBACK_DISPLAY)
         });
         String[] imePolicyParts = imePolicyResponse.trim().split("\\s+");
-        boolean localImePolicy = imePolicyParts.length == 5
+        boolean fallbackImePolicy = imePolicyParts.length == 5
                 && Integer.parseInt(imePolicyParts[1]) == displayId
-                && Integer.parseInt(imePolicyParts[2]) == 0
-                && Integer.parseInt(imePolicyParts[3]) == 0
+                && Integer.parseInt(imePolicyParts[2])
+                == DISPLAY_IME_POLICY_FALLBACK_DISPLAY
+                && Integer.parseInt(imePolicyParts[3])
+                == DISPLAY_IME_POLICY_FALLBACK_DISPLAY
                 && Boolean.parseBoolean(imePolicyParts[4]);
         boolean focused = false;
         String failure = "";
-        if (localImePolicy) {
+        if (fallbackImePolicy) {
             try {
                 getFocusTopTaskMethod().invoke(getActivityTaskManagerService(), displayId);
                 focused = true;
@@ -486,13 +490,13 @@ public final class RootInputBridge {
                 failure = describeThrowable(e);
             }
         }
-        int priority = localImePolicy && focused ? Log.INFO : Log.WARN;
+        int priority = fallbackImePolicy && focused ? Log.INFO : Log.WARN;
         Log.println(priority, TAG, "Focused hosted display=" + displayId
-                + " localImePolicy=" + localImePolicy
+                + " fallbackImePolicy=" + fallbackImePolicy
                 + " success=" + focused
                 + (failure.isEmpty() ? "" : " failure=" + failure));
         return "focusHostedDisplay " + displayId + " "
-                + localImePolicy + " " + focused;
+                + fallbackImePolicy + " " + focused;
     }
 
     private String removeTask(String[] parts) {
