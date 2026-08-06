@@ -57,7 +57,6 @@ done
 REPLACE=""
 
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
-APK_INSTALLER="$MODPATH/install-module-apk.sh"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 HOOK_CONFIG_DIR="$MODPATH/hook-config"
 
@@ -136,6 +135,8 @@ set_perm "$MODPATH/boot-completed.sh" 0 0 0755
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/statusbar-post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
+set_perm "$MODPATH/module-state.sh" 0 0 0755
+set_perm "$MODPATH/remove-data-app-update.sh" 0 0 0755
 set_perm "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" 0 0 0644
 set_perm_recursive "$ZYGISK_PAYLOAD_DIR" 0 0 0755 0644
 
@@ -158,17 +159,15 @@ else
   fi
 fi
 
-module_version_code="$(sed -n 's/^versionCode=//p' "$MODPATH/module.prop" | head -n 1)"
-if [ ! -f "$APK_INSTALLER" ]; then
-  abort "! 模块中缺少 APK 安装脚本"
+if ! "$MODPATH/module-state.sh" snapshot-installation >/dev/null 2>&1; then
+  ui_print "! 暂时无法记录持久设置原值，开机修改前将再次尝试"
 fi
-. "$APK_INSTALLER"
-if ! install_onestep_module_apk "$APK_PATH" "$module_version_code" "$MODPATH"; then
-  abort "! 无法在模块安装阶段更新 OneStep4"
-fi
+: >"$MODPATH/remove-data-app-update-pending"
+set_perm "$MODPATH/remove-data-app-update-pending" 0 0 0600
 
 ui_print "- KernelSU 版本：${KSU_VER:-未知}（版本代码：${KSU_VER_CODE:-未知}）"
+ui_print "- OneStep4 APK 仅通过 /system/priv-app 系统无痕挂载"
+ui_print "- 旧 /data/app 更新包将在系统版挂载完成后安全移除"
 ui_print "- 重启后将为当前 Android 用户恢复 OneStep4 状态"
 
-rm -f "$APK_INSTALLER"
 rm -f "$MODPATH/customize.sh"

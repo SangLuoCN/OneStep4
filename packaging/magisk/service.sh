@@ -5,6 +5,9 @@ PACKAGE_NAME="com.sangluo.onestep"
 HOME_COMPONENT="$PACKAGE_NAME/.MainActivity"
 VIRTUAL_DISPLAY_ROLE="android.app.role.COMPANION_DEVICE_APP_STREAMING"
 LOG_FILE="$MODDIR/service.log"
+STATE_HELPER="$MODDIR/module-state.sh"
+DATA_APP_CLEANUP_HELPER="$MODDIR/remove-data-app-update.sh"
+DATA_APP_CLEANUP_MARKER="$MODDIR/remove-data-app-update-pending"
 USER_UNLOCK_POLL_INTERVAL_SECONDS=0.2
 USER_UNLOCK_WAIT_ATTEMPTS=3000
 
@@ -21,6 +24,25 @@ run_and_log() {
     echo "$logged_output" >>"$LOG_FILE"
   fi
   return "$logged_status"
+}
+
+cleanup_data_app_update_if_pending() {
+  if [ ! -e "$DATA_APP_CLEANUP_MARKER" ]; then
+    return 0
+  fi
+  if [ ! -x "$DATA_APP_CLEANUP_HELPER" ]; then
+    write_log "无法清理旧 /data/app 更新包：缺少清理脚本"
+    return 1
+  fi
+
+  write_log "模块已挂载且系统已启动，正在检查旧 /data/app 更新包"
+  if run_and_log "$DATA_APP_CLEANUP_HELPER"; then
+    rm -f "$DATA_APP_CLEANUP_MARKER"
+    write_log "旧 /data/app 更新包检查完成"
+    return 0
+  fi
+  write_log "旧 /data/app 更新包暂未清理，保留标记供下次启动重试"
+  return 1
 }
 
 restore_for_user() {
@@ -182,6 +204,9 @@ restore_hyperos_gesture_navigation() {
     return 0
   fi
 
+  if [ -x "$STATE_HELPER" ]; then
+    "$STATE_HELPER" snapshot-navigation >/dev/null 2>&1 || true
+  fi
   settings put global force_fsg_nav_bar 1 >/dev/null 2>&1
   fsg_mode="$(settings get global force_fsg_nav_bar 2>/dev/null)"
   if [ "$fsg_mode" = "1" ]; then
@@ -201,16 +226,15 @@ prepare_qq_original_media_storage() {
     return 0
   fi
 
+  if [ -x "$STATE_HELPER" ]; then
+    "$STATE_HELPER" snapshot-qq-appops "$user_id" >/dev/null 2>&1 || true
+  fi
   run_and_log cmd appops set --user "$user_id" --uid "$qq_package" \
       MANAGE_EXTERNAL_STORAGE allow || true
   run_and_log cmd appops set --user "$user_id" "$qq_package" \
       WRITE_EXTERNAL_STORAGE allow || true
   qq_media_dir="/storage/emulated/$user_id/Tencent/MobileQQ/chatpic/Temp"
   if mkdir -p "$qq_media_dir" 2>/dev/null; then
-    chmod 0777 "/storage/emulated/$user_id/Tencent" \
-        "/storage/emulated/$user_id/Tencent/MobileQQ" \
-        "/storage/emulated/$user_id/Tencent/MobileQQ/chatpic" \
-        "$qq_media_dir" 2>/dev/null || true
     write_log "已初始化 QQ 原图媒体目录：$qq_media_dir"
   else
     write_log "无法初始化 QQ 原图媒体目录：$qq_media_dir"
@@ -241,6 +265,7 @@ if [ -e "$MODDIR/restore-home-selection" ] \
   onestep_home_was_selected=1
 fi
 
+cleanup_data_app_update_if_pending || true
 restore_for_user 0
 prepare_qq_original_media_storage 0
 

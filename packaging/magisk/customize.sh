@@ -1,7 +1,5 @@
 #!/system/bin/sh
 
-PACKAGE_NAME="com.sangluo.onestep"
-VIRTUAL_DISPLAY_ROLE="android.app.role.COMPANION_DEVICE_APP_STREAMING"
 for replace_path in \
     /system/priv-app/OneStep4_v5 \
     /system/priv-app/OneStep4_v6; do
@@ -12,7 +10,6 @@ for replace_path in \
 done
 REPLACE=""
 APK_PATH="$MODPATH/system/priv-app/OneStep4/OneStep4.apk"
-APK_INSTALLER="$MODPATH/install-module-apk.sh"
 ZYGISK_PAYLOAD_DIR="$MODPATH/zygisk-payload"
 GLOBAL_ZYGISK_TOGGLE="/data/adb/post-fs-data.d/onestep40-zygisk-toggle.sh"
 HOOK_CONFIG_DIR="$MODPATH/hook-config"
@@ -114,6 +111,8 @@ set_perm "$MODPATH/zygisk-toggle.sh" 0 0 0755
 set_perm "$MODPATH/post-fs-data.sh" 0 0 0755
 set_perm "$MODPATH/uninstall.sh" 0 0 0755
 set_perm "$MODPATH/action.sh" 0 0 0755
+set_perm "$MODPATH/module-state.sh" 0 0 0755
+set_perm "$MODPATH/remove-data-app-update.sh" 0 0 0755
 
 if [ -f "$APK_PATH" ]; then
   touch "$APK_PATH"
@@ -131,28 +130,14 @@ if [ -f "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" ]; then
   set_perm "$MODPATH/system/etc/onestep/OneStepStatusBarZeroOverlay.apk" 0 0 0644
 fi
 
-module_version_code="$(sed -n 's/^versionCode=//p' "$MODPATH/module.prop" | head -n 1)"
-if [ ! -f "$APK_INSTALLER" ]; then
-  abort "! 模块中缺少 APK 安装脚本"
+if ! "$MODPATH/module-state.sh" snapshot-installation >/dev/null 2>&1; then
+  ui_print "! 暂时无法记录持久设置原值，开机修改前将再次尝试"
 fi
-. "$APK_INSTALLER"
-if ! install_onestep_module_apk "$APK_PATH" "$module_version_code" "$MODPATH"; then
-  abort "! 无法在模块安装阶段更新 OneStep4"
-fi
+: >"$MODPATH/remove-data-app-update-pending"
+set_perm "$MODPATH/remove-data-app-update-pending" 0 0 0600
 
-if pm path "$PACKAGE_NAME" >/dev/null 2>&1; then
-  if cmd role get-role-holders --user 0 "$VIRTUAL_DISPLAY_ROLE" 2>/dev/null \
-      | grep -qx "$PACKAGE_NAME"; then
-    ui_print "- 可信虚拟显示角色已授权"
-  elif cmd role add-role-holder --user 0 "$VIRTUAL_DISPLAY_ROLE" \
-      "$PACKAGE_NAME" 0 >/dev/null 2>&1; then
-    ui_print "- 已授予可信虚拟显示角色"
-  else
-    ui_print "- 暂未授予可信虚拟显示角色，将在首次启动 OneStep 时重试"
-  fi
-else
-  ui_print "- 系统尚未扫描到 OneStep4，将在首次启动时授予可信虚拟显示角色"
-fi
+ui_print "- OneStep4 APK 仅通过 /system/priv-app 系统无痕挂载"
+ui_print "- 旧 /data/app 更新包将在系统版挂载完成后安全移除"
+ui_print "- 重启后将为当前 Android 用户恢复 OneStep4 状态"
 
-rm -f "$APK_INSTALLER"
 rm -f "$MODPATH/customize.sh"

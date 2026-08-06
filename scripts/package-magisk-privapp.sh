@@ -97,8 +97,9 @@ cp "$ROOT_DIR/packaging/magisk/service.sh" "$WORK_DIR/service.sh"
 cp "$ROOT_DIR/packaging/magisk/zygisk-toggle.sh" "$WORK_DIR/zygisk-toggle.sh"
 cp "$ROOT_DIR/packaging/magisk/uninstall.sh" "$WORK_DIR/uninstall.sh"
 cp "$ROOT_DIR/packaging/root/action.sh" "$WORK_DIR/action.sh"
-cp "$ROOT_DIR/packaging/root/install-module-apk.sh" \
-    "$WORK_DIR/install-module-apk.sh"
+cp "$ROOT_DIR/packaging/root/module-state.sh" "$WORK_DIR/module-state.sh"
+cp "$ROOT_DIR/packaging/root/remove-data-app-update.sh" \
+    "$WORK_DIR/remove-data-app-update.sh"
 cp "$ROOT_DIR/packaging/root/post-fs-data.sh" \
     "$WORK_DIR/statusbar-post-fs-data.sh"
 cp "$ROOT_DIR/packaging/magisk/sepolicy.rule" "$WORK_DIR/sepolicy.rule"
@@ -141,7 +142,8 @@ chmod 0755 "$WORK_DIR/service.sh"
 chmod 0755 "$WORK_DIR/zygisk-toggle.sh"
 chmod 0755 "$WORK_DIR/uninstall.sh"
 chmod 0755 "$WORK_DIR/action.sh"
-chmod 0755 "$WORK_DIR/install-module-apk.sh"
+chmod 0755 "$WORK_DIR/module-state.sh"
+chmod 0755 "$WORK_DIR/remove-data-app-update.sh"
 chmod 0755 "$WORK_DIR/statusbar-post-fs-data.sh"
 chmod 0644 "$WORK_DIR/sepolicy.rule"
 chmod 0644 "$WORK_DIR/system/priv-app/$SYSTEM_APP_DIR/OneStep4.apk"
@@ -175,7 +177,8 @@ unzip -qq "$OUT_ZIP" \
     "zygisk-toggle.sh" \
     "uninstall.sh" \
     "action.sh" \
-    "install-module-apk.sh" \
+    "module-state.sh" \
+    "remove-data-app-update.sh" \
     "statusbar-post-fs-data.sh" \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk" \
     -d "$VERIFY_DIR"
@@ -193,7 +196,8 @@ for required_entry in \
     "zygisk-toggle.sh" \
     "uninstall.sh" \
     "action.sh" \
-    "install-module-apk.sh" \
+    "module-state.sh" \
+    "remove-data-app-update.sh" \
     "statusbar-post-fs-data.sh" \
     "system/etc/onestep/OneStepStatusBarZeroOverlay.apk"; do
     if [[ ! -s "$VERIFY_DIR/$required_entry" ]]; then
@@ -201,6 +205,22 @@ for required_entry in \
         exit 1
     fi
 done
+if unzip -Z1 "$OUT_ZIP" | grep -q 'install-module-apk\.sh$'; then
+    echo "Magisk ZIP 不得包含 /data/app 覆盖安装脚本" >&2
+    exit 1
+fi
+for packaged_script in customize.sh service.sh; do
+    if unzip -p "$OUT_ZIP" "$packaged_script" \
+        | grep -Eq 'pm[[:space:]]+install[[:space:]]+-r([[:space:]]|$)'; then
+        echo "Magisk ZIP 不得在安装或开机阶段执行 pm install -r：$packaged_script" >&2
+        exit 1
+    fi
+done
+if unzip -p "$OUT_ZIP" customize.sh \
+    | grep -Eq 'uninstall-system-updates|pm[[:space:]]+uninstall'; then
+    echo "Magisk ZIP 不得在安装阶段卸载 OneStep4" >&2
+    exit 1
+fi
 for packaged_zygisk_library in \
     "$VERIFY_DIR/zygisk-payload/arm64-v8a.so" \
     "$VERIFY_DIR/zygisk-payload/armeabi-v7a.so"; do
