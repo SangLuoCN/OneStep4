@@ -47,6 +47,26 @@ public final class TopAppListPolicy {
         return new State(order, selection);
     }
 
+    public static List<String> prioritizeVisible(List<String> orderedKeys,
+                                                 Set<String> visibleKeys) {
+        List<String> order = uniqueNonEmpty(orderedKeys);
+        if (order.isEmpty() || visibleKeys == null || visibleKeys.isEmpty()) {
+            return order;
+        }
+        List<String> prioritized = new ArrayList<>(order.size());
+        for (String key : order) {
+            if (visibleKeys.contains(key)) {
+                prioritized.add(key);
+            }
+        }
+        for (String key : order) {
+            if (!visibleKeys.contains(key)) {
+                prioritized.add(key);
+            }
+        }
+        return prioritized;
+    }
+
     private static List<String> uniqueNonEmpty(List<String> values) {
         if (values == null || values.isEmpty()) {
             return Collections.emptyList();

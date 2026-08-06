@@ -50,4 +50,19 @@ public class TopAppListPolicyTest {
         assertEquals(Arrays.asList("b", "a"), state.orderedKeys);
         assertEquals(Collections.emptySet(), state.selectedKeys);
     }
+
+    @Test
+    public void movesVisibleAppsFirstAndPreservesBothGroupOrders() {
+        assertEquals(Arrays.asList("b", "d", "a", "c", "e"),
+                TopAppListPolicy.prioritizeVisible(
+                        Arrays.asList("a", "b", "c", "d", "e"),
+                        new HashSet<>(Arrays.asList("b", "d"))));
+    }
+
+    @Test
+    public void restoresConfiguredOrderWhenNoAppsAreVisible() {
+        assertEquals(Arrays.asList("c", "a", "b"),
+                TopAppListPolicy.prioritizeVisible(
+                        Arrays.asList("c", "a", "b"), Collections.emptySet()));
+    }
 }

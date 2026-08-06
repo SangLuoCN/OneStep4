@@ -207,6 +207,7 @@ public class MainActivity extends Activity {
     private static final int EMBEDDED_START_RETRY_MS = 25;
     private static final int EMBEDDED_START_MAX_RETRIES = 120;
     private static final int WINDOW_FRAME_SWITCH_ANIMATION_MS = 200;
+    private static final int TOP_APP_REORDER_ANIMATION_MS = 220;
     private static final long WINDOW_SWITCH_IDLE_WARMUP_THRESHOLD_MS = 3000L;
     private static final int SIDE_DISMISS_DISTANCE_DP = 48;
     private static final int SIDE_DISMISS_SETTLE_MS = 180;
@@ -573,6 +574,8 @@ public class MainActivity extends Activity {
     private boolean mainPaneSwapWindowAttached;
     private BlurredBackgroundView oneStepBackgroundView;
     private HorizontalScrollView topAppStripScrollView;
+    private LinearLayout topAppStripRow;
+    private int topAppStripOrderAnimationGeneration;
     private HorizontalScrollView imageDragShareTargetScrollView;
     private View[] imageDragShareTargetViews = new View[0];
     private boolean[] imageDragShareTargetEnabled = new boolean[0];
@@ -3276,6 +3279,7 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, getTopAppStripHeight(), Gravity.TOP));
 
         LinearLayout row = new LinearLayout(this);
+        topAppStripRow = row;
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(getTopAppStripSidePaddingDp()), dp(getTopAppStripVerticalPaddingDp()),
@@ -3283,7 +3287,7 @@ public class MainActivity extends Activity {
         scrollView.addView(row, new HorizontalScrollView.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
-        for (LauncherApp app : topAppStripApps) {
+        for (LauncherApp app : getPrioritizedTopAppStripApps()) {
             int iconSizeDp = getTopAppIconSizeDp();
             AppShortcutView shortcut = new AppShortcutView(this, false, iconSizeDp, 0);
             shortcut.setStatusIndicatorEnabled(true);
@@ -3317,6 +3321,133 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(2), Gravity.BOTTOM);
         stripRoot.addView(bottomLine, lineLp);
         return stripRoot;
+    }
+
+    private List<LauncherApp> getPrioritizedTopAppStripApps() {
+        Set<String> visibleKeys = getVisibleWindowAppInstanceKeys();
+        List<String> configuredOrder = new ArrayList<>(topAppStripApps.size());
+        Map<String, LauncherApp> appsByKey = new HashMap<>();
+        for (LauncherApp app : topAppStripApps) {
+            String key = app.instanceKey();
+            configuredOrder.add(key);
+            appsByKey.put(key, app);
+        }
+        List<String> displayOrder = TopAppListPolicy.prioritizeVisible(
+                configuredOrder, visibleKeys);
+        List<LauncherApp> result = new ArrayList<>(displayOrder.size());
+        for (String key : displayOrder) {
+            LauncherApp app = appsByKey.get(key);
+            if (app != null) {
+                result.add(app);
+            }
+        }
+        return result;
+    }
+
+    private Set<String> getVisibleWindowAppInstanceKeys() {
+        Set<String> visibleKeys = new LinkedHashSet<>();
+        for (LauncherApp app : windowApps) {
+            if (app != null) {
+                visibleKeys.add(app.instanceKey());
+            }
+        }
+        return visibleKeys;
+    }
+
+    private void updateTopAppStripOrder() {
+        LinearLayout row = topAppStripRow;
+        if (row == null) {
+            return;
+        }
+        Set<String> visibleKeys = getVisibleWindowAppInstanceKeys();
+        List<String> configuredOrder = new ArrayList<>(topAppStripApps.size());
+        for (LauncherApp app : topAppStripApps) {
+            configuredOrder.add(app.instanceKey());
+        }
+        List<String> desiredOrder = TopAppListPolicy.prioritizeVisible(
+                configuredOrder, visibleKeys);
+        Map<String, View> viewsByKey = new HashMap<>();
+        List<String> currentOrder = new ArrayList<>(row.getChildCount());
+        for (int index = 0; index < row.getChildCount(); index++) {
+            View child = row.getChildAt(index);
+            if (!(child instanceof AppShortcutView)) {
+                continue;
+            }
+            String key = ((AppShortcutView) child).getInstanceKeyValue();
+            currentOrder.add(key);
+            viewsByKey.put(key, child);
+        }
+        if (currentOrder.equals(desiredOrder)) {
+            return;
+        }
+
+        Map<String, Float> visualLeftByKey = new HashMap<>();
+        for (Map.Entry<String, View> entry : viewsByKey.entrySet()) {
+            View child = entry.getValue();
+            child.animate().cancel();
+            visualLeftByKey.put(entry.getKey(), child.getLeft() + child.getTranslationX());
+            child.setTranslationX(0f);
+        }
+        HorizontalScrollView scrollView = topAppStripScrollView;
+        int preservedScrollX = scrollView == null ? 0 : scrollView.getScrollX();
+        int preservedScrollY = scrollView == null ? 0 : scrollView.getScrollY();
+        boolean animate = row.isLaidOut() && row.getWidth() > 0 && row.isShown();
+        row.removeAllViews();
+        for (String key : desiredOrder) {
+            View child = viewsByKey.get(key);
+            if (child != null) {
+                row.addView(child);
+            }
+        }
+        int animationGeneration = ++topAppStripOrderAnimationGeneration;
+        if (!animate) {
+            if (scrollView != null) {
+                scrollView.scrollTo(preservedScrollX, preservedScrollY);
+            }
+            return;
+        }
+
+        ViewTreeObserver.OnPreDrawListener listener = new ViewTreeObserver.OnPreDrawListener() {
+            @Override
+            public boolean onPreDraw() {
+                ViewTreeObserver observer = row.getViewTreeObserver();
+                if (observer.isAlive()) {
+                    observer.removeOnPreDrawListener(this);
+                }
+                if (animationGeneration != topAppStripOrderAnimationGeneration
+                        || row != topAppStripRow) {
+                    return true;
+                }
+                if (scrollView != null) {
+                    scrollView.scrollTo(preservedScrollX, preservedScrollY);
+                }
+                for (int index = 0; index < row.getChildCount(); index++) {
+                    View child = row.getChildAt(index);
+                    if (!(child instanceof AppShortcutView)) {
+                        continue;
+                    }
+                    String key = ((AppShortcutView) child).getInstanceKeyValue();
+                    Float previousVisualLeft = visualLeftByKey.get(key);
+                    if (previousVisualLeft == null) {
+                        continue;
+                    }
+                    float startTranslation = previousVisualLeft - child.getLeft();
+                    if (Math.abs(startTranslation) < 0.5f) {
+                        child.setTranslationX(0f);
+                        continue;
+                    }
+                    child.setTranslationX(startTranslation);
+                    child.animate()
+                            .translationX(0f)
+                            .setDuration(TOP_APP_REORDER_ANIMATION_MS)
+                            .setInterpolator(new AccelerateDecelerateInterpolator())
+                            .start();
+                }
+                return true;
+            }
+        };
+        row.getViewTreeObserver().addOnPreDrawListener(listener);
+        row.requestLayout();
     }
 
     private HorizontalScrollView createImageDragShareTargetStrip() {
@@ -6281,7 +6412,14 @@ public class MainActivity extends Activity {
     }
 
     private void addOrFocusApp(LauncherApp app) {
-        if (app == null || isWindowAnimationRunning() || mainSlotSwitchPendingSlot >= 0
+        if (app == null) {
+            return;
+        }
+        if (!hasRootAccessForAppLaunch()) {
+            showRootAuthorizationHintIfNeeded();
+            return;
+        }
+        if (isWindowAnimationRunning() || mainSlotSwitchPendingSlot >= 0
                 || mainContentReplacementPendingSlot >= 0 || pendingMainAppStartSlot >= 0
                 || pendingInternalSettingsSlot >= 0 || pendingDesktopHomeSlot >= 0) {
             return;
@@ -6392,6 +6530,16 @@ public class MainActivity extends Activity {
                 }
                 break;
         }
+    }
+
+    private boolean hasRootAccessForAppLaunch() {
+        for (EmbeddedAppHost host : embeddedHosts) {
+            if (host instanceof RootVirtualDisplayHost
+                    && ((RootVirtualDisplayHost) host).hasRootAccess()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private int getPreferredNewAppMainSlot() {
@@ -8386,10 +8534,11 @@ public class MainActivity extends Activity {
     }
 
     private void updateShortcutAppStatuses() {
+        updateTopAppStripOrder();
         for (AppShortcutView shortcutView : shortcutViews) {
             String instanceKey = shortcutView.getInstanceKeyValue();
             boolean taskPresent = taskBackedAppInstances.contains(instanceKey);
-            boolean foreground = taskPresent && findSlot(instanceKey) >= 0;
+            boolean foreground = findSlot(instanceKey) >= 0;
             shortcutView.setActive(foreground);
             shortcutView.setAppStatus(foreground
                     ? AppShortcutView.AppStatus.FOREGROUND
