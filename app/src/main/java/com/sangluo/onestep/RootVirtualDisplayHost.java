@@ -199,6 +199,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         boolean hasGrantedSystemEmbeddingPermission();
         boolean isSystemAppInstall();
         void showEmbeddingHint(String reason);
+        void showRootAuthorizationHint();
         void swapWithMain(int slot);
         int dp(float value);
         Set<String> recordedSensorUidOverrides();
@@ -317,7 +318,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private final RootVirtualDisplayBridgeClient rootVirtualDisplayBridgeClient =
             new RootVirtualDisplayBridgeClient();
     private final int slot;
-    private final boolean rootAvailable;
+    private volatile boolean rootAvailable;
     private final boolean systemLaunchAvailable;
 
     private volatile VirtualDisplay virtualDisplay;
@@ -665,7 +666,13 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     }
 
     private boolean start(LauncherApp app, boolean forceLaunch) {
-        if (!isAvailable() || embeddedSlotClosing[slot]) {
+        if (!isAvailable()) {
+            if (!rootAvailable) {
+                callbacks.showRootAuthorizationHint();
+            }
+            return false;
+        }
+        if (embeddedSlotClosing[slot]) {
             return false;
         }
         final int startEpoch = callbacks.embeddedStartEpoch();
@@ -3017,6 +3024,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (!canResolveHostedTask() || hostedTaskId > 0 || taskResolutionInFlight) {
             return;
         }
+        if (!rootAvailable) {
+            showRootAuthorizationHintIfContentUnavailable();
+            return;
+        }
         taskResolutionInFlight = true;
         try {
             rootExecutor.execute(() -> {
@@ -3932,6 +3943,27 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         ensureRootInputBridgeStarted(false, false);
     }
 
+    /**
+     * Refreshes this host after KernelSU grants ROOT while the OneStep process stays alive.
+     * The virtual display itself is intentionally kept; only the cached capability and the
+     * services that depend on it need to be brought online.
+     */
+    void onRootAuthorizationGranted() {
+        cachedSuCommandAvailable = true;
+        rootAvailable = true;
+        unavailableReason = "";
+        ensureRootInputBridgeStarted();
+        if (hasVirtualDisplay()) {
+            syncLaunchRoutingSource();
+            if (callbacks.isMainPaneSlot(slot)) {
+                ensureDisplayImeLocalPolicyAsync("ROOT authorization granted");
+            }
+            scheduleHostedTaskResolution("ROOT authorization granted");
+        }
+        Log.i(TAG, "ROOT authorization applied to virtual display host: slot=" + slot
+                + ", display=" + displayId);
+    }
+
     private void ensureRootInputBridgeStarted(boolean force, boolean synchronous) {
         if (!rootAvailable) {
             Log.w(TAG, "Direct input bridge unavailable: root is not available");
@@ -4036,7 +4068,23 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         Log.w(TAG, "Root display bridge did not become ready: rootExit="
                 + rootResult.exitCode
                 + ", rootOutput=" + rootResult.output);
+        showRootAuthorizationHintIfContentUnavailable();
         return false;
+    }
+
+    private void showRootAuthorizationHintIfContentUnavailable() {
+        mainHandler.post(() -> {
+            boolean contentUnavailable = !callbacks.isActivityDestroyed()
+                    && slot >= 0 && slot < MAX_WINDOWS
+                    && windowApps[slot] != null
+                    && callbacks.isWindowSlotEnabled(slot)
+                    && !callbacks.suppressEmbeddedStarts()
+                    && hostedTaskId <= 0
+                    && hostedSurfaceAlpha <= 0f;
+            if (contentUnavailable) {
+                callbacks.showRootAuthorizationHint();
+            }
+        });
     }
 
     private void registerCrossAppLaunchRouting(String bridgeToken) {

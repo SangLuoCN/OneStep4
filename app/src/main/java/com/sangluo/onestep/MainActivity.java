@@ -266,6 +266,7 @@ public class MainActivity extends Activity {
     private LauncherAppRepository launcherAppRepository;
     private final PersistentRootShell persistentRootShell = new PersistentRootShell();
     private boolean embeddingHintShown;
+    private boolean rootAuthorizationHintShown;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService mediaRootExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService hookSettingsExecutor = Executors.newSingleThreadExecutor();
@@ -439,6 +440,9 @@ public class MainActivity extends Activity {
                 @Override public void showEmbeddingHint(String reason) {
                     showEmbeddingHintIfNeeded(reason);
                 }
+                @Override public void showRootAuthorizationHint() {
+                    showRootAuthorizationHintIfNeeded();
+                }
                 @Override public void swapWithMain(int slot) {
                     MainActivity.this.swapWithMain(slot);
                 }
@@ -565,6 +569,8 @@ public class MainActivity extends Activity {
     private boolean windowSwitchAnimationCritical;
     private int deferredWindowSwitchUiWork;
     private boolean staleSensorUidOverridesRecoveryAttempted;
+    private boolean kernelSuAuthorizationReturnPending;
+    private boolean kernelSuAuthorizationRecoveryInFlight;
     private int mainSlotSwitchGeneration;
     private int mainSlotSwitchPendingSlot = -1;
     private int mainSlotSwitchPendingOldSlot = -1;
@@ -775,7 +781,51 @@ public class MainActivity extends Activity {
         if (!fullHomeInitialized) {
             return;
         }
+        if (kernelSuAuthorizationReturnPending && !kernelSuAuthorizationRecoveryInFlight) {
+            recoverAfterKernelSuAuthorizationReturn();
+        }
         resumeFullHome();
+    }
+
+    /** Applies the new KernelSU authorization without destroying the existing HOME task. */
+    private void recoverAfterKernelSuAuthorizationReturn() {
+        kernelSuAuthorizationReturnPending = false;
+        kernelSuAuthorizationRecoveryInFlight = true;
+        hookSettingsExecutor.execute(() -> {
+            persistentRootShell.close();
+            ShellCommandResult result = runMainPrivilegedCommand(
+                    "id -u", "verify ROOT authorization after KernelSU return", false);
+            boolean granted = result.isSuccess() && outputContainsLine(result.output, "0");
+            mainHandler.post(() -> {
+                kernelSuAuthorizationRecoveryInFlight = false;
+                if (activityDestroyed) {
+                    return;
+                }
+                if (!activityLifecycleResumed) {
+                    kernelSuAuthorizationReturnPending = granted;
+                    return;
+                }
+                if (granted) {
+                    Log.i(TAG, "KernelSU authorization returned; refreshing existing HOME task");
+                    applyRootAuthorizationToEmbeddedHosts();
+                } else {
+                    Log.i(TAG, "KernelSU authorization not available after return; keep HOME task");
+                }
+            });
+        });
+    }
+
+    private void applyRootAuthorizationToEmbeddedHosts() {
+        for (EmbeddedAppHost host : embeddedHosts) {
+            if (host instanceof RootVirtualDisplayHost) {
+                ((RootVirtualDisplayHost) host).onRootAuthorizationGranted();
+            }
+        }
+        if (settingsPanelController != null) {
+            settingsPanelController.onRootAuthorizationGranted();
+        }
+        prewarmRootInputBridge();
+        scheduleHostedDisplayFocus("ROOT authorization granted");
     }
 
     @Override
@@ -8049,6 +8099,15 @@ public class MainActivity extends Activity {
         Toast.makeText(this, "当前环境未开放固定容器内活 App 嵌入" + detail, Toast.LENGTH_LONG).show();
     }
 
+    private void showRootAuthorizationHintIfNeeded() {
+        if (rootAuthorizationHintShown || activityDestroyed) {
+            return;
+        }
+        rootAuthorizationHintShown = true;
+        Toast.makeText(this, "请授权root权限，如已授权请重启OneStep重试",
+                Toast.LENGTH_LONG).show();
+    }
+
     private void startRunningTaskMonitoring() {
         if (activityDestroyed || runningTaskMonitoringActive) {
             return;
@@ -8593,11 +8652,15 @@ public class MainActivity extends Activity {
         if (launchIntent == null) {
             return false;
         }
+        // The existing su process may still reflect the pre-authorization state. The pending
+        // return path will close it on the ROOT worker before creating a fresh shell.
+        kernelSuAuthorizationReturnPending = true;
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(launchIntent);
             return true;
         } catch (ActivityNotFoundException | SecurityException e) {
+            kernelSuAuthorizationReturnPending = false;
             Log.w(TAG, "Unable to open KernelSU manager", e);
             return false;
         }

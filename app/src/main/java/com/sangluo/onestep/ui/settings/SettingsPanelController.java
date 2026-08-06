@@ -1250,6 +1250,13 @@ public final class SettingsPanelController {
         refreshZygiskHookSettingsViews();
     }
 
+    public void onRootAuthorizationGranted() {
+        rootAuthorizationRequestInFlight = false;
+        rootAuthorizationGranted = true;
+        refreshRootAuthorizationView();
+        loadZygiskHookSettings();
+    }
+
     private void prepareZygiskHookSettings() {
         rootAuthorizationGranted = callbacks.rootAuthorizationGranted();
         refreshRootAuthorizationView();
@@ -1302,9 +1309,9 @@ public final class SettingsPanelController {
         showRoundedDialog(new AlertDialog.Builder(activity)
                 .setTitle("在 KernelSU 中授权")
                 .setMessage("KernelSU 不支持弹窗授权。请打开 KernelSU 后进入“超级用户”，"
-                        + "搜索“One Step”并打开“超级用户”开关。"
-                        + "授权后请清除后台并重新打开 OneStep。"
-                        + "若仍失败，请确认 KernelSU 设置中的“传统 SU 命令支持”已启用。")
+                        + "搜索“One Step”并打开“超级用户”开关。授权后返回 OneStep，"
+                        + "应用会自动恢复 ROOT 功能。若仍失败，请确认 KernelSU 设置中的"
+                        + "“传统 SU 命令支持”已启用。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("打开 KernelSU", (dialog, which) -> {
                     if (!callbacks.openKernelSuManager()) {
