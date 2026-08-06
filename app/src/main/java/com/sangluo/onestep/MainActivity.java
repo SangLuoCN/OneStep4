@@ -7452,7 +7452,7 @@ public class MainActivity extends Activity {
                 && promotedHost instanceof RootVirtualDisplayHost) {
             mainSlotSwitchPendingSlot = newMainSlot;
             mainSlotSwitchPendingOldSlot = oldMainSlot;
-            ((RootVirtualDisplayHost) promotedHost).checkDisplayImeFallbackPolicy(
+            ((RootVirtualDisplayHost) promotedHost).checkDisplayImeLocalPolicy(
                     "slot promoted to main",
                     () -> {
                         if (switchGeneration != mainSlotSwitchGeneration) {
@@ -7787,7 +7787,7 @@ public class MainActivity extends Activity {
                     || !(embeddedHosts[slot] instanceof RootVirtualDisplayHost)) {
                 continue;
             }
-            ((RootVirtualDisplayHost) embeddedHosts[slot]).checkDisplayImeFallbackPolicy(
+            ((RootVirtualDisplayHost) embeddedHosts[slot]).checkDisplayImeLocalPolicy(
                     "slot assigned to large-screen main pane", () -> { }, () -> { });
         }
     }

@@ -251,9 +251,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
     private static final int DISPLAY_FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS_HIDDEN = 1 << 6;
     private static final int VIRTUAL_DISPLAY_FLAG_TRUSTED_HIDDEN = 1 << 10;
     private static final int VIRTUAL_DISPLAY_FLAG_OWN_FOCUS_HIDDEN = 1 << 14;
-    private static final int DISPLAY_IME_POLICY_LOCAL = 0;
-    private static final int DISPLAY_IME_POLICY_FALLBACK_DISPLAY = 1;
-    private static final int DISPLAY_IME_POLICY_HIDE = 2;
+    private static final int DISPLAY_IME_POLICY_LOCAL_HIDDEN = 0;
     private static final String ROOT_INPUT_BRIDGE_CLASS =
             "com.sangluo.onestep.RootInputBridge";
     private static final String ADD_TRUSTED_DISPLAY_PERMISSION =
@@ -715,7 +713,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             beginHostedSurfaceReveal(app);
         }
         if (!reusingHostedApp && callbacks.isMainPaneSlot(slot)) {
-            ensureDisplayImeFallbackPolicyAsync("main display app launch " + app.packageName);
+            ensureDisplayImeLocalPolicyAsync("main display app launch " + app.packageName);
         }
         return continueHostedAppStart(app, launcherIntent, routedLaunchIntent,
                 startEpoch, reusingHostedApp);
@@ -2664,7 +2662,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
     }
 
-    private void ensureDisplayImeFallbackPolicyAsync(String reason) {
+    private void ensureDisplayImeLocalPolicyAsync(String reason) {
         final int targetDisplayId = displayId;
         if (targetDisplayId <= DEFAULT_DISPLAY_ID || !hasVirtualDisplay()
                 || imePolicyConfiguredDisplayId == targetDisplayId
@@ -2673,7 +2671,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
         final int generation = ++imePolicySetupGeneration;
         imePolicySetupDisplayId = targetDisplayId;
-        checkDisplayImeFallbackPolicy(reason, () -> {
+        checkDisplayImeLocalPolicy(reason, () -> {
             if (generation == imePolicySetupGeneration && targetDisplayId == displayId) {
                 imePolicySetupDisplayId = -1;
             }
@@ -2687,15 +2685,15 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         });
     }
 
-    void checkDisplayImeFallbackPolicy(String reason, Runnable onConfirmed,
-                                       Runnable onRejected) {
+    void checkDisplayImeLocalPolicy(String reason, Runnable onConfirmed,
+                                            Runnable onRejected) {
         long readyDeadlineUptimeMs = SystemClock.uptimeMillis()
                 + DISPLAY_IME_POLICY_READY_TIMEOUT_MS;
-        checkDisplayImeFallbackPolicyUntilReady(reason, onConfirmed, onRejected,
+        checkDisplayImeLocalPolicyUntilReady(reason, onConfirmed, onRejected,
                 readyDeadlineUptimeMs, 0);
     }
 
-    private void checkDisplayImeFallbackPolicyUntilReady(
+    private void checkDisplayImeLocalPolicyUntilReady(
             String reason, Runnable onConfirmed, Runnable onRejected,
             long readyDeadlineUptimeMs, int readinessAttempt) {
         final int targetDisplayId = displayId;
@@ -2708,7 +2706,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 Log.i(TAG, "Wait for virtual display before IME policy: slot=" + slot
                         + ", display=" + targetDisplayId + ", reason=" + reason);
             }
-            mainHandler.postDelayed(() -> checkDisplayImeFallbackPolicyUntilReady(
+            mainHandler.postDelayed(() -> checkDisplayImeLocalPolicyUntilReady(
                             reason, onConfirmed, onRejected, readyDeadlineUptimeMs,
                             readinessAttempt + 1),
                     DISPLAY_IME_POLICY_READY_RETRY_MS);
@@ -2744,10 +2742,10 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
         try {
             displayImePolicyExecutor.execute(() -> {
-                boolean configured = applyDisplayImeFallbackPolicy(targetDisplayId, reason);
+                boolean configured = applyDisplayImeLocalPolicy(targetDisplayId, reason);
                 mainHandler.post(() -> {
                     if (targetDisplayId != displayId || !hasVirtualDisplay()) {
-                        checkDisplayImeFallbackPolicyUntilReady(
+                        checkDisplayImeLocalPolicyUntilReady(
                                 reason, onConfirmed, onRejected,
                                 readyDeadlineUptimeMs, readinessAttempt + 1);
                     } else if (configured) {
@@ -2765,7 +2763,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         }
     }
 
-    private boolean applyDisplayImeFallbackPolicy(int targetDisplayId, String reason) {
+    private boolean applyDisplayImeLocalPolicy(int targetDisplayId, String reason) {
         if (targetDisplayId != displayId || !hasVirtualDisplay()) {
             return false;
         }
@@ -2775,7 +2773,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         boolean windowManagerRequested = false;
         if (!rootAvailable) {
             windowManagerRequested = setDisplayImePolicyThroughWindowManager(targetDisplayId,
-                    DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
+                    DISPLAY_IME_POLICY_LOCAL_HIDDEN);
         }
         Integer actualPolicy;
         boolean rootBridgeRequested = false;
@@ -2783,7 +2781,7 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
             rootBridgeRequested = true;
             actualPolicy = rootInputBridgeClient.setDisplayImePolicy(
                     getRootInputBridgeToken(), targetDisplayId,
-                    DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
+                    DISPLAY_IME_POLICY_LOCAL_HIDDEN);
             if (actualPolicy == null && targetDisplayId == displayId
                     && hasVirtualDisplay()) {
                 // A prewarm may have been in flight when the first request failed. Retry the
@@ -2791,20 +2789,20 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 ensureRootInputBridgeStarted(false, true);
                 actualPolicy = rootInputBridgeClient.setDisplayImePolicy(
                         getRootInputBridgeToken(), targetDisplayId,
-                        DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
+                        DISPLAY_IME_POLICY_LOCAL_HIDDEN);
                 if (actualPolicy == null && targetDisplayId == displayId
                         && hasVirtualDisplay()) {
                     ensureRootInputBridgeStarted(true, true);
                     actualPolicy = rootInputBridgeClient.setDisplayImePolicy(
                             getRootInputBridgeToken(), targetDisplayId,
-                            DISPLAY_IME_POLICY_FALLBACK_DISPLAY);
+                            DISPLAY_IME_POLICY_LOCAL_HIDDEN);
                 }
             }
         } else {
             actualPolicy = getDisplayImePolicyThroughWindowManager(targetDisplayId);
         }
         boolean configured = actualPolicy != null
-                ? actualPolicy == DISPLAY_IME_POLICY_FALLBACK_DISPLAY
+                ? actualPolicy == DISPLAY_IME_POLICY_LOCAL_HIDDEN
                 : !rootAvailable && windowManagerRequested;
         if (configured && targetDisplayId == displayId && hasVirtualDisplay()) {
             imePolicyConfiguredDisplayId = targetDisplayId;
@@ -2818,8 +2816,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         int logPriority = configured ? Log.INFO : Log.WARN;
         Log.println(logPriority, TAG, "Virtual display IME policy: slot=" + slot
                 + ", display=" + targetDisplayId
-                + ", policy=FALLBACK_DISPLAY"
-                + ", imeDisplay=" + DEFAULT_DISPLAY_ID
+                + ", policy=LOCAL"
+                + ", imeDisplay=" + targetDisplayId
                 + ", before=" + formatDisplayImePolicy(beforePolicy)
                 + ", actual=" + formatDisplayImePolicy(actualPolicy)
                 + ", rootVerification=" + rootVerification
@@ -2835,16 +2833,8 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
         if (policy == null) {
             return "unknown";
         }
-        if (policy == DISPLAY_IME_POLICY_LOCAL) {
-            return "LOCAL";
-        }
-        if (policy == DISPLAY_IME_POLICY_FALLBACK_DISPLAY) {
-            return "FALLBACK_DISPLAY";
-        }
-        if (policy == DISPLAY_IME_POLICY_HIDE) {
-            return "HIDE";
-        }
-        return String.valueOf(policy);
+        return policy == DISPLAY_IME_POLICY_LOCAL_HIDDEN
+                ? "LOCAL" : String.valueOf(policy);
     }
 
     @SuppressLint("BlockedPrivateApi")
@@ -3365,7 +3355,9 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 ? "" : ", homeSupportFallback=" + homeSupportFailure));
         configureNativeDisplayOrientationAsync(displayId, "initialize virtual display");
         ensureRootInputBridgeStarted();
-        ensureDisplayImeFallbackPolicyAsync("initialize virtual display");
+        if (callbacks.isMainPaneSlot(slot)) {
+            ensureDisplayImeLocalPolicyAsync("initialize virtual display");
+        }
     }
 
     private void ensureTrustedDisplayRole() {
