@@ -1285,6 +1285,11 @@ public final class RootVirtualDisplayHost implements EmbeddedAppHost,
                 surfaceView.getHolder(), viewWidth, viewHeight, forceVirtualDisplayResize);
     }
 
+    boolean needsSizeRefreshForTargetAspect(int targetWidth, int targetHeight) {
+        return VirtualDisplayViewportPolicy.shouldRefreshForTargetAspect(
+                displayWidth, displayHeight, targetWidth, targetHeight);
+    }
+
     @Override
     public void sendBack() {
         if (displayId <= DEFAULT_DISPLAY_ID) {

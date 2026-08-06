@@ -33,4 +33,34 @@ public class VirtualDisplayViewportPolicyTest {
         assertTrue(VirtualDisplayViewportPolicy.shouldResizeForContainerLayout(
                 false, false, true));
     }
+
+    @Test
+    public void matchingFullscreenAspectKeepsCurrentLayoutPath() {
+        assertFalse(VirtualDisplayViewportPolicy.shouldRefreshForTargetAspect(
+                1116, 2480, 1116, 2480));
+    }
+
+    @Test
+    public void smallFullscreenAspectDifferenceKeepsCurrentLayoutPath() {
+        assertFalse(VirtualDisplayViewportPolicy.shouldRefreshForTargetAspect(
+                1080, 2273, 1116, 2480));
+    }
+
+    @Test
+    public void largeFullscreenAspectDifferenceRequestsSizeRefresh() {
+        assertTrue(VirtualDisplayViewportPolicy.shouldRefreshForTargetAspect(
+                1080, 1922, 2076, 2152));
+    }
+
+    @Test
+    public void largeOneStepPaneAspectDifferenceRequestsSizeRefresh() {
+        assertTrue(VirtualDisplayViewportPolicy.shouldRefreshForTargetAspect(
+                2076, 2152, 1080, 1922));
+    }
+
+    @Test
+    public void missingDimensionsDoNotForceTargetRefresh() {
+        assertFalse(VirtualDisplayViewportPolicy.shouldRefreshForTargetAspect(
+                0, 0, 1116, 2480));
+    }
 }

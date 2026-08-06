@@ -2848,10 +2848,12 @@ public class MainActivity extends Activity {
         multiWindowMode = false;
         applyWindowLayout(false);
         multiWindowMode = true;
+        boolean refreshMainSizeForOneStep = needsMainSizeRefreshForCurrentLayout(
+                "OneStep mode");
         applyStatusBarForCurrentMode();
         setTopChromeVisible(true, true);
         updateCornerTriggers();
-        applyWindowLayout(true);
+        applyWindowLayoutWithMainSizeRefresh(refreshMainSizeForOneStep);
     }
 
     private void exitOneStepMode() {
@@ -2872,11 +2874,66 @@ public class MainActivity extends Activity {
             return;
         }
         activateEdgeMainPaneForFullscreen();
+        boolean refreshMainSizeForFullscreen = needsMainSizeRefresh(
+                workspace == null ? 0 : workspace.getWidth(),
+                workspace == null ? 0 : workspace.getHeight(),
+                "fullscreen");
         multiWindowMode = false;
         applyStatusBarForCurrentMode();
         setTopChromeVisible(false, true);
         updateCornerTriggers();
-        applyWindowLayout(true);
+        applyWindowLayoutWithMainSizeRefresh(refreshMainSizeForFullscreen);
+    }
+
+    private boolean needsMainSizeRefreshForCurrentLayout(String targetMode) {
+        if (workspace == null || workspace.getWidth() <= 0 || workspace.getHeight() <= 0
+                || activeMainSlot < 0 || activeMainSlot >= windowViews.length) {
+            return false;
+        }
+        Rect[] targetRects = calculateWindowRects();
+        Rect mainRect = targetRects[activeMainSlot];
+        return mainRect != null && needsMainSizeRefresh(
+                mainRect.width(), mainRect.height(), targetMode);
+    }
+
+    private boolean needsMainSizeRefresh(int targetWidth, int targetHeight, String targetMode) {
+        if (targetWidth <= 0 || targetHeight <= 0
+                || activeMainSlot < 0 || activeMainSlot >= embeddedHosts.length) {
+            return false;
+        }
+        EmbeddedAppHost host = embeddedHosts[activeMainSlot];
+        if (!(host instanceof RootVirtualDisplayHost)) {
+            return false;
+        }
+        boolean needsRefresh = ((RootVirtualDisplayHost) host).needsSizeRefreshForTargetAspect(
+                targetWidth, targetHeight);
+        if (needsRefresh) {
+            Log.i(TAG, "Refresh main virtual display for " + targetMode + " aspect: slot="
+                    + activeMainSlot + ", target=" + targetWidth + "x" + targetHeight);
+        }
+        return needsRefresh;
+    }
+
+    private void applyWindowLayoutWithMainSizeRefresh(boolean refreshMainSize) {
+        if (!refreshMainSize) {
+            applyWindowLayout(true);
+            return;
+        }
+        applyWindowLayout(true, () -> {
+            refreshAllEmbeddedSlotLayouts();
+            refreshMainSizeAfterLayout();
+        });
+    }
+
+    private void refreshMainSizeAfterLayout() {
+        if (activeMainSlot < 0 || activeMainSlot >= embeddedHosts.length
+                || embeddedSlotClosing[activeMainSlot]) {
+            return;
+        }
+        EmbeddedAppHost host = embeddedHosts[activeMainSlot];
+        if (host != null) {
+            host.refreshContainerSize(true);
+        }
     }
 
     private View createTopMediaArea() {
