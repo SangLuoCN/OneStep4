@@ -7,10 +7,13 @@ import android.content.pm.LauncherActivityInfo;
 import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
+import android.os.Build;
 import android.os.Process;
+import android.os.SystemClock;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.text.TextUtils;
+import android.util.Log;
 
 import com.sangluo.onestep.model.LauncherApp;
 
@@ -18,10 +21,22 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /** Loads launchable applications with their system-provided labels and icons. */
 public final class LauncherAppRepository {
+    private static final String TAG = "OneStepApps";
     private static final int ZTE_CLONE_USER_ID = 999;
+    private static final Object APP_LOAD_LOCK = new Object();
+    private static final ExecutorService PRELOAD_EXECUTOR =
+            Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "OneStep-app-preload");
+                thread.setPriority(Thread.NORM_PRIORITY - 1);
+                return thread;
+            });
+    private static volatile List<LauncherApp> cachedLauncherApps;
+    private static boolean preloadScheduled;
 
     private final Context context;
     private final PackageManager packageManager;
@@ -37,12 +52,59 @@ public final class LauncherAppRepository {
         themedIconLoader = new SystemThemedIconLoader(context);
     }
 
+    /** Starts loading the shared process cache before the HOME activity is created. */
+    public static void preloadLauncherApps(Context context) {
+        if (context == null || cachedLauncherApps != null) {
+            return;
+        }
+        synchronized (APP_LOAD_LOCK) {
+            if (cachedLauncherApps != null || preloadScheduled) {
+                return;
+            }
+            preloadScheduled = true;
+        }
+        Context applicationContext = context.getApplicationContext();
+        try {
+            PRELOAD_EXECUTOR.execute(() -> {
+                try {
+                    new LauncherAppRepository(applicationContext).loadLauncherApps();
+                } catch (RuntimeException e) {
+                    Log.w(TAG, "Launcher app preload failed", e);
+                } finally {
+                    synchronized (APP_LOAD_LOCK) {
+                        preloadScheduled = false;
+                    }
+                }
+            });
+        } catch (RuntimeException e) {
+            synchronized (APP_LOAD_LOCK) {
+                preloadScheduled = false;
+            }
+            Log.w(TAG, "Unable to schedule launcher app preload", e);
+        }
+    }
+
+    /** Returns a non-blocking snapshot when process preloading has already completed. */
+    public static List<LauncherApp> getCachedLauncherApps() {
+        List<LauncherApp> cached = cachedLauncherApps;
+        return cached == null ? Collections.emptyList() : new ArrayList<>(cached);
+    }
+
     public List<LauncherApp> loadLauncherApps() {
-        return loadLauncherApps(false);
+        List<LauncherApp> cached = cachedLauncherApps;
+        if (cached != null) {
+            return new ArrayList<>(cached);
+        }
+        return loadLauncherApps(false, true);
+    }
+
+    /** Reloads the installed app catalog without clearing OEM theme caches. */
+    public List<LauncherApp> reloadLauncherApps() {
+        return loadLauncherApps(false, false);
     }
 
     public List<LauncherApp> refreshLauncherApps() {
-        return loadLauncherApps(true);
+        return loadLauncherApps(true, false);
     }
 
     public List<LauncherApp> loadHomeApps() {
@@ -117,30 +179,42 @@ public final class LauncherAppRepository {
         return themedIconLoader.addCloneBadge(icon);
     }
 
-    private List<LauncherApp> loadLauncherApps(boolean invalidateThemeCaches) {
-        List<LauncherActivityEntry> entries = queryLauncherActivities(null);
-        entries.sort(Comparator
-                .comparing(LauncherActivityEntry::label, String.CASE_INSENSITIVE_ORDER)
-                .thenComparingInt(entry -> entry.userHandle.hashCode()));
-        if (invalidateThemeCaches) {
-            List<ResolveInfo> resolveInfos = new ArrayList<>();
-            for (LauncherActivityEntry entry : entries) {
-                if (entry.resolveInfo != null) {
-                    resolveInfos.add(entry.resolveInfo);
+    private List<LauncherApp> loadLauncherApps(
+            boolean invalidateThemeCaches, boolean useCachedResult) {
+        synchronized (APP_LOAD_LOCK) {
+            if (useCachedResult && cachedLauncherApps != null) {
+                return new ArrayList<>(cachedLauncherApps);
+            }
+            long startedAt = SystemClock.elapsedRealtime();
+            List<LauncherActivityEntry> entries = queryLauncherActivities(null);
+            entries.sort(Comparator
+                    .comparing(LauncherActivityEntry::label, String.CASE_INSENSITIVE_ORDER)
+                    .thenComparingInt(entry -> entry.userHandle.hashCode()));
+            long queryFinishedAt = SystemClock.elapsedRealtime();
+            if (invalidateThemeCaches) {
+                List<ComponentName> components = new ArrayList<>(entries.size());
+                for (LauncherActivityEntry entry : entries) {
+                    components.add(entry.componentName());
                 }
+                themedIconLoader.invalidateThemeCaches(components);
             }
-            themedIconLoader.invalidateThemeCaches(resolveInfos);
-        }
 
-        List<LauncherApp> apps = new ArrayList<>();
-        for (LauncherActivityEntry entry : entries) {
-            String packageName = entry.componentName().getPackageName();
-            if (TextUtils.equals(packageName, context.getPackageName())) {
-                continue;
+            List<LauncherApp> apps = new ArrayList<>();
+            for (LauncherActivityEntry entry : entries) {
+                String packageName = entry.componentName().getPackageName();
+                if (TextUtils.equals(packageName, context.getPackageName())) {
+                    continue;
+                }
+                apps.add(createLauncherApp(entry));
             }
-            apps.add(createLauncherApp(entry));
+            cachedLauncherApps = Collections.unmodifiableList(new ArrayList<>(apps));
+            long finishedAt = SystemClock.elapsedRealtime();
+            Log.i(TAG, "Loaded launcher apps: count=" + apps.size()
+                    + ", queryMs=" + (queryFinishedAt - startedAt)
+                    + ", iconMs=" + (finishedAt - queryFinishedAt)
+                    + ", themeCacheInvalidated=" + invalidateThemeCaches);
+            return apps;
         }
-        return apps;
     }
 
     private List<LauncherActivityEntry> queryLauncherActivities(String packageName) {
@@ -194,8 +268,13 @@ public final class LauncherAppRepository {
                 List<LauncherActivityInfo> activityInfos = launcherApps.getActivityList(
                         packageName, profile);
                 for (LauncherActivityInfo activityInfo : activityInfos) {
-                    ResolveInfo resolveInfo = resolveLauncherActivity(
-                            activityInfo.getComponentName());
+                    ResolveInfo resolveInfo;
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        resolveInfo = new ResolveInfo();
+                        resolveInfo.activityInfo = activityInfo.getActivityInfo();
+                    } else {
+                        resolveInfo = resolveLauncherActivity(activityInfo.getComponentName());
+                    }
                     result.add(new LauncherActivityEntry(
                             resolveInfo, activityInfo, profile));
                 }

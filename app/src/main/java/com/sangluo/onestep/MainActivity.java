@@ -17,6 +17,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.LauncherApps;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.content.res.ColorStateList;
@@ -40,6 +41,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
+import android.os.UserHandle;
 import android.os.UserManager;
 import android.provider.Settings;
 import android.provider.MediaStore;
@@ -65,6 +67,7 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 
 import com.sangluo.onestep.data.settings.OneStepSettings;
@@ -160,10 +163,15 @@ public class MainActivity extends Activity {
     private static final String TAG = "OneStep40";
     private static final String ACTION_OPLUS_SKIN_CHANGED =
             "oplus.intent.action.SKIN_CHANGED";
+    private static final String ACTION_MIUI_THEME_CHANGED =
+            "miui.intent.action.THEME_CHANGED";
     private static final String ACTION_SMARTISAN_ICONS_CHANGED =
             "com.smartisanos.launcher.update_icon";
     private static final String ACTION_OVERLAY_CHANGED =
             "android.intent.action.OVERLAY_CHANGED";
+    private static final int LAUNCHER_APP_LOAD_CACHED = 0;
+    private static final int LAUNCHER_APP_LOAD_RELOAD = 1;
+    private static final int LAUNCHER_APP_LOAD_THEME_REFRESH = 2;
     static final String EXTRA_SHOW_DESKTOP_HOME =
             "com.sangluo.onestep.extra.SHOW_DESKTOP_HOME";
     static final String EXTRA_DEFAULT_DISPLAY_RELAY_ATTEMPTED =
@@ -284,13 +292,55 @@ public class MainActivity extends Activity {
     private final ExecutorService imageDragIoExecutor = Executors.newSingleThreadExecutor();
     private final Object rootInputBridgeStartLock = new Object();
     private boolean launcherIconReceiverRegistered;
+    private LauncherApps launcherAppsManager;
+    private boolean launcherAppsCallbackRegistered;
     private boolean launcherIconRefreshInFlight;
-    private boolean launcherIconRefreshPending;
-    private boolean completedFirstResume;
+    private int pendingLauncherAppLoadMode = -1;
+    private int launcherIconDensityDpi;
+    private int launcherIconUiModeNight;
+    private String launcherIconLocales = "";
     private final BroadcastReceiver launcherIconChangeReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            requestLauncherIconRefresh(intent == null ? "theme broadcast" : intent.getAction());
+            String action = intent == null ? "theme broadcast" : intent.getAction();
+            if (Intent.ACTION_CONFIGURATION_CHANGED.equals(action)) {
+                if (recordLauncherIconConfiguration()) {
+                    requestLauncherAppLoad(action, LAUNCHER_APP_LOAD_RELOAD);
+                }
+                return;
+            }
+            requestLauncherAppLoad(action, LAUNCHER_APP_LOAD_THEME_REFRESH);
+        }
+    };
+    private final LauncherApps.Callback launcherAppsCallback = new LauncherApps.Callback() {
+        @Override
+        public void onPackageAdded(String packageName, UserHandle user) {
+            requestLauncherAppLoad("package added: " + packageName,
+                    LAUNCHER_APP_LOAD_RELOAD);
+        }
+
+        @Override
+        public void onPackageChanged(String packageName, UserHandle user) {
+            requestLauncherAppLoad("package changed: " + packageName,
+                    LAUNCHER_APP_LOAD_RELOAD);
+        }
+
+        @Override
+        public void onPackageRemoved(String packageName, UserHandle user) {
+            requestLauncherAppLoad("package removed: " + packageName,
+                    LAUNCHER_APP_LOAD_RELOAD);
+        }
+
+        @Override
+        public void onPackagesAvailable(
+                String[] packageNames, UserHandle user, boolean replacing) {
+            requestLauncherAppLoad("packages available", LAUNCHER_APP_LOAD_RELOAD);
+        }
+
+        @Override
+        public void onPackagesUnavailable(
+                String[] packageNames, UserHandle user, boolean replacing) {
+            requestLauncherAppLoad("packages unavailable", LAUNCHER_APP_LOAD_RELOAD);
         }
     };
     private final Runnable refreshAllEmbeddedSlotLayoutsRunnable =
@@ -708,9 +758,10 @@ public class MainActivity extends Activity {
         windowAnimationController = createWindowAnimationController();
         initializeEmbeddedBridgeState();
         launcherAppRepository = new LauncherAppRepository(this);
-        // App/icon enumeration is the most expensive part of HOME creation. Start with the
-        // stable desktop shell and fill the launcher entries after the first frame is drawn.
-        launcherApps = Collections.emptyList();
+        // The notification listener normally starts this process before HOME is opened, so its
+        // warmed catalog can be rendered in the first frame without another icon scan.
+        launcherApps = LauncherAppRepository.getCachedLauncherApps();
+        recordLauncherIconConfiguration();
         reconcileTopAppListConfiguration();
         loadBuiltInDesktopAppsForStartup();
         reconcileDirectBootPrewarmDesktop();
@@ -763,7 +814,7 @@ public class MainActivity extends Activity {
         initAmapNavigationMonitoring();
         recordHostDisplaySize();
         fullHomeInitialized = true;
-        requestLauncherIconRefresh("initial HOME load");
+        requestLauncherAppLoad("initial HOME load", LAUNCHER_APP_LOAD_CACHED);
         mainHandler.postDelayed(this::releaseDirectBootBridgePrewarmHost,
                 DIRECT_BOOT_BRIDGE_PREWARM_RELEASE_DELAY_MS);
         if (activityLifecycleResumed) {
@@ -903,10 +954,6 @@ public class MainActivity extends Activity {
         boolean returningToForeground = !activityResumed;
         activityResumed = true;
         startRunningTaskMonitoring();
-        if (returningToForeground && completedFirstResume) {
-            requestLauncherIconRefresh("returned to foreground");
-        }
-        completedFirstResume = true;
         suppressEmbeddedStarts = false;
         if (returningToForeground && systemUiController != null) {
             systemUiController.invalidateAppliedState();
@@ -928,7 +975,6 @@ public class MainActivity extends Activity {
         if (!nonDefaultDisplayHomeRelay) {
             boolean hostDisplaySizeChanged = recordHostDisplaySize();
             applyOneStepRotationPolicy(newConfig);
-            requestLauncherIconRefresh("configuration changed");
             boolean mainPaneCountChanged = reconcileMainPaneCount(newConfig);
             if (workspace != null) {
                 workspace.post(() -> {
@@ -966,48 +1012,85 @@ public class MainActivity extends Activity {
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_CONFIGURATION_CHANGED);
         filter.addAction(ACTION_OVERLAY_CHANGED);
+        filter.addAction(ACTION_MIUI_THEME_CHANGED);
         filter.addAction(ACTION_OPLUS_SKIN_CHANGED);
         filter.addAction(ACTION_SMARTISAN_ICONS_CHANGED);
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                registerReceiver(launcherIconChangeReceiver, filter, Context.RECEIVER_EXPORTED);
-            } else {
-                registerReceiver(launcherIconChangeReceiver, filter);
-            }
+            ContextCompat.registerReceiver(this, launcherIconChangeReceiver, filter,
+                    ContextCompat.RECEIVER_EXPORTED);
             launcherIconReceiverRegistered = true;
         } catch (RuntimeException e) {
             Log.w(TAG, "Unable to register theme icon receiver", e);
         }
+        launcherAppsManager = getSystemService(LauncherApps.class);
+        if (launcherAppsManager != null) {
+            try {
+                launcherAppsManager.registerCallback(launcherAppsCallback, mainHandler);
+                launcherAppsCallbackRegistered = true;
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Unable to register launcher app callback", e);
+            }
+        }
     }
 
     private void unregisterLauncherIconChangeReceiver() {
-        if (!launcherIconReceiverRegistered) {
-            return;
-        }
-        try {
-            unregisterReceiver(launcherIconChangeReceiver);
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Unable to unregister theme icon receiver", e);
+        if (launcherIconReceiverRegistered) {
+            try {
+                unregisterReceiver(launcherIconChangeReceiver);
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Unable to unregister theme icon receiver", e);
+            }
         }
         launcherIconReceiverRegistered = false;
+        if (launcherAppsCallbackRegistered && launcherAppsManager != null) {
+            try {
+                launcherAppsManager.unregisterCallback(launcherAppsCallback);
+            } catch (RuntimeException e) {
+                Log.w(TAG, "Unable to unregister launcher app callback", e);
+            }
+        }
+        launcherAppsCallbackRegistered = false;
+        launcherAppsManager = null;
     }
 
-    private void requestLauncherIconRefresh(String reason) {
+    private boolean recordLauncherIconConfiguration() {
+        Configuration configuration = getResources().getConfiguration();
+        int densityDpi = configuration.densityDpi;
+        int uiModeNight = configuration.uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        String locales = configuration.getLocales().toLanguageTags();
+        boolean changed = launcherIconDensityDpi != 0
+                && (launcherIconDensityDpi != densityDpi
+                || launcherIconUiModeNight != uiModeNight
+                || !TextUtils.equals(launcherIconLocales, locales));
+        launcherIconDensityDpi = densityDpi;
+        launcherIconUiModeNight = uiModeNight;
+        launcherIconLocales = locales;
+        return changed;
+    }
+
+    private void requestLauncherAppLoad(String reason, int loadMode) {
         if (activityDestroyed || nonDefaultDisplayHomeRelay || launcherAppRepository == null) {
             return;
         }
         if (launcherIconRefreshInFlight) {
-            launcherIconRefreshPending = true;
+            pendingLauncherAppLoadMode = Math.max(pendingLauncherAppLoadMode, loadMode);
             return;
         }
         launcherIconRefreshInFlight = true;
+        long startedAt = SystemClock.elapsedRealtime();
         try {
             launcherIconExecutor.execute(() -> {
                 List<LauncherApp> refreshedApps = null;
                 List<LauncherApp> refreshedDesktopApps = null;
                 RuntimeException loadError = null;
                 try {
-                    refreshedApps = launcherAppRepository.refreshLauncherApps();
+                    if (loadMode == LAUNCHER_APP_LOAD_THEME_REFRESH) {
+                        refreshedApps = launcherAppRepository.refreshLauncherApps();
+                    } else if (loadMode == LAUNCHER_APP_LOAD_RELOAD) {
+                        refreshedApps = launcherAppRepository.reloadLauncherApps();
+                    } else {
+                        refreshedApps = launcherAppRepository.loadLauncherApps();
+                    }
                     refreshedDesktopApps = launcherAppRepository.loadHomeApps();
                 } catch (RuntimeException e) {
                     loadError = e;
@@ -1016,7 +1099,7 @@ public class MainActivity extends Activity {
                 List<LauncherApp> desktopResult = refreshedDesktopApps;
                 RuntimeException error = loadError;
                 mainHandler.post(() -> finishLauncherIconRefresh(
-                        reason, result, desktopResult, error));
+                        reason, loadMode, startedAt, result, desktopResult, error));
             });
         } catch (RuntimeException e) {
             launcherIconRefreshInFlight = false;
@@ -1025,20 +1108,22 @@ public class MainActivity extends Activity {
     }
 
     private void finishLauncherIconRefresh(
-            String reason, List<LauncherApp> refreshedApps,
+            String reason, int loadMode, long startedAt, List<LauncherApp> refreshedApps,
             List<LauncherApp> refreshedDesktopApps, RuntimeException error) {
         launcherIconRefreshInFlight = false;
         if (!activityDestroyed && error == null && refreshedApps != null) {
             applyRefreshedLauncherApps(refreshedApps);
             applyRefreshedBuiltInDesktopApps(refreshedDesktopApps);
-            Log.i(TAG, "Reloaded system themed icons: reason=" + reason
-                    + ", count=" + refreshedApps.size());
+            Log.i(TAG, "Loaded launcher apps: reason=" + reason
+                    + ", mode=" + loadMode + ", count=" + refreshedApps.size()
+                    + ", elapsedMs=" + (SystemClock.elapsedRealtime() - startedAt));
         } else if (error != null) {
-            Log.w(TAG, "Reloading system themed icons failed: reason=" + reason, error);
+            Log.w(TAG, "Loading launcher apps failed: reason=" + reason, error);
         }
-        if (launcherIconRefreshPending && !activityDestroyed) {
-            launcherIconRefreshPending = false;
-            requestLauncherIconRefresh("coalesced theme change");
+        if (pendingLauncherAppLoadMode >= 0 && !activityDestroyed) {
+            int pendingMode = pendingLauncherAppLoadMode;
+            pendingLauncherAppLoadMode = -1;
+            requestLauncherAppLoad("coalesced launcher change", pendingMode);
         }
     }
 

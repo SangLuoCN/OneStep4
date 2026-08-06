@@ -44,7 +44,14 @@ final class SystemThemedIconLoader {
 
     Drawable loadIcon(ResolveInfo resolveInfo) {
         Drawable systemIcon = resolveInfo.loadIcon(packageManager);
-        Drawable miuiIcon = loadMiuiCustomizedIcon(resolveInfo, systemIcon);
+        ComponentName componentName = resolveInfo.activityInfo == null ? null
+                : new ComponentName(resolveInfo.activityInfo.packageName,
+                resolveInfo.activityInfo.name);
+        return loadIcon(componentName, systemIcon);
+    }
+
+    Drawable loadIcon(ComponentName componentName, Drawable systemIcon) {
+        Drawable miuiIcon = loadMiuiCustomizedIcon(componentName, systemIcon);
         return miuiIcon == null ? systemIcon : miuiIcon;
     }
 
@@ -57,13 +64,14 @@ final class SystemThemedIconLoader {
         return new CloneBadgedDrawable(icon.mutate(), badge.mutate());
     }
 
-    void invalidateThemeCaches(List<ResolveInfo> resolveInfos) {
+    void invalidateThemeCaches(List<ComponentName> components) {
         clearMiuiIconCustomizerCache();
-        clearOplusActivityIconCaches(resolveInfos);
+        clearOplusActivityIconCaches(components);
     }
 
-    private Drawable loadMiuiCustomizedIcon(ResolveInfo resolveInfo, Drawable systemIcon) {
-        if (!hasMiuiIconCustomizer() || resolveInfo.activityInfo == null) {
+    private Drawable loadMiuiCustomizedIcon(
+            ComponentName componentName, Drawable systemIcon) {
+        if (!hasMiuiIconCustomizer() || componentName == null) {
             return null;
         }
 
@@ -71,7 +79,7 @@ final class SystemThemedIconLoader {
         if (miuiCustomizedIconMethod != null) {
             try {
                 Object result = miuiCustomizedIconMethod.invoke(null,
-                        resolveInfo.activityInfo.packageName, resolveInfo.activityInfo.name);
+                        componentName.getPackageName(), componentName.getClassName());
                 if (result instanceof Drawable) {
                     return (Drawable) result;
                 }
@@ -166,8 +174,8 @@ final class SystemThemedIconLoader {
         }
     }
 
-    private void clearOplusActivityIconCaches(List<ResolveInfo> resolveInfos) {
-        if (resolveInfos.isEmpty()) {
+    private void clearOplusActivityIconCaches(List<ComponentName> components) {
+        if (components.isEmpty()) {
             return;
         }
         try {
@@ -179,11 +187,8 @@ final class SystemThemedIconLoader {
             Method clearIcon = extensionClass.getDeclaredMethod(
                     "clearCachedIconForActivity", ComponentName.class);
             clearIcon.setAccessible(true);
-            for (ResolveInfo resolveInfo : resolveInfos) {
-                if (resolveInfo.activityInfo != null) {
-                    clearIcon.invoke(extension, new ComponentName(
-                            resolveInfo.activityInfo.packageName, resolveInfo.activityInfo.name));
-                }
+            for (ComponentName component : components) {
+                clearIcon.invoke(extension, component);
             }
         } catch (ClassNotFoundException ignored) {
             // Not a ColorOS/OxygenOS framework.
